@@ -18,7 +18,7 @@ Status:
 Approved
 
 Version:
-1.0.0
+1.1.0
 
 Last Updated:
 2026-07-18
@@ -459,6 +459,21 @@ Temporary exceptions MUST include an expiration or resolution condition.
 
 Undocumented exceptions MUST NOT be treated as approved.
 
+### Approved UTF-8 Author Notes Exception
+
+The following file is an approved personal exception to the ASCII-only documentation rule:
+
+`docs/history/VOICEBRIDGE_DOCUMENTATION_AUTHOR_NOTES_UA.txt`
+
+Exception rules:
+
+- the file MAY contain Ukrainian UTF-8 text;
+- the repository filename MUST remain ASCII;
+- the file is a non-authoritative personal reference;
+- the file MUST NOT override approved architecture, governance, requirements, design, API, roadmap, phase, security, or ADR documents;
+- ASCII validation MUST exclude only this exact path;
+- additional UTF-8 files require separate explicit approval.
+
 ## 12. References
 
 - `../planning/02_REPOSITORY_STRUCTURE.md`
@@ -474,4 +489,5 @@ Undocumented exceptions MUST NOT be treated as approved.
 
 | Version | Date | Description |
 |---------|------|-------------|
+| 1.1.0 | 2026-07-18 | Added approved UTF-8 personal author-notes exception |
 | 1.0.0 | 2026-07-18 | Initial approved repository governance standard |
