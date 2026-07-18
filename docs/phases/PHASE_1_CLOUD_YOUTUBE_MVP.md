@@ -15,7 +15,7 @@ Status:
 Draft
 
 Version:
-1.3.0
+1.4.0
 
 Last Updated:
 2026-07-18
@@ -480,39 +480,43 @@ The final transport decision MUST be recorded in the Phase 1 document or an ADR 
 Completed milestone:
 1 - Browser Capture Feasibility.
 
-Status:
-COMPLETED.
-
-Result:
+Milestone 1 result:
 PASSED.
-
-Validated implementation:
-
-`src/browser_extension/`
-
-Validated version:
-
-`0.1.2`
-
-Validation summary:
-
-- mixed film audio;
-- audiobook;
-- music track;
-- 12-minute continuous stability run;
-- original-volume control;
-- ducking;
-- visible ducking indication;
-- audio metadata;
-- normal stop and cleanup;
-- transition to `IDLE`.
-
-Validation report:
-
-`PHASE_1_MILESTONE_1_BROWSER_CAPTURE_VALIDATION.md`
 
 Active milestone:
 2 - Cloud Skeleton.
+
+Milestone 2 status:
+Implementation created; cloud deployment and browser integration pending.
+
+Implementation path:
+
+`src/cloud/`
+
+Completed Milestone 2 checks:
+
+- TypeScript compilation;
+- 8 automated tests;
+- authenticated HTTP session lifecycle smoke test;
+- health endpoint;
+- shared Bearer-token validation;
+- create and read session endpoints;
+- start, pause, resume, and stop commands;
+- request and correlation identifiers;
+- bounded JSON bodies;
+- request limiting;
+- environment-based secret configuration;
+- Dockerfile;
+- ASCII and secret-pattern validation.
+
+Pending Milestone 2 validation:
+
+- select a cloud deployment platform;
+- deploy the container;
+- configure the real test token through platform secrets;
+- verify HTTPS health endpoint;
+- connect the browser extension;
+- create and stop an authenticated cloud session from the extension.
 
 ### Milestone 1 - Browser Capture Feasibility
 
@@ -799,6 +803,7 @@ Technical references:
 
 | Version | Date | Description |
 |---------|------|-------------|
+| 1.4.0 | 2026-07-18 | Added Milestone 2 Cloud Skeleton implementation and pending deployment status |
 | 1.3.0 | 2026-07-18 | Completed Milestone 1 browser capture validation and activated Milestone 2 |
 | 1.2.0 | 2026-07-18 | Added Milestone 1 prototype status and pending browser validation |
 | 1.1.0 | 2026-07-18 | Added automatic original-audio ducking and independent volume controls |
