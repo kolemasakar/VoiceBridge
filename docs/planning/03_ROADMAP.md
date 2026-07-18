@@ -34,20 +34,20 @@ Last Updated:
 3. Phase Overview
    UA: Ohliad faz
 
-4. Phase 1 YouTube MVP
-   UA: Persha faza YouTube MVP
+4. Phase 1 Cloud YouTube MVP
+   UA: Persha faza khmarnoho YouTube MVP
 
-5. Phase 2 Universal Audio Translation
-   UA: Universalnyi audio pereklad
+5. Phase 2 Universal Cloud Audio Translation
+   UA: Universalnyi khmarnyi audio pereklad
 
-6. Phase 3 Interpreter Mode
-   UA: Rezhym synkhronnoho perekladacha
+6. Phase 3 Cloud Service Hardening
+   UA: Posylennia khmarnykh servisiv
 
 7. Phase 4 Multi Platform Expansion
    UA: Rozshyrennia platform
 
-8. Phase 5 Open Translation Platform
-   UA: Vidkryta platforma perekladu
+8. Phase 5 Interpreter Mode and Optional Agent
+   UA: Rezhym perekladacha ta neoboviazkovyi ahent
 
 9. Milestone Criteria
    UA: Kryterii kontrolnykh tochek
