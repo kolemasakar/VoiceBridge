@@ -12,7 +12,7 @@ Status:
 Approved
 
 Version:
-1.2.0
+1.3.0
 
 Last Updated:
 2026-07-18
@@ -86,7 +86,23 @@ The token MUST be protected as a secret and supported by rotation, revocation, r
 
 A production authentication design MUST replace the shared token before public multi-user deployment.
 
-## 6. API Design Baseline
+## 6. Phase 1 Audio Mixing Decision
+
+Phase 1 uses browser-side automatic audio ducking.
+
+Decision:
+
+- Ukrainian synthesized speech uses the primary playback level;
+- the complete original YouTube audio is reduced while Ukrainian speech is active;
+- original audio rises to a configurable background level during Ukrainian pauses;
+- original and Ukrainian volume controls are independent;
+- the user can mute original audio;
+- gain transitions are smooth;
+- speech, music, and sound-effect separation is deferred beyond Phase 1.
+
+Recommended initial levels are 15 percent original audio during Ukrainian speech, 50 percent during Ukrainian pauses, and 100 percent Ukrainian speech.
+
+## 7. API Design Baseline
 
 The Cloud First API baseline defines:
 
@@ -98,7 +114,7 @@ The Cloud First API baseline defines:
 
 The baseline is recorded in `docs/api/13_API_DESIGN.md`.
 
-## 7. Current Repository State
+## 8. Current Repository State
 
 ```text
 docs/
@@ -133,7 +149,7 @@ docs/
 Documentation foundation status:
 Completed and synchronized with Cloud First.
 
-## 8. Phase 1 Implementation Plan
+## 9. Phase 1 Implementation Plan
 
 The detailed plan is recorded in `docs/phases/PHASE_1_CLOUD_YOUTUBE_MVP.md`.
 
@@ -149,13 +165,13 @@ The plan defines:
 Phase 1 status:
 Active.
 
-## 9. Next Engineering Action
+## 10. Next Engineering Action
 
 Execute Milestone 1 - Browser Capture Feasibility.
 
 The milestone MUST produce a minimal Chromium extension that captures current-tab YouTube audio after explicit user invocation, verifies playback behavior, emits audio metadata, runs continuously for at least ten minutes, and stops cleanly.
 
-## 10. References
+## 11. References
 
 - [01_PROJECT_OVERVIEW](../overview/01_PROJECT_OVERVIEW.md)
 - [03_ROADMAP](../planning/03_ROADMAP.md)
@@ -168,10 +184,11 @@ The milestone MUST produce a minimal Chromium extension that captures current-ta
 - [12_SECURITY_MODEL](../security/12_SECURITY_MODEL.md)
 - [13_API_DESIGN](../api/13_API_DESIGN.md)
 
-## 11. Version History
+## 12. Version History
 
 | Version | Date | Description |
 |---------|------|-------------|
+| 1.3.0 | 2026-07-18 | Added Phase 1 browser audio ducking and volume-control decision |
 | 1.2.0 | 2026-07-18 | Added Phase 1 implementation plan and activated browser capture feasibility milestone |
 | 1.1.0 | 2026-07-18 | Consolidated history and synchronized Cloud First architecture and API baseline |
 | 1.0.0 | 2026-07-18 | Created project history baseline |
