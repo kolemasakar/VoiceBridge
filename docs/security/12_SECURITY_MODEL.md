@@ -10,7 +10,7 @@ Status:
 Draft
 
 Version:
-1.0.0
+1.1.0
 
 Last updated:
 2026-07-18
@@ -155,19 +155,45 @@ Data MUST cross a boundary only when the workflow requires it and when the targe
 
 ## 4. Authentication model
 
-The baseline VoiceBridge documentation does not approve a final multi-user or hosted authentication implementation.
+### 4.1 Test launch
 
-Authentication model requirements:
+The test launch MAY use a super-simplified authentication mechanism:
 
-- local development and local demo workflows MAY rely on local environment access controls until remote access is introduced;
-- remote user access MUST NOT be introduced without an approved authentication design;
-- administrative interfaces MUST NOT be exposed remotely without strong authentication requirements;
-- provider authentication MUST use provider-issued credentials through approved secret-management mechanisms;
-- service-to-service authentication MUST be documented before additional services are introduced;
-- test credentials MUST be fake, scoped, or disposable and MUST NOT grant access to production provider accounts;
-- authentication failures MUST be logged as security events without exposing submitted credentials.
+- one shared test access token;
+- token delivery through approved secret configuration;
+- bearer-token validation at the cloud API boundary;
+- HTTPS and secure streaming transport;
+- token rotation and immediate revocation capability;
+- no user registration;
+- no passwords;
+- no password recovery;
+- no social login;
+- no organizations or tenant management;
+- no persistent user profile.
 
-Future authentication designs SHOULD define identity providers, credential lifetimes, session lifetimes, token storage, logout behavior, passwordless or federated options, recovery behavior, and test strategy.
+The shared test token MUST NOT be committed to the repository, embedded in public client source, printed in logs, placed in URLs, or treated as user identity.
+
+The test environment MUST use cost limits, provider quotas, request limits, or equivalent safeguards to reduce abuse and unexpected provider spending.
+
+### 4.2 Production evolution
+
+The shared test token MUST NOT be used for public multi-user production access.
+
+Before public or multi-user deployment, VoiceBridge MUST approve a production authentication design covering:
+
+- user identity;
+- token issuance and expiration;
+- browser token storage;
+- logout and revocation;
+- account recovery when applicable;
+- service-to-service authentication;
+- administrative authentication;
+- test strategy;
+- abuse and cost protection.
+
+Provider authentication MUST continue to use provider-issued credentials stored only through approved secret-management mechanisms.
+
+Authentication failures MUST be logged as security events without exposing submitted credentials.
 
 ## 5. Authorization model
 
@@ -357,4 +383,5 @@ Future changes MUST preserve current security objectives or document an approved
 
 | Version | Date | Description |
 |---------|------|-------------|
+| 1.1.0 | 2026-07-18 | Added simplified test authentication and production migration requirements |
 | 1.0.0 | 2026-07-18 | Created security model baseline |
