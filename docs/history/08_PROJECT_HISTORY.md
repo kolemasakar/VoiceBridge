@@ -306,3 +306,23 @@ Next planned phase:
 - Create API design documentation.
 - Define external interfaces and service contracts.
 - Prepare transition from documentation foundation to implementation planning.
+
+
+## Cloud First Architecture Decision
+
+Status:
+Accepted
+
+Date:
+2026-07-18
+
+Summary:
+
+- Replaced the earlier local-first runtime direction with a Cloud First architecture.
+- Established the browser as the primary client for Phases 1 through 4.
+- Moved speech recognition, translation, speech synthesis, session orchestration, provider integration, and authoritative session state to the cloud.
+- Deferred a minimal local cross-platform VoiceBridge Agent to a later phase and only for system-audio capture blocked by browser or operating-system security.
+- Approved one shared revocable test access token for the test launch.
+- Deferred full user accounts and production authentication until before public multi-user deployment.
+- Recorded the decision in `docs/adr/ADR-001_CLOUD_FIRST_ARCHITECTURE.md`.
+- Prepared the documentation baseline for a Cloud First API design.
