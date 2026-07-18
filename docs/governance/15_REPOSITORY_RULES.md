@@ -96,8 +96,6 @@ VoiceBridge/
 |-- .gitignore
 |
 |-- 01_PROJECT_DESCRIPTION.md
-|-- 02_REPOSITORY_STRUCTURE.md
-|-- 03_ROADMAP.md
 |-- 04_ARCHITECTURE.md
 |-- 05_TECHNOLOGY_STACK.md
 |-- 06_DEVELOPMENT_STANDARD.md
@@ -109,13 +107,17 @@ VoiceBridge/
 |-- 12_SECURITY.md
 |-- 13_PROJECT_STATUS.md
 |-- 14_VERSIONING.md
-|-- 15_REPOSITORY_RULES.md
-|-- 16_AI_DEVELOPMENT_RULES.md
 |
 |-- docs/
 |   |-- adr/
 |   |-- design/
+|   |-- governance/
+|   |   |-- 15_REPOSITORY_RULES.md
+|   |   `-- 16_AI_DEVELOPMENT_RULES.md
 |   |-- phases/
+|   |-- planning/
+|   |   |-- 02_REPOSITORY_STRUCTURE.md
+|   |   `-- 03_ROADMAP.md
 |   `-- bootstrap/
 |
 |-- src/
@@ -416,7 +418,7 @@ The following documents MUST be updated after each completed project phase:
 
 - `08_PROJECT_HISTORY.md`;
 - `13_PROJECT_STATUS.md`;
-- `03_ROADMAP.md` when the plan changes.
+- `../planning/03_ROADMAP.md` when the plan changes.
 
 ## 10. Repository Hygiene
 
@@ -459,14 +461,14 @@ Undocumented exceptions MUST NOT be treated as approved.
 
 ## 12. References
 
-- `02_REPOSITORY_STRUCTURE.md`
+- `../planning/02_REPOSITORY_STRUCTURE.md`
 - `06_DEVELOPMENT_STANDARD.md`
 - `07_DECISIONS_REGISTER.md`
 - `08_PROJECT_HISTORY.md`
 - `13_PROJECT_STATUS.md`
 - `14_VERSIONING.md`
 - `16_AI_DEVELOPMENT_RULES.md`
-- `docs/adr/`
+- `../adr/`
 
 ## 13. Version History
 

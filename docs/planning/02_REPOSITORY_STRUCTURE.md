@@ -59,12 +59,18 @@ VoiceBridge/
 |-- .gitignore
 |
 |-- 01_PROJECT_DESCRIPTION.md
-|-- 02_REPOSITORY_STRUCTURE.md
-|-- 03_ROADMAP.md
-|-- 15_REPOSITORY_RULES.md
-|-- 16_AI_DEVELOPMENT_RULES.md
 |
 |-- docs/
+|   |-- adr/
+|   |-- design/
+|   |-- governance/
+|   |   |-- 15_REPOSITORY_RULES.md
+|   |   `-- 16_AI_DEVELOPMENT_RULES.md
+|   |-- phases/
+|   |-- planning/
+|   |   |-- 02_REPOSITORY_STRUCTURE.md
+|   |   `-- 03_ROADMAP.md
+|   `-- bootstrap/
 |-- src/
 |-- tests/
 |-- tools/
@@ -107,13 +113,19 @@ docs/
 |
 |-- adr/
 |-- design/
+|-- governance/
 |-- phases/
+|-- planning/
 `-- bootstrap/
 ```
 
 ADR documents are stored in `docs/adr/`.
 
+Governance documents are stored in `docs/governance/`.
+
 Phase documents are stored in `docs/phases/`.
+
+Planning documents are stored in `docs/planning/`.
 
 Bootstrap and recovery documents are stored in `docs/bootstrap/`.
 
@@ -141,8 +153,8 @@ Patches MUST NOT become permanent storage for active code.
 
 ## 8. References
 
-- 15_REPOSITORY_RULES.md
-- 16_AI_DEVELOPMENT_RULES.md
+- ../governance/15_REPOSITORY_RULES.md
+- ../governance/16_AI_DEVELOPMENT_RULES.md
 
 ## Version History
 

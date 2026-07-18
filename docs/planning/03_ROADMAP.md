@@ -169,10 +169,10 @@ A phase is completed only when:
 
 ## 10. References
 
-- 01_PROJECT_DESCRIPTION.md
+- ../../01_PROJECT_DESCRIPTION.md
 - 02_REPOSITORY_STRUCTURE.md
-- 15_REPOSITORY_RULES.md
-- 16_AI_DEVELOPMENT_RULES.md
+- ../governance/15_REPOSITORY_RULES.md
+- ../governance/16_AI_DEVELOPMENT_RULES.md
 
 ## 11. Version History
 
