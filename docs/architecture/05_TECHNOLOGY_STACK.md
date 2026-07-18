@@ -138,6 +138,8 @@ The Milestone 2 skeleton uses the Node.js built-in HTTP server, zero production 
 
 This runtime decision is recorded in `../adr/ADR-002_PHASE_1_CLOUD_SKELETON_RUNTIME.md`.
 
+The Phase 1 test service is deployed as a Render Web Service from the provider-neutral Dockerfile in `src/cloud/`. Render supplies the public HTTPS endpoint and environment-based test secret. This test-hosting choice is recorded in `../adr/ADR-003_PHASE_1_TEST_HOSTING_RENDER.md` and does not define the production hosting contract.
+
 Python MAY be used for local audio processing, provider orchestration, prototypes, and development tooling.
 
 Additional production languages require documented approval before adoption.
@@ -294,4 +296,5 @@ Stack changes SHOULD be recorded in an ADR when they affect long-term architectu
 
 | Version | Date | Description |
 |---------|------|-------------|
+| 1.1.0 | 2026-07-18 | Recorded Render as the Phase 1 test deployment platform |
 | 1.0.0 | 2026-07-18 | Initial approved technology stack definition |
