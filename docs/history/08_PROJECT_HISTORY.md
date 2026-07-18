@@ -12,7 +12,7 @@ Status:
 Approved
 
 Version:
-1.1.0
+1.2.0
 
 Last Updated:
 2026-07-18
@@ -133,27 +133,29 @@ docs/
 Documentation foundation status:
 Completed and synchronized with Cloud First.
 
-## 8. Next Engineering Action
+## 8. Phase 1 Implementation Plan
 
-Create the detailed Phase 1 Cloud YouTube MVP implementation plan.
+The detailed plan is recorded in `docs/phases/PHASE_1_CLOUD_YOUTUBE_MVP.md`.
 
-Target:
-
-`docs/phases/PHASE_1_CLOUD_YOUTUBE_MVP.md`
-
-The plan MUST define:
+The plan defines:
 
 - Phase 1 scope and exclusions;
-- browser audio-capture validation;
-- cloud service decomposition;
-- provider selection criteria;
-- streaming transport decision;
-- test authentication implementation;
-- milestones and dependencies;
-- validation metrics;
-- completion and recovery criteria.
+- browser capture feasibility gate;
+- cloud service boundaries;
+- provider and streaming decision gates;
+- simplified test authentication;
+- milestones, testing, validation, cost controls, and recovery.
 
-## 9. References
+Phase 1 status:
+Active.
+
+## 9. Next Engineering Action
+
+Execute Milestone 1 - Browser Capture Feasibility.
+
+The milestone MUST produce a minimal Chromium extension that captures current-tab YouTube audio after explicit user invocation, verifies playback behavior, emits audio metadata, runs continuously for at least ten minutes, and stops cleanly.
+
+## 10. References
 
 - [01_PROJECT_OVERVIEW](../overview/01_PROJECT_OVERVIEW.md)
 - [03_ROADMAP](../planning/03_ROADMAP.md)
@@ -166,9 +168,10 @@ The plan MUST define:
 - [12_SECURITY_MODEL](../security/12_SECURITY_MODEL.md)
 - [13_API_DESIGN](../api/13_API_DESIGN.md)
 
-## 10. Version History
+## 11. Version History
 
 | Version | Date | Description |
 |---------|------|-------------|
+| 1.2.0 | 2026-07-18 | Added Phase 1 implementation plan and activated browser capture feasibility milestone |
 | 1.1.0 | 2026-07-18 | Consolidated history and synchronized Cloud First architecture and API baseline |
 | 1.0.0 | 2026-07-18 | Created project history baseline |
