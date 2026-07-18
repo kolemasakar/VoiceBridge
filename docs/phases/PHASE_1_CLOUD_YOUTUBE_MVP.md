@@ -477,17 +477,16 @@ The final transport decision MUST be recorded in the Phase 1 document or an ADR 
 
 ### Current Milestone Status
 
-Completed milestone:
-1 - Browser Capture Feasibility.
+Completed milestones:
 
-Milestone 1 result:
-PASSED.
+- 1 - Browser Capture Feasibility: PASSED.
+- 2 - Cloud Skeleton: PASSED.
 
 Active milestone:
-2 - Cloud Skeleton.
+3 - Streaming Transport.
 
-Milestone 2 status:
-Implementation created; cloud deployment and browser integration pending.
+Milestone 2 result:
+The Docker service is live on Render, the HTTPS health endpoint is available, and extension version 0.2.0 completed the authenticated create, start, and stop session lifecycle.
 
 Implementation path:
 
@@ -509,14 +508,21 @@ Completed Milestone 2 checks:
 - Dockerfile;
 - ASCII and secret-pattern validation.
 
-Pending Milestone 2 validation:
+Completed deployment and integration validation:
 
-- select a cloud deployment platform;
-- deploy the container;
-- configure the real test token through platform secrets;
-- verify HTTPS health endpoint;
-- connect the browser extension;
-- create and stop an authenticated cloud session from the extension.
+- Render Web Service selected for the Phase 1 test deployment;
+- Docker image built and deployed from `src/cloud/`;
+- shared test token configured through Render environment variables;
+- public HTTPS health endpoint returned `status: ok`;
+- browser extension 0.2.0 connected to the deployed API;
+- authenticated connection test returned `READY`;
+- capture and cloud session reached `ACTIVE`;
+- test ducking displayed and applied `DUCKING 15%`;
+- Stop returned capture to `IDLE` and cloud session to `COMPLETED`.
+
+Validation record:
+
+`docs/phases/PHASE_1_MILESTONE_2_CLOUD_SKELETON_VALIDATION.md`
 
 ### Milestone 1 - Browser Capture Feasibility
 
@@ -803,6 +809,7 @@ Technical references:
 
 | Version | Date | Description |
 |---------|------|-------------|
+| 1.5.0 | 2026-07-18 | Completed Milestone 2 deployment and extension lifecycle validation; activated Milestone 3 |
 | 1.4.0 | 2026-07-18 | Added Milestone 2 Cloud Skeleton implementation and pending deployment status |
 | 1.3.0 | 2026-07-18 | Completed Milestone 1 browser capture validation and activated Milestone 2 |
 | 1.2.0 | 2026-07-18 | Added Milestone 1 prototype status and pending browser validation |
