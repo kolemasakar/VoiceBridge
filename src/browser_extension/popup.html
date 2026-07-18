@@ -10,13 +10,45 @@
     <main>
       <header>
         <h1>VoiceBridge</h1>
-        <p>Capture feasibility</p>
+        <p>Cloud session and capture</p>
       </header>
 
       <section class="status-card">
         <span id="status-dot" class="status-dot"></span>
         <strong id="status">Preparing...</strong>
         <span id="elapsed">00:00</span>
+      </section>
+
+      <section class="cloud-card">
+        <div class="section-title">
+          <h2>Cloud connection</h2>
+          <strong id="cloud-status">NOT CONFIGURED</strong>
+        </div>
+
+        <label class="field" for="cloud-api-url">
+          <span>API URL</span>
+          <input
+            id="cloud-api-url"
+            type="url"
+            value="https://voicebridge-cloud.onrender.com"
+            autocomplete="off"
+            spellcheck="false"
+          >
+        </label>
+
+        <label class="field" for="cloud-token">
+          <span>Test access token</span>
+          <input
+            id="cloud-token"
+            type="password"
+            autocomplete="off"
+            spellcheck="false"
+            placeholder="Paste the Render token"
+          >
+        </label>
+
+        <button id="save-cloud">Save and test</button>
+        <p id="cloud-detail">The test token stays in this browser profile.</p>
       </section>
 
       <section class="controls">
