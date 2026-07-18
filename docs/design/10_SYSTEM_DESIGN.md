@@ -16,7 +16,7 @@ Status:
 Draft
 
 Version:
-1.1.0
+1.2.0
 
 Last Updated:
 2026-07-18
@@ -151,6 +151,22 @@ Responsibilities:
 - return audio output and synthesis metadata needed for playback and troubleshooting;
 - avoid owning translation, recognition, or session lifecycle decisions.
 
+### Browser Playback and Mixing Component
+
+Responsibilities:
+
+- receive synthesized Ukrainian audio from the cloud;
+- route captured original tab audio through a controllable gain channel;
+- route Ukrainian speech through a separate gain channel;
+- reduce original audio automatically while Ukrainian speech is active;
+- raise original audio to a configurable background level during Ukrainian pauses;
+- apply smooth gain transitions;
+- expose independent original and Ukrainian volume controls;
+- support complete original-audio mute;
+- release audio nodes, queues, and streams during cleanup.
+
+Phase 1 controls the complete original tab audio and does not separate speech from music or sound effects.
+
 ### Session Controller
 
 Responsibilities:
@@ -164,7 +180,7 @@ Responsibilities:
 
 Responsibilities:
 
-- manage available external or local AI service providers;
+- manage available cloud AI service providers;
 - resolve configured providers for recognition, translation, and synthesis capabilities;
 - validate provider availability and required configuration before runtime use;
 - isolate provider identity, credentials, endpoint details, feature flags, and capability metadata from business workflow components.
