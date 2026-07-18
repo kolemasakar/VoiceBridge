@@ -113,18 +113,14 @@ async function publishMetrics(track) {
   });
 }
 
-async function startCapture(streamId) {
+async function startCapture(streamId, config) {
   if (mediaStream) {
     await stopCapture("RESTART");
   }
 
   currentConfig = {
     ...currentConfig,
-    ...(await chrome.storage.local.get([
-      "original_pause_volume",
-      "original_duck_volume",
-      "ukrainian_volume"
-    ]))
+    ...config
   };
 
   try {
@@ -178,7 +174,6 @@ async function updateVolumes(data) {
     ...data
   };
 
-  await chrome.storage.local.set(currentConfig);
   smoothGain(currentConfig.original_pause_volume);
 }
 
@@ -199,7 +194,7 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
   let operation;
 
   if (message.type === "START_CAPTURE") {
-    operation = startCapture(message.data.stream_id);
+    operation = startCapture(message.data.stream_id, message.data.config);
   } else if (message.type === "STOP_CAPTURE") {
     operation = stopCapture("USER_STOP");
   } else if (message.type === "SET_VOLUMES") {
