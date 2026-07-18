@@ -18,7 +18,7 @@ Status:
 Draft
 
 Version:
-1.0.0
+1.1.0
 
 Last Updated:
 2026-07-18
@@ -72,7 +72,7 @@ VoiceBridge functional goals are to:
 - translate recognized text into the target language;
 - synthesize translated text into audible speech;
 - manage translation sessions and their lifecycle;
-- integrate with replaceable external or local AI service providers.
+- integrate with replaceable cloud AI service providers.
 
 This document refines the product direction defined in the project overview and project description documents. It also aligns functional expectations with the architecture and technology stack documents so implementation work preserves approved system boundaries.
 
@@ -84,7 +84,7 @@ Included capabilities:
 
 - real-time speech capture from supported audio sources;
 - speech processing for downstream recognition, translation, and synthesis;
-- speech recognition through provider-backed or local engines;
+- cloud speech recognition through provider-backed adapters;
 - translation from recognized source-language text to target-language text;
 - speech synthesis for translated output;
 - session management for active translation workflows;
@@ -121,7 +121,7 @@ The Developer or Contributor MUST preserve modular boundaries between capture, p
 
 ### AI Service Provider Integration
 
-AI Service Provider Integration represents the external or local services used for speech recognition, translation, and speech synthesis.
+AI Service Provider Integration represents cloud services used for speech recognition, translation, and speech synthesis.
 
 Provider integrations MUST be replaceable behind approved abstractions and MUST NOT force unrelated system components to depend on provider-specific behavior.
 
@@ -163,6 +163,8 @@ VoiceBridge SHOULD preserve enough synthesis metadata to support playback, diagn
 
 ### 4.5 Session Management
 
+The cloud Session Orchestrator MUST own authoritative session state.
+
 VoiceBridge MUST create translation sessions for supported workflows.
 
 VoiceBridge MUST track session state, including lifecycle status and active language configuration.
@@ -171,6 +173,8 @@ VoiceBridge MUST manage the session lifecycle from creation through active proce
 
 ### 4.6 Provider Integration
 
+Provider credentials MUST remain in the cloud and MUST NOT be delivered to the browser.
+
 VoiceBridge MUST provide external AI provider abstraction for recognition, translation, and synthesis capabilities.
 
 VoiceBridge MUST support configuration management for provider selection, credentials, language settings, and runtime options.
@@ -178,6 +182,16 @@ VoiceBridge MUST support configuration management for provider selection, creden
 VoiceBridge MUST allow provider replacement without requiring broad changes to unrelated system components.
 
 Provider integrations MUST fail safely and report actionable errors when required configuration or provider availability is missing.
+
+### 4.7 Test Access Control
+
+The test launch MUST protect cloud API and streaming access with one shared revocable access token.
+
+The test launch MUST NOT require user registration, passwords, account recovery, organizations, tenant management, or persistent user profiles.
+
+The system MUST support token rotation, revocation, request limits, provider quotas, and cost controls.
+
+The shared test token MUST be replaced before public multi-user production deployment.
 
 ## 5. Non-Functional Requirements
 
@@ -219,7 +233,7 @@ VoiceBridge MAY support additional languages beyond the initial product directio
 
 VoiceBridge MAY integrate additional recognition, translation, and synthesis providers when they conform to approved provider boundaries.
 
-VoiceBridge MAY support offline processing through local engines when privacy, performance, and runtime requirements are documented.
+A future minimal VoiceBridge Agent MAY support system-audio capture only when browser or operating-system restrictions require it. Core AI processing, orchestration, and authoritative state MUST remain in the cloud unless a superseding ADR is approved.
 
 VoiceBridge MAY add mobile clients when client responsibilities and platform-specific constraints are defined in approved documentation.
 
@@ -238,4 +252,5 @@ Future extensions MUST preserve the core goal of translating spoken source-langu
 
 | Version | Date | Description |
 |---------|------|-------------|
+| 1.1.0 | 2026-07-18 | Aligned functional requirements with Cloud First architecture and test access control |
 | 1.0.0 | 2026-07-18 | Created functional requirements baseline |
