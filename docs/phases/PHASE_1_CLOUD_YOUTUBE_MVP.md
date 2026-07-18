@@ -15,7 +15,7 @@ Status:
 Draft
 
 Version:
-1.2.0
+1.3.0
 
 Last Updated:
 2026-07-18
@@ -477,36 +477,42 @@ The final transport decision MUST be recorded in the Phase 1 document or an ADR 
 
 ### Current Milestone Status
 
-Milestone:
+Completed milestone:
 1 - Browser Capture Feasibility.
 
 Status:
-Implementation created; browser validation pending.
+COMPLETED.
 
-Implementation path:
+Result:
+PASSED.
+
+Validated implementation:
 
 `src/browser_extension/`
 
-Completed implementation checks:
+Validated version:
 
-- Manifest V3 structure;
-- Chrome 116 minimum version;
-- JavaScript syntax validation;
-- manifest JSON validation;
-- ASCII validation;
-- no credentials or remote code;
-- repository write verification.
+`0.1.2`
 
-Pending validation:
+Validation summary:
 
-- install through `Load unpacked`;
-- start capture on selected YouTube videos;
-- verify original audio playback;
-- verify original volume control;
-- verify three-second ducking test;
-- verify audio metadata;
-- complete ten-minute stability run;
-- verify clean stop and tab-close behavior.
+- mixed film audio;
+- audiobook;
+- music track;
+- 12-minute continuous stability run;
+- original-volume control;
+- ducking;
+- visible ducking indication;
+- audio metadata;
+- normal stop and cleanup;
+- transition to `IDLE`.
+
+Validation report:
+
+`PHASE_1_MILESTONE_1_BROWSER_CAPTURE_VALIDATION.md`
+
+Active milestone:
+2 - Cloud Skeleton.
 
 ### Milestone 1 - Browser Capture Feasibility
 
@@ -793,6 +799,7 @@ Technical references:
 
 | Version | Date | Description |
 |---------|------|-------------|
+| 1.3.0 | 2026-07-18 | Completed Milestone 1 browser capture validation and activated Milestone 2 |
 | 1.2.0 | 2026-07-18 | Added Milestone 1 prototype status and pending browser validation |
 | 1.1.0 | 2026-07-18 | Added automatic original-audio ducking and independent volume controls |
 | 1.0.0 | 2026-07-18 | Created Phase 1 Cloud YouTube MVP implementation plan |
