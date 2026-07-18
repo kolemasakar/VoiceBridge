@@ -7,7 +7,7 @@ Status:
 Approved
 
 Version:
-1.0.0
+1.1.0
 
 Last Updated:
 2026-07-18
@@ -38,7 +38,7 @@ Historical packages created before this rule MAY retain their original approved 
 
 No current package is stored yet.
 
-The next current package SHOULD be created after Milestone 1 browser validation is completed or when a chat transition is required.
+A new current package MUST be created only after an explicit user request.
 
 ## Archived Packages
 
@@ -48,4 +48,5 @@ The next current package SHOULD be created after Milestone 1 browser validation 
 
 | Version | Date | Description |
 |---------|------|-------------|
+| 1.1.0 | 2026-07-18 | Required explicit user request before creating a current package |
 | 1.0.0 | 2026-07-18 | Created Bootstrap package storage and governance rules |
