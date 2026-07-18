@@ -31,7 +31,7 @@ Completed:
 
 Next:
 
-- prepare the detailed Phase 1 Cloud YouTube MVP implementation plan.
+- execute Milestone 1 browser tab-audio capture feasibility.
 
 ## Test Authentication
 
@@ -54,6 +54,7 @@ A production identity model must replace the shared test token before public mul
 - [Non-Functional Requirements](docs/requirements/11_NON_FUNCTIONAL_REQUIREMENTS.md)
 - [Security Model](docs/security/12_SECURITY_MODEL.md)
 - [API Design](docs/api/13_API_DESIGN.md)
+- [Phase 1 Cloud YouTube MVP Plan](docs/phases/PHASE_1_CLOUD_YOUTUBE_MVP.md)
 - [Development Standard](docs/governance/06_DEVELOPMENT_STANDARD.md)
 - [Repository Rules](docs/governance/15_REPOSITORY_RULES.md)
 - [AI Development Rules](docs/governance/16_AI_DEVELOPMENT_RULES.md)
