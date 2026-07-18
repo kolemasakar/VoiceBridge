@@ -15,7 +15,7 @@ Status:
 Draft
 
 Version:
-1.0.0
+1.1.0
 
 Last Updated:
 2026-07-18
@@ -150,6 +150,29 @@ The test set SHOULD include:
 - different speaking speeds;
 - at least one low-quality or noisy sample.
 
+### 4.5 Audio Mixing and Automatic Ducking
+
+Phase 1 MUST mix the original YouTube audio and Ukrainian synthesized speech in the browser.
+
+Default behavior:
+
+- Ukrainian speech plays at the configured primary volume;
+- the complete original tab audio is reduced automatically while Ukrainian speech is active;
+- the original tab audio rises to a configurable background level during gaps in Ukrainian speech;
+- gain changes use smooth ramps and MUST NOT produce abrupt clicks or jumps;
+- the user can adjust `Original volume` and `Ukrainian volume`;
+- the user can mute the original audio completely.
+
+Recommended initial defaults:
+
+- original audio during Ukrainian speech: 15 percent;
+- original audio during Ukrainian pauses: 50 percent;
+- Ukrainian speech: 100 percent.
+
+Phase 1 lowers the complete original audio track, including speech, music, and sound effects.
+
+Separating source speech from music and effects is outside Phase 1 scope.
+
 ## 5. Phase Exclusions
 
 Phase 1 does not include:
@@ -168,7 +191,8 @@ Phase 1 does not include:
 - persistent audio history;
 - billing;
 - public production release;
-- automatic provider failover unless required for a validation experiment.
+- automatic provider failover unless required for a validation experiment;
+- source separation between speech, music, and sound effects.
 
 ## 6. Reference Runtime
 
@@ -527,7 +551,9 @@ Deliver:
 - provider adapter;
 - Ukrainian audio streaming;
 - browser playback queue;
-- original-audio and translated-audio mixing policy;
+- automatic ducking and browser audio mixing;
+- separate original and Ukrainian volume controls;
+- documented default gain levels;
 - playback cleanup.
 
 Exit:
@@ -657,6 +683,8 @@ Phase 1 is complete only when:
 - the browser streams YouTube audio to the cloud;
 - the cloud performs STT, English-to-Ukrainian translation, and Ukrainian TTS;
 - the browser plays translated audio;
+- automatic ducking lowers original tab audio during Ukrainian speech;
+- original and Ukrainian volume controls work independently;
 - the shared test token protects control and streaming access;
 - provider credentials remain in the cloud;
 - session state is authoritative in the cloud;
@@ -732,4 +760,5 @@ Technical references:
 
 | Version | Date | Description |
 |---------|------|-------------|
+| 1.1.0 | 2026-07-18 | Added automatic original-audio ducking and independent volume controls |
 | 1.0.0 | 2026-07-18 | Created Phase 1 Cloud YouTube MVP implementation plan |
