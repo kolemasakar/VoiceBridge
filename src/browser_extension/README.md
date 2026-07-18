@@ -4,7 +4,7 @@ Purpose:
 Validate YouTube tab-audio capture, browser playback control, audio metadata, and clean session shutdown for VoiceBridge Phase 1.
 
 Version:
-0.1.1
+0.1.2
 
 ## Requirements
 
@@ -31,11 +31,12 @@ Version:
 6. Confirm audio remains audible.
 7. Change `Original volume`.
 8. Select `Test ducking for 3 seconds`.
-9. Confirm the original audio lowers smoothly and returns.
-10. Confirm sample rate, channel count, RMS, peak, and elapsed time update.
-11. Keep capture active for at least ten minutes.
-12. Select `Stop`.
-13. Confirm audio capture stops and status returns to `IDLE`.
+9. Confirm the effective-level indicator changes to `DUCKING 15%`.
+10. Confirm the original audio lowers smoothly and returns.
+11. Confirm sample rate, channel count, RMS, peak, and elapsed time update.
+12. Keep capture active for at least ten minutes.
+13. Select `Stop`.
+14. Confirm audio capture stops and status returns to `IDLE`.
 
 ## Expected Result
 
@@ -52,11 +53,13 @@ Version:
 - No STT.
 - No translation.
 - No Ukrainian speech synthesis.
+- The Ukrainian volume control is a placeholder until TTS integration.
 - No automatic ducking based on real Ukrainian speech.
 - The complete original tab audio is controlled as one track.
 
 ## Version History
 
+- 0.1.2: Added effective original-volume and ducking-state indicators.
 - 0.1.1: Removed unsupported storage access from the offscreen document.
 - 0.1.0: Initial capture feasibility prototype.
 
