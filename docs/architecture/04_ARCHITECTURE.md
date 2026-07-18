@@ -18,7 +18,7 @@ Status:
 Approved
 
 Version:
-1.0.0
+1.1.0
 
 Last Updated:
 2026-07-18
@@ -72,6 +72,14 @@ The architecture MUST support incremental growth from a YouTube MVP to a univers
 
 The system MUST keep capture, recognition, translation, synthesis, playback, and provider integration as separate concerns.
 
+VoiceBridge MUST use a Cloud First architecture.
+
+The browser MUST be the primary client for Phases 1 through 4.
+
+Speech recognition, translation, speech synthesis, session orchestration, and authoritative session state MUST run in the cloud.
+
+A minimal local cross-platform VoiceBridge Agent MAY be introduced only in a later phase when browser or operating-system security prevents required system-audio capture. The Agent MUST remain an edge adapter and MUST NOT become the primary processing runtime.
+
 ## 2. System Context
 
 VoiceBridge receives audio from a supported source, processes speech through AI services or local engines, and returns translated speech to the user.
@@ -110,39 +118,44 @@ The architecture MUST follow these principles:
 ## 4. High Level Architecture
 
 ```text
-Audio Source
+Browser Client
+    |
+    | HTTPS control and authenticated session requests
+    | Secure streaming transport for audio and events
+    v
+Cloud API Gateway
     |
     v
-Audio Capture Adapter
+Cloud Session Orchestrator
+    |
+    +-- Audio Ingestion and Processing
+    +-- Speech Recognition Service
+    +-- Translation Service
+    +-- Speech Synthesis Service
+    +-- Output Streaming
     |
     v
-Audio Processing Pipeline
-    |
-    v
-Speech Recognition Service
-    |
-    v
-Translation Service
-    |
-    v
-Speech Synthesis Service
-    |
-    v
-Playback Adapter
-    |
-    v
-User
+Browser Playback
 ```
 
-Supporting services:
+Supporting cloud services:
 
 ```text
 Configuration
 Provider Registry
-Session Controller
-Logging and Metrics
+Session State Store
+Secrets Management
+Logging Metrics and Tracing
 Error Handling
 ```
+
+Optional later edge component:
+
+```text
+System Audio -> VoiceBridge Agent -> Secure Cloud Ingestion
+```
+
+The VoiceBridge Agent MUST be introduced only when browser or operating-system restrictions make required capture impossible. It MUST NOT host the authoritative session state or replace cloud AI services.
 
 ## 5. Component Responsibilities
 
@@ -269,14 +282,16 @@ The core pipeline MUST NOT depend directly on a single vendor API.
 
 ## 8. Runtime Modes
 
-VoiceBridge architecture MUST allow these runtime modes over time:
+| Mode | Client | Processing | Status |
+|------|--------|------------|--------|
+| YouTube MVP | Browser | Cloud | Planned |
+| Generic Audio | Browser | Cloud | Planned |
+| Multi Platform | Browser-accessible client | Cloud | Planned |
+| Interpreter | Browser with optional minimal Agent | Cloud | Planned |
 
-| Mode | Purpose | Status |
-|------|---------|--------|
-| YouTube MVP | Translate YouTube audio to Ukrainian speech | Planned |
-| Generic Audio | Translate audio from arbitrary supported sources | Planned |
-| Interpreter | Enable two-way real-time conversation | Planned |
-| Platform Extension | Support external communication platforms | Planned |
+The test launch MAY use a single shared test access token. User registration, password recovery, social login, organizations, and role administration are outside test-launch scope.
+
+Public or multi-user production access MUST NOT use the shared test token and MUST require an approved authentication and authorization design.
 
 ## 9. Security and Privacy
 
