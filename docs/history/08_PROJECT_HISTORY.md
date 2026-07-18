@@ -256,22 +256,39 @@ Validation:
 - ASCII validation passed;
 - secret-pattern check passed.
 
-Limitation:
-Docker image build was not executed because Docker is unavailable in the current environment.
+Deployment and integration validation:
+
+- Render built the Docker image successfully;
+- the service reached `Live` state;
+- the public HTTPS health endpoint returned `status: ok`;
+- the shared test token remained in Render environment configuration;
+- browser extension 0.2.0 returned `READY` after an authenticated connection test;
+- capture and the cloud session reached `ACTIVE`;
+- browser-side ducking displayed and applied `DUCKING 15%`;
+- Stop returned capture to `IDLE` and the cloud session to `COMPLETED`.
+
+Test deployment:
+
+`https://voicebridge-cloud.onrender.com`
+
+Validation record:
+
+`docs/phases/PHASE_1_MILESTONE_2_CLOUD_SKELETON_VALIDATION.md`
 
 Milestone 2 status:
-Implementation created; cloud deployment and browser integration pending.
+PASSED.
 
 ## 13. Next Engineering Action
 
-Select a cloud deployment platform and deploy the Milestone 2 service.
+Begin Milestone 3 - Streaming Transport.
 
-After deployment:
+Define and validate:
 
-- configure the shared test token through platform secrets;
-- verify the HTTPS health endpoint;
-- add controlled cloud configuration to the browser extension;
-- create and stop an authenticated session from the extension.
+- authenticated bidirectional streaming;
+- binary audio upload frames;
+- bounded queues and application-level backpressure;
+- disconnect and reconnect behavior;
+- ten-minute streaming stability evidence.
 
 ## 14. References
 
@@ -290,6 +307,7 @@ After deployment:
 
 | Version | Date | Description |
 |---------|------|-------------|
+| 1.8.0 | 2026-07-18 | Completed Render deployment and authenticated extension lifecycle validation |
 | 1.7.0 | 2026-07-18 | Added Milestone 2 Cloud Skeleton implementation and validation |
 | 1.6.0 | 2026-07-18 | Completed Milestone 1 validation and activated Milestone 2 Cloud Skeleton |
 | 1.5.0 | 2026-07-18 | Added Bootstrap storage and UTF-8 personal author notes |
