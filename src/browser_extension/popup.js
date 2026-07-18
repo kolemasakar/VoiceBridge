@@ -7,6 +7,9 @@ const elements = {
   testDucking: document.querySelector("#test-ducking"),
   originalVolume: document.querySelector("#original-volume"),
   originalValue: document.querySelector("#original-value"),
+  effectiveLevel: document.querySelector(".effective-level"),
+  effectiveVolume: document.querySelector("#effective-volume"),
+  effectiveLabel: document.querySelector("#effective-label"),
   ukrainianVolume: document.querySelector("#ukrainian-volume"),
   ukrainianValue: document.querySelector("#ukrainian-value"),
   sampleRate: document.querySelector("#sample-rate"),
@@ -41,6 +44,16 @@ function renderState(state) {
   elements.rms.textContent = state.rms ?? "-";
   elements.peak.textContent = state.peak ?? "-";
   elements.error.textContent = state.error || "";
+
+  const effectivePercent = Math.round(
+    (state.effective_original_volume ??
+      Number(elements.originalVolume.value) / 100) * 100
+  );
+  const ducking = Boolean(state.ducking_active);
+  elements.effectiveVolume.value = effectivePercent;
+  elements.effectiveLabel.textContent =
+    (ducking ? "DUCKING " : "Background ") + effectivePercent + "%";
+  elements.effectiveLevel.classList.toggle("ducking", ducking);
 }
 
 async function prepareOffscreen() {
@@ -133,6 +146,9 @@ async function sendVolumes() {
 
   elements.originalValue.textContent = elements.originalVolume.value + "%";
   elements.ukrainianValue.textContent = elements.ukrainianVolume.value + "%";
+  elements.effectiveVolume.value = elements.originalVolume.value;
+  elements.effectiveLabel.textContent =
+    "Background " + elements.originalVolume.value + "%";
 
   await chrome.storage.local.set(data);
 
