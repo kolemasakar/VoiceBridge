@@ -12,7 +12,7 @@ Status:
 Approved
 
 Version:
-1.6.0
+1.7.0
 
 Last Updated:
 2026-07-18
@@ -223,22 +223,57 @@ The user-provided Ukrainian documentation explanation is stored unchanged in mea
 
 This file is an approved UTF-8 personal exception and is non-authoritative.
 
-## 12. Next Engineering Action
+## 12. Milestone 2 Cloud Skeleton
 
-Implement Milestone 2 - Cloud Skeleton.
+Implementation path:
 
-Required output:
+`src/cloud/`
 
-- deployable cloud service baseline;
-- `GET /api/v1/health`;
-- shared test-token validation;
-- session creation and lifecycle;
+Runtime decision:
+
+`docs/adr/ADR-002_PHASE_1_CLOUD_SKELETON_RUNTIME.md`
+
+Implemented:
+
+- TypeScript and Node.js 24+ service;
+- public health endpoint;
+- shared Bearer-token validation;
+- in-memory authoritative sessions;
+- session lifecycle endpoints;
+- canonical errors;
 - request and correlation identifiers;
-- environment-based secret configuration;
-- automated tests;
-- deployment instructions.
+- bounded request bodies;
+- request limiting;
+- environment configuration;
+- Docker packaging;
+- automated tests.
 
-## 13. References
+Validation:
+
+- TypeScript compilation passed;
+- 8 automated tests passed;
+- HTTP smoke test passed: health, create, start, and stop;
+- ASCII validation passed;
+- secret-pattern check passed.
+
+Limitation:
+Docker image build was not executed because Docker is unavailable in the current environment.
+
+Milestone 2 status:
+Implementation created; cloud deployment and browser integration pending.
+
+## 13. Next Engineering Action
+
+Select a cloud deployment platform and deploy the Milestone 2 service.
+
+After deployment:
+
+- configure the shared test token through platform secrets;
+- verify the HTTPS health endpoint;
+- add controlled cloud configuration to the browser extension;
+- create and stop an authenticated session from the extension.
+
+## 14. References
 
 - [01_PROJECT_OVERVIEW](../overview/01_PROJECT_OVERVIEW.md)
 - [03_ROADMAP](../planning/03_ROADMAP.md)
@@ -251,10 +286,11 @@ Required output:
 - [12_SECURITY_MODEL](../security/12_SECURITY_MODEL.md)
 - [13_API_DESIGN](../api/13_API_DESIGN.md)
 
-## 14. Version History
+## 15. Version History
 
 | Version | Date | Description |
 |---------|------|-------------|
+| 1.7.0 | 2026-07-18 | Added Milestone 2 Cloud Skeleton implementation and validation |
 | 1.6.0 | 2026-07-18 | Completed Milestone 1 validation and activated Milestone 2 Cloud Skeleton |
 | 1.5.0 | 2026-07-18 | Added Bootstrap storage and UTF-8 personal author notes |
 | 1.4.0 | 2026-07-18 | Added Milestone 1 browser extension prototype and pending validation status |
