@@ -230,6 +230,7 @@ Future changes MUST preserve approved system boundaries or document the required
 - [06_DEVELOPMENT_STANDARD](../governance/06_DEVELOPMENT_STANDARD.md)
 - [09_FUNCTIONAL_REQUIREMENTS](09_FUNCTIONAL_REQUIREMENTS.md)
 - [10_SYSTEM_DESIGN](../design/10_SYSTEM_DESIGN.md)
+- [12_SECURITY_MODEL](../security/12_SECURITY_MODEL.md)
 
 ## 12. Version history
 

@@ -348,6 +348,7 @@ A change MUST NOT be accepted when it contains:
 - `../planning/02_REPOSITORY_STRUCTURE.md`
 - `../planning/03_ROADMAP.md`
 - `../requirements/11_NON_FUNCTIONAL_REQUIREMENTS.md`
+- `../security/12_SECURITY_MODEL.md`
 
 ## 14. Version History
 
