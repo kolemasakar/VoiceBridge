@@ -1,69 +1,95 @@
 # VoiceBridge - Holovna dokumentatsiia
 
-Open-source real-time speech translation platform.
+Open-source Cloud First real-time speech translation platform.
 
-## Table of Contents
+Slogan:
 
-- [Project Overview (Ohliad proiektu)](#project-overview)
-- [Key Features (Kliuchovi mozhlyvosti)](#key-features)
-- [Project Status (Status proiektu)](#project-status)
-- [Documentation (Dokumentatsiia)](#documentation)
-- [Repository Structure (Struktura repozytoriiu)](#repository-structure)
-- [Contributing (Uchast u rozrobtsi)](#contributing)
-- [License (Litsenziia)](#license)
+`Listen without language barriers.`
 
 ## Project Overview
 
-VoiceBridge is an open-source platform for real-time speech translation. Its purpose is to help people communicate across spoken languages by capturing speech, converting it to text, translating the text, and synthesizing translated speech during an active session.
+VoiceBridge converts spoken source-language audio into translated target-language speech.
 
-The project addresses the communication gap that appears when participants do not share a common language or need faster translation than manual interpretation can provide. VoiceBridge aims to make speech translation workflows more accessible, transparent, extensible, and provider-agnostic.
+The initial product target is real-time English-to-Ukrainian AI voice translation for YouTube videos.
 
-The high-level product vision is a modular real-time communication platform that can connect multiple speech, translation, and synthesis providers while preserving a consistent session experience for users and integrators. For the canonical project overview, see [docs/overview/01_PROJECT_OVERVIEW.md](docs/overview/01_PROJECT_OVERVIEW.md).
+VoiceBridge uses a Cloud First architecture:
 
-## Key Features
+- the browser is the primary client for Phases 1 through 4;
+- speech recognition, translation, speech synthesis, session orchestration, and authoritative state run in the cloud;
+- the user does not need a local programming environment;
+- a minimal local VoiceBridge Agent may be introduced only later if browser or operating-system security prevents required system-audio capture.
 
-Planned capabilities include:
+## Current Status
 
-- Real-time speech capture from active user sessions.
-- Speech recognition that converts captured audio into text.
-- Translation between supported source and target languages.
-- Speech synthesis that turns translated text into audible output.
-- Session management for coordinating participants, languages, and translation flow.
-- Provider integration for speech recognition, translation, and speech synthesis services.
+Completed:
 
-## Project Status
+- repository and documentation foundation;
+- governance, requirements, system design, and security baselines;
+- Cloud First architecture decision;
+- Cloud First API design baseline;
+- simplified test authentication model.
 
-Current status:
+Next:
 
-- Repository initialization completed.
-- Documentation architecture completed.
-- Architecture baseline created.
-- Development standards established.
+- prepare the detailed Phase 1 Cloud YouTube MVP implementation plan.
+
+## Test Authentication
+
+The test launch uses one shared revocable access token.
+
+The test model does not include user registration, passwords, account recovery, organizations, or persistent user profiles.
+
+A production identity model must replace the shared test token before public multi-user deployment.
 
 ## Documentation
 
 - [Project Overview](docs/overview/01_PROJECT_OVERVIEW.md)
 - [Project Description](docs/overview/07_PROJECT_DESCRIPTION.md)
+- [Roadmap](docs/planning/03_ROADMAP.md)
 - [Architecture](docs/architecture/04_ARCHITECTURE.md)
 - [Technology Stack](docs/architecture/05_TECHNOLOGY_STACK.md)
+- [Cloud First ADR](docs/adr/ADR-001_CLOUD_FIRST_ARCHITECTURE.md)
+- [Functional Requirements](docs/requirements/09_FUNCTIONAL_REQUIREMENTS.md)
+- [System Design](docs/design/10_SYSTEM_DESIGN.md)
+- [Non-Functional Requirements](docs/requirements/11_NON_FUNCTIONAL_REQUIREMENTS.md)
+- [Security Model](docs/security/12_SECURITY_MODEL.md)
+- [API Design](docs/api/13_API_DESIGN.md)
 - [Development Standard](docs/governance/06_DEVELOPMENT_STANDARD.md)
+- [Repository Rules](docs/governance/15_REPOSITORY_RULES.md)
+- [AI Development Rules](docs/governance/16_AI_DEVELOPMENT_RULES.md)
 - [Project History](docs/history/08_PROJECT_HISTORY.md)
-- [Roadmap](docs/planning/03_ROADMAP.md)
 
 ## Repository Structure
 
 ```text
 docs/
+    adr/
+    api/
     architecture/
+    bootstrap/
+    design/
     governance/
     history/
     overview/
+    phases/
     planning/
+    requirements/
+    security/
+src/
+tests/
+tools/
+patches/
+examples/
+assets/
 ```
 
 ## Contributing
 
-Contributors should follow repository rules, use the documented standards for project documentation, and keep changes traceable through clear commits and references. For repository-specific contribution rules, see [docs/governance/15_REPOSITORY_RULES.md](docs/governance/15_REPOSITORY_RULES.md).
+Contributors must follow the approved architecture, repository rules, development standard, and AI development rules.
+
+Significant architecture changes require an ADR.
+
+Secrets and provider credentials must never be committed to the repository.
 
 ## License
 
