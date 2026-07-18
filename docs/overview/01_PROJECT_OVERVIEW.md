@@ -18,7 +18,7 @@ Status:
 Approved
 
 Version:
-1.0.0
+1.1.0
 
 Last Updated:
 2026-07-18
@@ -82,7 +82,17 @@ VoiceBridge starts with a focused MVP that proves the end-to-end translation wor
 
 The MVP MUST prioritize a working, understandable demo before broad platform support.
 
-Future development MAY expand to additional languages, audio sources, runtime modes, provider integrations, and local or privacy-preserving engines.
+VoiceBridge follows a Cloud First model.
+
+The browser is the primary client for Phases 1 through 4.
+
+Speech recognition, translation, speech synthesis, session orchestration, and session state management MUST run in the cloud.
+
+A minimal local cross-platform VoiceBridge Agent MAY be introduced only in a later phase when browser or operating-system security prevents required system-audio capture. The Agent MUST remain limited to local capture and delivery functions while AI processing, orchestration, and state remain in the cloud.
+
+The test launch MAY use a single shared test access token without user registration or account management. This temporary mechanism MUST NOT be treated as the final production authentication model.
+
+Future development MAY expand to additional languages, audio sources, runtime modes, provider integrations, and privacy-preserving engines.
 
 ## 4. Documentation Map
 
@@ -140,4 +150,5 @@ When documents conflict, the more specific approved governance or architecture d
 
 | Version | Date | Description |
 |---------|------|-------------|
+| 1.1.0 | 2026-07-18 | Added Cloud First runtime direction and test authentication baseline |
 | 1.0.0 | 2026-07-18 | Initial approved project overview |
