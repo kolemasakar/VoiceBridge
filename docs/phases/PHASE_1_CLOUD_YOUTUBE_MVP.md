@@ -15,7 +15,7 @@ Status:
 Draft
 
 Version:
-1.1.0
+1.2.0
 
 Last Updated:
 2026-07-18
@@ -475,6 +475,39 @@ The final transport decision MUST be recorded in the Phase 1 document or an ADR 
 
 ## 12. Milestones
 
+### Current Milestone Status
+
+Milestone:
+1 - Browser Capture Feasibility.
+
+Status:
+Implementation created; browser validation pending.
+
+Implementation path:
+
+`src/browser_extension/`
+
+Completed implementation checks:
+
+- Manifest V3 structure;
+- Chrome 116 minimum version;
+- JavaScript syntax validation;
+- manifest JSON validation;
+- ASCII validation;
+- no credentials or remote code;
+- repository write verification.
+
+Pending validation:
+
+- install through `Load unpacked`;
+- start capture on selected YouTube videos;
+- verify original audio playback;
+- verify original volume control;
+- verify three-second ducking test;
+- verify audio metadata;
+- complete ten-minute stability run;
+- verify clean stop and tab-close behavior.
+
 ### Milestone 1 - Browser Capture Feasibility
 
 Deliver:
@@ -760,5 +793,6 @@ Technical references:
 
 | Version | Date | Description |
 |---------|------|-------------|
+| 1.2.0 | 2026-07-18 | Added Milestone 1 prototype status and pending browser validation |
 | 1.1.0 | 2026-07-18 | Added automatic original-audio ducking and independent volume controls |
 | 1.0.0 | 2026-07-18 | Created Phase 1 Cloud YouTube MVP implementation plan |
