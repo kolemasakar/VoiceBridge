@@ -10,7 +10,7 @@ Status:
 Draft
 
 Version:
-1.0.0
+1.1.0
 
 Last updated:
 2026-07-18
@@ -64,6 +64,8 @@ Last updated:
 
 ## 1. Performance requirements
 
+The browser-to-cloud path MUST support streaming audio and translated output without unbounded buffering.
+
 VoiceBridge MUST support low-latency speech translation workflows where selected providers, runtime mode, network conditions, and device capabilities allow real-time processing.
 
 Performance requirements:
@@ -78,6 +80,8 @@ Performance requirements:
 Performance targets MUST be documented before they are enforced as release gates. Until numeric targets are approved, implementation work MUST preserve the ability to measure capture latency, recognition latency, translation latency, synthesis latency, and end-to-end session latency.
 
 ## 2. Scalability requirements
+
+The cloud platform MUST preserve session isolation and authoritative cloud state as concurrent session capacity grows.
 
 VoiceBridge MUST preserve modular boundaries so the system can grow without broad rewrites.
 
@@ -110,9 +114,13 @@ Availability requirements:
 - runtime components SHOULD continue serving unaffected sessions when one session fails;
 - provider unavailability SHOULD be isolated to capabilities that depend on that provider;
 - operational documentation SHOULD identify required configuration before deployment;
-- degraded behavior MAY be supported when an approved fallback provider or local capability exists.
+- degraded behavior MAY be supported when an approved fallback cloud provider exists.
 
 ## 4. Security requirements
+
+The test environment MUST validate one shared revocable access token at the cloud API boundary and MUST apply request, provider, and cost limits.
+
+The shared test token MUST NOT be used for public multi-user production access.
 
 VoiceBridge MUST protect user content, provider credentials, runtime configuration, and operational systems.
 
@@ -141,7 +149,7 @@ Privacy requirements:
 - synthesized audio MUST NOT be stored by default;
 - retention of user content MUST require an approved and documented workflow;
 - diagnostics SHOULD use event identifiers, durations, state transitions, and error categories instead of raw user content;
-- provider integrations MUST document any user data sent outside the local runtime boundary;
+- provider integrations MUST document any user data sent outside the VoiceBridge cloud trust boundary;
 - privacy-impacting features MUST define retention, access, deletion, and user-control expectations before implementation.
 
 Privacy requirements apply to development, testing, demos, and production-like deployments.
@@ -195,6 +203,10 @@ Quality gates MAY become stricter as implementation matures and the technology s
 
 ## 9. Deployment and operational requirements
 
+VoiceBridge MUST use a Cloud First deployment model.
+
+The browser is the primary client, while STT, translation, TTS, orchestration, provider integration, and authoritative state run in the cloud.
+
 VoiceBridge deployments MUST be reproducible, configurable, and safe to operate.
 
 Deployment and operational requirements:
@@ -216,7 +228,7 @@ VoiceBridge non-functional requirements will evolve as implementation, runtime m
 Future evolution considerations:
 
 - numeric service objectives MAY be added after baseline measurements exist;
-- offline processing MAY introduce stricter local performance, storage, and model-management requirements;
+- a future minimal VoiceBridge Agent MAY introduce platform-specific capture, permission, update, and security requirements;
 - mobile or browser clients MAY introduce platform-specific privacy, permission, latency, and battery constraints;
 - multi-user deployments MAY require stronger authentication, authorization, tenant isolation, audit, and capacity controls;
 - persistent history features MAY require explicit retention policies, encryption requirements, deletion workflows, and user consent controls;
@@ -236,4 +248,5 @@ Future changes MUST preserve approved system boundaries or document the required
 
 | Version | Date | Description |
 |---------|------|-------------|
+| 1.1.0 | 2026-07-18 | Aligned non-functional requirements with Cloud First deployment and test access controls |
 | 1.0.0 | 2026-07-18 | Created non-functional requirements baseline |
