@@ -1,14 +1,19 @@
 {
   "manifest_version": 3,
   "name": "VoiceBridge Capture Feasibility",
-  "description": "Phase 1 prototype for YouTube tab-audio capture and browser-side audio control.",
-  "version": "0.1.2",
+  "description": "Phase 1 prototype for cloud sessions, YouTube tab-audio capture, and browser-side audio control.",
+  "version": "0.2.0",
   "minimum_chrome_version": "116",
   "permissions": [
     "activeTab",
     "offscreen",
     "storage",
     "tabCapture"
+  ],
+  "host_permissions": [
+    "https://voicebridge-cloud.onrender.com/*",
+    "http://127.0.0.1/*",
+    "http://localhost/*"
   ],
   "background": {
     "service_worker": "service_worker.js"
