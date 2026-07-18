@@ -2,6 +2,7 @@ import assert from "node:assert/strict";
 import { after, before, test } from "node:test";
 import type { Server } from "node:http";
 import type { AddressInfo } from "node:net";
+import WebSocket, { type RawData } from "ws";
 import type { AppConfig } from "../src/config.js";
 import { loadConfig } from "../src/config.js";
 import { createVoiceBridgeServer } from "../src/server.js";
@@ -64,6 +65,60 @@ function validSessionRequest() {
       speaking_rate: null
     }
   };
+}
+
+function nextSocketEvent(
+  socket: WebSocket,
+  expectedType: string
+): Promise<Record<string, any>> {
+  return new Promise((resolve, reject) => {
+    const timer = setTimeout(() => {
+      cleanup();
+      reject(new Error(`Timed out waiting for ${expectedType}.`));
+    }, 3000);
+
+    const onMessage = (data: RawData, isBinary: boolean) => {
+      if (isBinary) {
+        return;
+      }
+      const event = JSON.parse(data.toString()) as Record<string, any>;
+      if (event.event_type === expectedType) {
+        cleanup();
+        resolve(event);
+      }
+    };
+
+    const onError = (error: Error) => {
+      cleanup();
+      reject(error);
+    };
+
+    const cleanup = () => {
+      clearTimeout(timer);
+      socket.off("message", onMessage);
+      socket.off("error", onError);
+    };
+
+    socket.on("message", onMessage);
+    socket.on("error", onError);
+  });
+}
+
+function socketOpened(socket: WebSocket): Promise<void> {
+  return new Promise((resolve, reject) => {
+    socket.once("open", resolve);
+    socket.once("error", reject);
+  });
+}
+
+function socketClosed(socket: WebSocket): Promise<void> {
+  return new Promise((resolve) => {
+    if (socket.readyState === WebSocket.CLOSED) {
+      resolve();
+      return;
+    }
+    socket.once("close", () => resolve());
+  });
 }
 
 test("health endpoint is public and returns identifiers", async () => {
@@ -213,4 +268,104 @@ test("unknown session returns canonical error", async () => {
   assert.equal(response.status, 404);
   const body = await response.json();
   assert.equal(body.error.code, "SESSION_NOT_FOUND");
+});
+
+test("stream ticket requires an active session", async () => {
+  const createResponse = await api("/api/v1/sessions", {
+    method: "POST",
+    headers: { "content-type": "application/json" },
+    body: JSON.stringify(validSessionRequest())
+  });
+  const created = await createResponse.json();
+
+  const ticketResponse = await api(
+    `/api/v1/sessions/${created.session_id}/stream-ticket`,
+    { method: "POST" }
+  );
+  assert.equal(ticketResponse.status, 409);
+  const body = await ticketResponse.json();
+  assert.equal(body.error.code, "INVALID_SESSION_STATE");
+});
+
+test("authenticated WebSocket stream accepts bounded binary audio", async () => {
+  const createResponse = await api("/api/v1/sessions", {
+    method: "POST",
+    headers: { "content-type": "application/json" },
+    body: JSON.stringify(validSessionRequest())
+  });
+  const created = await createResponse.json();
+  await api(`/api/v1/sessions/${created.session_id}/start`, {
+    method: "POST"
+  });
+
+  const ticketResponse = await api(
+    `/api/v1/sessions/${created.session_id}/stream-ticket`,
+    { method: "POST" }
+  );
+  assert.equal(ticketResponse.status, 201);
+  const ticket = await ticketResponse.json();
+  assert.deepEqual(ticket.protocols.slice(0, 1), ["voicebridge.v1"]);
+  assert.doesNotMatch(ticket.stream_path, /ticket/i);
+
+  const socketUrl = baseUrl.replace(/^http/, "ws") + ticket.stream_path;
+  const socket = new WebSocket(socketUrl, ticket.protocols);
+  const readyPromise = nextSocketEvent(socket, "STREAM_READY");
+  await socketOpened(socket);
+  const ready = await readyPromise;
+  assert.equal(ready.data.max_binary_frame_bytes, 32768);
+  assert.equal(ready.data.max_unacked_frames, 50);
+
+  const startedPromise = nextSocketEvent(socket, "STREAM_STARTED");
+  socket.send(JSON.stringify({
+    event_type: "STREAM_START",
+    sequence: 1,
+    occurred_at: new Date().toISOString(),
+    data: {
+      format: "pcm_s16le",
+      sample_rate_hz: 48000,
+      channels: 1,
+      frame_duration_ms: 20
+    }
+  }));
+  await startedPromise;
+
+  const ackPromise = nextSocketEvent(socket, "AUDIO_ACK");
+  for (let index = 0; index < 10; index += 1) {
+    socket.send(Buffer.alloc(1920));
+  }
+  const ack = await ackPromise;
+  assert.equal(ack.data.frames_received, 10);
+  assert.equal(ack.data.bytes_received, 19200);
+
+  const completedPromise = nextSocketEvent(socket, "STREAM_COMPLETED");
+  socket.send(JSON.stringify({
+    event_type: "STREAM_STOP",
+    sequence: 2,
+    occurred_at: new Date().toISOString(),
+    data: {}
+  }));
+  const completed = await completedPromise;
+  assert.equal(completed.data.frames_received, 10);
+  await socketClosed(socket);
+
+  await new Promise<void>((resolve, reject) => {
+    const reused = new WebSocket(socketUrl, ticket.protocols);
+    const timer = setTimeout(() => {
+      reused.terminate();
+      reject(new Error("Reused stream ticket was not rejected."));
+    }, 3000);
+    reused.once("unexpected-response", (_request, response) => {
+      clearTimeout(timer);
+      assert.equal(response.statusCode, 401);
+      response.resume();
+      resolve();
+    });
+    reused.once("error", () => undefined);
+  });
+
+  const stopResponse = await api(
+    `/api/v1/sessions/${created.session_id}/stop`,
+    { method: "POST" }
+  );
+  assert.equal(stopResponse.status, 200);
 });

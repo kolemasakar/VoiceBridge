@@ -140,6 +140,8 @@ This runtime decision is recorded in `../adr/ADR-002_PHASE_1_CLOUD_SKELETON_RUNT
 
 The Phase 1 test service is deployed as a Render Web Service from the provider-neutral Dockerfile in `src/cloud/`. Render supplies the public HTTPS endpoint and environment-based test secret. This test-hosting choice is recorded in `../adr/ADR-003_PHASE_1_TEST_HOSTING_RENDER.md` and does not define the production hosting contract.
 
+Milestone 3 uses standard WebSocket. The cloud server uses `ws` 8.21.1 in `noServer` mode for authenticated HTTP upgrades. The browser uses its native WebSocket, Web Audio, and AudioWorklet APIs. This decision is recorded in `../adr/ADR-004_PHASE_1_STREAMING_TRANSPORT.md`.
+
 Python MAY be used for local audio processing, provider orchestration, prototypes, and development tooling.
 
 Additional production languages require documented approval before adoption.
@@ -231,10 +233,10 @@ Approved tool categories:
 
 | Area | Approved Direction | Status |
 |------|--------------------|--------|
-| TypeScript checks | Type checker and linter | Planned |
+| TypeScript checks | TypeScript compiler and Node.js test runner | In use |
 | Python checks | Unit tests and static checks when Python is used | Planned |
 | Markdown checks | ASCII validation and reference validation | Approved |
-| Integration checks | Provider and audio adapter tests with mocks | Planned |
+| Integration checks | HTTP lifecycle and WebSocket transport tests | In use |
 
 Tests SHOULD avoid calling paid or external AI providers by default.
 
@@ -296,5 +298,6 @@ Stack changes SHOULD be recorded in an ADR when they affect long-term architectu
 
 | Version | Date | Description |
 |---------|------|-------------|
+| 1.2.0 | 2026-07-18 | Added the Phase 1 WebSocket server dependency and browser streaming APIs |
 | 1.1.0 | 2026-07-18 | Recorded Render as the Phase 1 test deployment platform |
 | 1.0.0 | 2026-07-18 | Initial approved technology stack definition |

@@ -149,11 +149,11 @@ The implementation MUST use an approved secure bidirectional streaming transport
 - synthesized audio delivery;
 - backpressure and disconnect handling.
 
-WebSocket is the preferred Phase 1 candidate.
+Standard WebSocket is the selected Phase 1 transport.
 
-The final transport selection MUST be documented before implementation.
+The binding uses secure `wss` in deployed environments. Continuous audio uses binary frames. Large audio payloads MUST NOT be embedded in JSON.
 
-Continuous audio MUST use binary frames when supported. Large audio payloads MUST NOT be embedded in JSON by default.
+The transport decision and limits are recorded in `../adr/ADR-004_PHASE_1_STREAMING_TRANSPORT.md`.
 
 ### 4.3 Common Rules
 
@@ -317,9 +317,28 @@ It MUST NOT expose secrets, provider account information, internal network detai
 
 ### 7.1 Stream Establishment
 
-The browser MUST authenticate before or during stream establishment.
+The browser first requests a one-time stream ticket through authenticated HTTPS:
 
-A stream MUST be bound to exactly one authorized `session_id`.
+```text
+POST /api/v1/sessions/{session_id}/stream-ticket
+```
+
+The session MUST be `ACTIVE`.
+
+The browser then connects to:
+
+```text
+WS /api/v1/sessions/{session_id}/stream
+```
+
+Required subprotocol values:
+
+```text
+voicebridge.v1
+voicebridge.ticket.TICKET
+```
+
+The ticket MUST be bound to exactly one authorized `session_id`, expire after 60 seconds, and be consumed by the first valid upgrade. The shared test token MUST NOT appear in the WebSocket URL.
 
 The server MUST reject:
 
@@ -329,24 +348,34 @@ The server MUST reject:
 - unsupported audio format;
 - stream attached to a different session context.
 
-### 7.2 Audio Chunk Metadata
+### 7.2 Audio Stream Format
+
+The browser sends `STREAM_START` before binary audio:
 
 ```json
 {
-  "event_type": "AUDIO_CHUNK",
+  "event_type": "STREAM_START",
   "session_id": "session_01",
-  "segment_id": "segment_01",
   "sequence": 1,
-  "format": "PCM_S16LE",
-  "sample_rate_hz": 16000,
-  "channels": 1,
-  "started_at_ms": 0,
-  "duration_ms": 500,
-  "is_final": false
+  "occurred_at": "2026-07-18T00:00:01Z",
+  "data": {
+    "format": "pcm_s16le",
+    "sample_rate_hz": 48000,
+    "channels": 1,
+    "frame_duration_ms": 20
+  }
 }
 ```
 
-Binary audio SHOULD be transmitted separately from metadata.
+Audio payloads use separate binary WebSocket messages.
+
+Milestone 3 bounds:
+
+- mono signed 16-bit little-endian PCM;
+- active browser AudioContext sample rate from 8000 through 96000 Hz;
+- nominal 20 millisecond frames;
+- maximum binary frame size of 32768 bytes;
+- no audio persistence.
 
 ### 7.3 Event Envelope
 
@@ -365,7 +394,7 @@ Binary audio SHOULD be transmitted separately from metadata.
 }
 ```
 
-Required event types:
+Required general event types:
 
 - `SESSION_STATE_CHANGED`;
 - `PIPELINE_STAGE_CHANGED`;
@@ -376,6 +405,18 @@ Required event types:
 - `SESSION_FAILED`;
 - `SESSION_COMPLETED`.
 
+Required Milestone 3 transport event types:
+
+- `STREAM_READY`;
+- `STREAM_START`;
+- `STREAM_STARTED`;
+- `AUDIO_ACK`;
+- `BACKPRESSURE_REQUIRED`;
+- `STREAM_STOP`;
+- `STREAM_COMPLETED`;
+- `PING`;
+- `PONG`.
+
 ### 7.4 Ordering and Backpressure
 
 Events within one session MUST use a monotonically increasing sequence.
@@ -383,6 +424,16 @@ Events within one session MUST use a monotonically increasing sequence.
 The server MUST use bounded buffers.
 
 The server MUST signal backpressure or safely reject excess data instead of allowing unbounded memory growth.
+
+Milestone 3 uses these bounds:
+
+- acknowledgement every 10 audio frames;
+- maximum 50 unacknowledged client frames;
+- maximum browser WebSocket buffered amount of 262144 bytes;
+- maximum control frame size of 8192 bytes;
+- WebSocket compression disabled;
+- excess browser frames dropped and counted instead of queued without limit;
+- one active stream per session.
 
 Partial results MUST be marked explicitly and MUST NOT replace final results silently.
 
@@ -600,7 +651,7 @@ Provider contract tests SHOULD use mocks or fakes.
 
 Future work MAY add:
 
-- final WebSocket or alternative streaming binding;
+- resumable streaming and controlled audio replay;
 - authenticated user accounts;
 - short-lived user tokens;
 - organizations and tenant isolation;
@@ -616,6 +667,7 @@ Production authentication MUST replace the shared test token before public multi
 ## 16. References
 
 - [ADR-001_CLOUD_FIRST_ARCHITECTURE](../adr/ADR-001_CLOUD_FIRST_ARCHITECTURE.md)
+- [ADR-004_PHASE_1_STREAMING_TRANSPORT](../adr/ADR-004_PHASE_1_STREAMING_TRANSPORT.md)
 - [01_PROJECT_OVERVIEW](../overview/01_PROJECT_OVERVIEW.md)
 - [02_REPOSITORY_STRUCTURE](../planning/02_REPOSITORY_STRUCTURE.md)
 - [03_ROADMAP](../planning/03_ROADMAP.md)
@@ -633,4 +685,5 @@ Production authentication MUST replace the shared test token before public multi
 
 | Version | Date | Description |
 |---------|------|-------------|
+| 1.1.0 | 2026-07-18 | Added the Phase 1 WebSocket stream-ticket binding and bounded PCM transport |
 | 1.0.0 | 2026-07-18 | Created Cloud First API design baseline |

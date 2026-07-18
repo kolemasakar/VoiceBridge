@@ -280,17 +280,50 @@ PASSED.
 
 ## 13. Next Engineering Action
 
-Begin Milestone 3 - Streaming Transport.
+Deploy and validate Milestone 3 - Streaming Transport.
 
-Define and validate:
+Required evidence:
 
-- authenticated bidirectional streaming;
-- binary audio upload frames;
-- bounded queues and application-level backpressure;
-- disconnect and reconnect behavior;
-- ten-minute streaming stability evidence.
+- Render deploys cloud service 0.2.0;
+- extension 0.3.0 reaches `STREAM_STARTED`;
+- real binary audio counters increase;
+- unacknowledged frames remain bounded;
+- dropped frames remain visible;
+- a ten-minute stream completes;
+- Stop returns stream and session to `COMPLETED`.
 
-## 14. References
+## 14. Milestone 3 Streaming Transport
+
+Implemented:
+
+- standard WebSocket server through `ws`;
+- HTTP-authenticated one-time stream tickets;
+- ticket binding to one active session;
+- ticket expiration and one-use enforcement;
+- binary mono `pcm_s16le` audio upload;
+- canonical transport event envelopes;
+- audio acknowledgements;
+- client and server frame limits;
+- client output-buffer limit;
+- excess-frame drop counters;
+- unexpected disconnect cleanup;
+- browser stream metrics;
+- 10 automated cloud tests.
+
+Implementation paths:
+
+- `src/cloud/src/stream_ticket_store.ts`;
+- `src/cloud/src/stream_transport.ts`;
+- `src/browser_extension/audio_processor.js`.
+
+Decision:
+
+`docs/adr/ADR-004_PHASE_1_STREAMING_TRANSPORT.md`
+
+Status:
+Implementation complete; Render deployment and ten-minute browser validation pending.
+
+## 15. References
 
 - [01_PROJECT_OVERVIEW](../overview/01_PROJECT_OVERVIEW.md)
 - [03_ROADMAP](../planning/03_ROADMAP.md)
@@ -303,10 +336,11 @@ Define and validate:
 - [12_SECURITY_MODEL](../security/12_SECURITY_MODEL.md)
 - [13_API_DESIGN](../api/13_API_DESIGN.md)
 
-## 15. Version History
+## 16. Version History
 
 | Version | Date | Description |
 |---------|------|-------------|
+| 1.9.0 | 2026-07-18 | Added Milestone 3 bounded WebSocket and browser PCM streaming implementation |
 | 1.8.0 | 2026-07-18 | Completed Render deployment and authenticated extension lifecycle validation |
 | 1.7.0 | 2026-07-18 | Added Milestone 2 Cloud Skeleton implementation and validation |
 | 1.6.0 | 2026-07-18 | Completed Milestone 1 validation and activated Milestone 2 Cloud Skeleton |

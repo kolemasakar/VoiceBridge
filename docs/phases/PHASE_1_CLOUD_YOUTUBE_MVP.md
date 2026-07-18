@@ -524,6 +524,34 @@ Validation record:
 
 `docs/phases/PHASE_1_MILESTONE_2_CLOUD_SKELETON_VALIDATION.md`
 
+Milestone 3 status:
+Implementation created; Render deployment and browser stability validation pending.
+
+Milestone 3 implementation:
+
+- standard WebSocket transport;
+- one-time 60-second stream ticket bound to an `ACTIVE` session;
+- shared token excluded from WebSocket URLs;
+- mono `pcm_s16le` binary frames;
+- 20 millisecond browser audio frames;
+- 32768-byte maximum binary frame;
+- acknowledgement every 10 frames;
+- maximum 50 unacknowledged client frames;
+- 262144-byte browser output-buffer limit;
+- excess-frame drop counters;
+- unexpected disconnect cleanup;
+- visible stream status, frames, bytes, dropped frames, and unacknowledged frames;
+- 10 automated tests.
+
+Pending Milestone 3 exit validation:
+
+- deploy cloud service 0.2.0 to Render;
+- load browser extension 0.3.0;
+- confirm real YouTube audio frames reach the server;
+- confirm counters remain bounded;
+- complete a ten-minute browser streaming test;
+- confirm clean Stop returns stream and session to `COMPLETED`.
+
 ### Milestone 1 - Browser Capture Feasibility
 
 Deliver:
@@ -809,6 +837,7 @@ Technical references:
 
 | Version | Date | Description |
 |---------|------|-------------|
+| 1.6.0 | 2026-07-18 | Added Milestone 3 WebSocket transport implementation and pending live validation |
 | 1.5.0 | 2026-07-18 | Completed Milestone 2 deployment and extension lifecycle validation; activated Milestone 3 |
 | 1.4.0 | 2026-07-18 | Added Milestone 2 Cloud Skeleton implementation and pending deployment status |
 | 1.3.0 | 2026-07-18 | Completed Milestone 1 browser capture validation and activated Milestone 2 |

@@ -10,12 +10,16 @@ import {
   type CreateSessionInput,
   type Session
 } from "./session_store.js";
+import { StreamTicketStore } from "./stream_ticket_store.js";
+import { attachStreamTransport } from "./stream_transport.js";
 
 const SERVICE_NAME = "voicebridge-cloud";
-const SERVICE_VERSION = "0.1.0";
+const SERVICE_VERSION = "0.2.0";
 const SESSION_PATH = /^\/api\/v1\/sessions\/([A-Za-z0-9-]+)$/;
 const COMMAND_PATH =
   /^\/api\/v1\/sessions\/([A-Za-z0-9-]+)\/(start|pause|resume|stop)$/;
+const STREAM_TICKET_PATH =
+  /^\/api\/v1\/sessions\/([A-Za-z0-9-]+)\/stream-ticket$/;
 
 interface ApiError {
   error: {
@@ -191,7 +195,8 @@ export function createVoiceBridgeServer(
     config.rateLimitRequestsPerMinute
   );
 
-  return createServer(async (request, response) => {
+  const streamTickets = new StreamTicketStore();
+  const server = createServer(async (request, response) => {
     const context = createRequestContext(request);
     const method = request.method || "GET";
     const path = new URL(request.url || "/", "http://voicebridge.local").pathname;
@@ -330,6 +335,61 @@ export function createVoiceBridgeServer(
       return;
     }
 
+    const streamTicketMatch = STREAM_TICKET_PATH.exec(path);
+
+    if (method === "POST" && streamTicketMatch?.[1]) {
+      const session = sessionStore.get(streamTicketMatch[1]);
+
+      if (!session) {
+        sendError(
+          response,
+          404,
+          "SESSION_NOT_FOUND",
+          "The session was not found.",
+          "SESSION",
+          false,
+          context,
+          config.corsAllowedOrigin,
+          streamTicketMatch[1]
+        );
+        return;
+      }
+
+      if (session.state !== "ACTIVE") {
+        sendError(
+          response,
+          409,
+          "INVALID_SESSION_STATE",
+          "A stream ticket requires an ACTIVE session.",
+          "SESSION",
+          false,
+          context,
+          config.corsAllowedOrigin,
+          session.session_id
+        );
+        return;
+      }
+
+      const ticket = streamTickets.issue(session.session_id);
+      sendJson(
+        response,
+        201,
+        {
+          request_id: context.requestId,
+          session_id: session.session_id,
+          stream_path: `/api/v1/sessions/${session.session_id}/stream`,
+          protocols: [
+            "voicebridge.v1",
+            `voicebridge.ticket.${ticket.ticket}`
+          ],
+          expires_at: new Date(ticket.expiresAt).toISOString()
+        },
+        context,
+        config.corsAllowedOrigin
+      );
+      return;
+    }
+
     const commandMatch = COMMAND_PATH.exec(path);
 
     if (method === "POST" && commandMatch?.[1] && commandMatch[2]) {
@@ -393,6 +453,14 @@ export function createVoiceBridgeServer(
       config.corsAllowedOrigin
     );
   });
+
+  attachStreamTransport(
+    server,
+    sessionStore,
+    streamTickets,
+    config.corsAllowedOrigin
+  );
+  return server;
 }
 
 export async function listen(

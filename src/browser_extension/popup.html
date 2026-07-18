@@ -51,6 +51,19 @@
         <p id="cloud-detail">The test token stays in this browser profile.</p>
       </section>
 
+      <section class="metrics stream-metrics">
+        <div class="section-title">
+          <h2>Audio stream</h2>
+          <strong id="stream-status">OFFLINE</strong>
+        </div>
+        <dl>
+          <div><dt>Frames sent</dt><dd id="stream-frames">0</dd></div>
+          <div><dt>Bytes sent</dt><dd id="stream-bytes">0</dd></div>
+          <div><dt>Dropped</dt><dd id="stream-dropped">0</dd></div>
+          <div><dt>Unacknowledged</dt><dd id="stream-unacked">0</dd></div>
+        </dl>
+      </section>
+
       <section class="controls">
         <button id="start" class="primary">Start capture</button>
         <button id="stop" disabled>Stop</button>

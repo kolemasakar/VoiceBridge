@@ -250,6 +250,31 @@ async function stopCloudSession() {
   }
 }
 
+async function getStreamTicket() {
+  const current = await getCloudState();
+  if (current.status !== "ACTIVE" || !current.session_id) {
+    throw new Error("An ACTIVE cloud session is required for streaming.");
+  }
+
+  const ticket = await cloudRequest(
+    "/api/v1/sessions/" + current.session_id + "/stream-ticket",
+    { method: "POST" }
+  );
+  const { cloudApiUrl } = await cloudSettings();
+  const streamUrl = new URL(cloudApiUrl);
+  streamUrl.protocol = streamUrl.protocol === "https:" ? "wss:" : "ws:";
+  streamUrl.pathname = ticket.stream_path;
+  streamUrl.search = "";
+  streamUrl.hash = "";
+
+  return {
+    url: streamUrl.toString(),
+    protocols: ticket.protocols,
+    session_id: current.session_id,
+    expires_at: ticket.expires_at
+  };
+}
+
 async function ensureOffscreenDocument() {
   const offscreenUrl = chrome.runtime.getURL(OFFSCREEN_PATH);
   const contexts = await chrome.runtime.getContexts({
@@ -342,6 +367,8 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
     operation = startCloudSession().then((state) => ({ ok: true, state }));
   } else if (message.type === "STOP_CLOUD_SESSION") {
     operation = stopCloudSession().then((state) => ({ ok: true, state }));
+  } else if (message.type === "GET_STREAM_TICKET") {
+    operation = getStreamTicket().then((stream) => ({ ok: true, stream }));
   } else if (message.type === "CAPTURE_STATE") {
     const state = message.data;
     operation = chrome.storage.session.set({ capture_state: state })

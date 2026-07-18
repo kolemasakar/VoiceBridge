@@ -1,10 +1,10 @@
 # VoiceBridge Cloud Skeleton
 
 Purpose:
-Provide the Phase 1 Milestone 2 cloud API baseline.
+Provide the Phase 1 cloud API and bounded streaming transport baseline.
 
 Version:
-0.1.0
+0.2.0
 
 Status:
 Implementation
@@ -16,6 +16,11 @@ Implementation
 - in-memory authoritative session state;
 - create and read session endpoints;
 - start, pause, resume, and stop commands;
+- one-time WebSocket stream tickets;
+- authenticated WebSocket upgrade without the shared token in the URL;
+- bounded binary PCM audio frames;
+- acknowledgement and flow-control events;
+- per-stream counters without audio persistence;
 - canonical error envelopes;
 - request and correlation identifiers;
 - bounded JSON request bodies;
@@ -111,6 +116,26 @@ POST /api/v1/sessions/{session_id}/resume
 POST /api/v1/sessions/{session_id}/stop
 ```
 
+## Audio Stream
+
+An `ACTIVE` session can request a one-time stream ticket:
+
+```text
+POST /api/v1/sessions/{session_id}/stream-ticket
+Authorization: Bearer TEST_ACCESS_TOKEN
+```
+
+The response provides a stream path and two WebSocket subprotocol values. The second value contains a one-time ticket that expires after 60 seconds. The shared test token is not placed in the WebSocket URL.
+
+Connect to:
+
+```text
+WS /api/v1/sessions/{session_id}/stream
+Sec-WebSocket-Protocol: voicebridge.v1, voicebridge.ticket.TICKET
+```
+
+After `STREAM_READY`, send a JSON `STREAM_START` event describing mono `pcm_s16le` audio. Binary frames are limited to 32768 bytes. The server sends `AUDIO_ACK` every 10 frames. The client MUST keep no more than 50 frames unacknowledged and MUST bound its WebSocket output buffer.
+
 ## Docker
 
 ```text
@@ -125,8 +150,8 @@ docker run --rm -p 8080:8080 \
 - single process;
 - in-memory sessions;
 - no persistence;
-- no WebSocket;
-- no audio ingestion;
+- streamed audio is counted and discarded after validation;
+- no audio decoding or provider forwarding;
 - no STT;
 - no translation;
 - no TTS;
@@ -139,3 +164,5 @@ docker run --rm -p 8080:8080 \
 - restrict `CORS_ALLOWED_ORIGIN` outside controlled testing;
 - use HTTPS at the deployment boundary;
 - do not use this skeleton for public multi-user production access.
+- do not log stream tickets or the shared token;
+- treat stream tickets as short-lived bearer secrets.

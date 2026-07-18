@@ -7,6 +7,11 @@ const elements = {
   cloudStatus: document.querySelector("#cloud-status"),
   cloudDetail: document.querySelector("#cloud-detail"),
   saveCloud: document.querySelector("#save-cloud"),
+  streamStatus: document.querySelector("#stream-status"),
+  streamFrames: document.querySelector("#stream-frames"),
+  streamBytes: document.querySelector("#stream-bytes"),
+  streamDropped: document.querySelector("#stream-dropped"),
+  streamUnacked: document.querySelector("#stream-unacked"),
   start: document.querySelector("#start"),
   stop: document.querySelector("#stop"),
   testDucking: document.querySelector("#test-ducking"),
@@ -65,6 +70,13 @@ function renderState(state) {
   elements.rms.textContent = state.rms ?? "-";
   elements.peak.textContent = state.peak ?? "-";
   elements.error.textContent = state.error || "";
+  const streamStatus = state.stream_status || "OFFLINE";
+  elements.streamStatus.textContent = streamStatus;
+  elements.streamStatus.className = streamStatus.toLowerCase();
+  elements.streamFrames.textContent = state.stream_frames_sent ?? 0;
+  elements.streamBytes.textContent = state.stream_bytes_sent ?? 0;
+  elements.streamDropped.textContent = state.stream_frames_dropped ?? 0;
+  elements.streamUnacked.textContent = state.stream_unacknowledged ?? 0;
 
   const effectivePercent = Math.round(
     (state.effective_original_volume ??
@@ -195,6 +207,7 @@ async function startCapture() {
 
     const cloudResponse = await serviceWorkerMessage("START_CLOUD_SESSION");
     renderCloudState(cloudResponse.state);
+    const streamResponse = await serviceWorkerMessage("GET_STREAM_TICKET");
 
     try {
       const streamId = await chrome.tabCapture.getMediaStreamId({
@@ -213,7 +226,8 @@ async function startCapture() {
         data: {
           stream_id: streamId,
           tab_id: tab.id,
-          config
+          config,
+          stream: streamResponse.stream
         }
       });
 

@@ -1,6 +1,6 @@
 {
   "name": "voicebridge-cloud",
-  "version": "0.1.0",
+  "version": "0.2.0",
   "private": true,
   "type": "module",
   "description": "VoiceBridge Phase 1 Cloud Skeleton",
@@ -16,6 +16,10 @@
   },
   "devDependencies": {
     "@types/node": "26.1.1",
+    "@types/ws": "8.18.1",
     "typescript": "7.0.2"
+  },
+  "dependencies": {
+    "ws": "8.21.1"
   }
 }
