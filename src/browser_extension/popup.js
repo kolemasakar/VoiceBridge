@@ -85,12 +85,19 @@ async function startCapture() {
       targetTabId: tab.id
     });
 
+    const config = {
+      original_pause_volume: Number(elements.originalVolume.value) / 100,
+      original_duck_volume: 0.15,
+      ukrainian_volume: Number(elements.ukrainianVolume.value) / 100
+    };
+
     const response = await chrome.runtime.sendMessage({
       target: "offscreen",
       type: "START_CAPTURE",
       data: {
         stream_id: streamId,
-        tab_id: tab.id
+        tab_id: tab.id,
+        config
       }
     });
 
@@ -126,6 +133,8 @@ async function sendVolumes() {
 
   elements.originalValue.textContent = elements.originalVolume.value + "%";
   elements.ukrainianValue.textContent = elements.ukrainianVolume.value + "%";
+
+  await chrome.storage.local.set(data);
 
   await chrome.runtime.sendMessage({
     target: "offscreen",
