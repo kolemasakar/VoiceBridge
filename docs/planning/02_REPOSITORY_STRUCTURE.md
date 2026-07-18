@@ -12,7 +12,7 @@ Status:
 Approved
 
 Version:
-1.1.0
+1.2.0
 
 Last Updated:
 2026-07-18
@@ -73,6 +73,8 @@ VoiceBridge/
 |   |   `-- 03_ROADMAP.md
 |   `-- bootstrap/
 |-- src/
+|   |-- browser_extension/
+|   `-- cloud/
 |-- tests/
 |-- tools/
 |-- patches/
@@ -140,7 +142,19 @@ Bootstrap and recovery documents are stored in `docs/bootstrap/`.
 
 The source directory contains active application code.
 
-Internal structure will be defined after technology selection.
+Current structure:
+
+```text
+src/
+|-- browser_extension/
+`-- cloud/
+```
+
+`src/browser_extension/` contains the Phase 1 Chromium extension.
+
+`src/cloud/` contains the Phase 1 cloud service.
+
+Additional internal structure MUST follow approved architecture and ADR decisions.
 
 ## 6. Test Layout
 
@@ -167,5 +181,6 @@ Patches MUST NOT become permanent storage for active code.
 
 | Version | Date | Description |
 |---------|------|-------------|
+| 1.2.0 | 2026-07-18 | Added browser extension and cloud source structure |
 | 1.1.0 | 2026-07-18 | Added API documentation area |
 | 1.0.0 | 2026-07-18 | Initial approved repository structure definition |
