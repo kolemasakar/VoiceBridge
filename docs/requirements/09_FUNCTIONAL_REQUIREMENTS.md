@@ -231,6 +231,7 @@ Future extensions MUST preserve the core goal of translating spoken source-langu
 - ../overview/07_PROJECT_DESCRIPTION.md
 - ../architecture/04_ARCHITECTURE.md
 - ../architecture/05_TECHNOLOGY_STACK.md
+- 11_NON_FUNCTIONAL_REQUIREMENTS.md
 
 ## 8. Version History
 
