@@ -12,7 +12,7 @@ Status:
 Approved
 
 Version:
-1.0.0
+1.1.0
 
 Last Updated:
 2026-07-18
@@ -60,6 +60,7 @@ VoiceBridge/
 |
 |-- docs/
 |   |-- adr/
+|   |-- api/
 |   |-- overview/
 |   |   `-- 07_PROJECT_DESCRIPTION.md
 |   |-- design/
@@ -112,6 +113,7 @@ patches/
 docs/
 |
 |-- adr/
+|-- api/
 |-- overview/
 |-- design/
 |-- governance/
@@ -121,6 +123,8 @@ docs/
 ```
 
 ADR documents are stored in `docs/adr/`.
+
+API design and contract documents are stored in `docs/api/`.
 
 Overview documents are stored in `docs/overview/`.
 
@@ -163,4 +167,5 @@ Patches MUST NOT become permanent storage for active code.
 
 | Version | Date | Description |
 |---------|------|-------------|
+| 1.1.0 | 2026-07-18 | Added API documentation area |
 | 1.0.0 | 2026-07-18 | Initial approved repository structure definition |
