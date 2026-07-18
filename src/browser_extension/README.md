@@ -3,6 +3,9 @@
 Purpose:
 Validate YouTube tab-audio capture, browser playback control, audio metadata, and clean session shutdown for VoiceBridge Phase 1.
 
+Version:
+0.1.1
+
 ## Requirements
 
 - Chrome or Chromium version 116 or later.
@@ -51,6 +54,11 @@ Validate YouTube tab-audio capture, browser playback control, audio metadata, an
 - No Ukrainian speech synthesis.
 - No automatic ducking based on real Ukrainian speech.
 - The complete original tab audio is controlled as one track.
+
+## Version History
+
+- 0.1.1: Removed unsupported storage access from the offscreen document.
+- 0.1.0: Initial capture feasibility prototype.
 
 ## Security
 
