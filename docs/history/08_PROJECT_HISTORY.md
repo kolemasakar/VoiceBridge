@@ -12,7 +12,7 @@ Status:
 Approved
 
 Version:
-1.4.0
+1.5.0
 
 Last Updated:
 2026-07-18
@@ -133,6 +133,7 @@ docs/
         16_AI_DEVELOPMENT_RULES.md
     history/
         08_PROJECT_HISTORY.md
+        VOICEBRIDGE_DOCUMENTATION_AUTHOR_NOTES_UA.txt
     overview/
         01_PROJECT_OVERVIEW.md
         07_PROJECT_DESCRIPTION.md
@@ -187,13 +188,27 @@ Static validation passed.
 
 Browser runtime validation is pending.
 
-## 11. Next Engineering Action
+## 11. Bootstrap and Author Notes
+
+The repository now stores cross-chat recovery packages under:
+
+`docs/bootstrap/`
+
+The Documentation Foundation recovery package is archived because later Cloud First and Phase 1 work supersede its recorded Next Task.
+
+The user-provided Ukrainian documentation explanation is stored unchanged in meaning as:
+
+`docs/history/VOICEBRIDGE_DOCUMENTATION_AUTHOR_NOTES_UA.txt`
+
+This file is an approved UTF-8 personal exception and is non-authoritative.
+
+## 12. Next Engineering Action
 
 Install the unpacked extension in Chrome 116 or later and execute the Milestone 1 browser validation checklist.
 
 Milestone 1 MUST remain incomplete until the ten-minute stability test and clean shutdown checks pass.
 
-## 12. References
+## 13. References
 
 - [01_PROJECT_OVERVIEW](../overview/01_PROJECT_OVERVIEW.md)
 - [03_ROADMAP](../planning/03_ROADMAP.md)
@@ -206,10 +221,11 @@ Milestone 1 MUST remain incomplete until the ten-minute stability test and clean
 - [12_SECURITY_MODEL](../security/12_SECURITY_MODEL.md)
 - [13_API_DESIGN](../api/13_API_DESIGN.md)
 
-## 13. Version History
+## 14. Version History
 
 | Version | Date | Description |
 |---------|------|-------------|
+| 1.5.0 | 2026-07-18 | Added Bootstrap storage and UTF-8 personal author notes |
 | 1.4.0 | 2026-07-18 | Added Milestone 1 browser extension prototype and pending validation status |
 | 1.3.0 | 2026-07-18 | Added Phase 1 browser audio ducking and volume-control decision |
 | 1.2.0 | 2026-07-18 | Added Phase 1 implementation plan and activated browser capture feasibility milestone |
