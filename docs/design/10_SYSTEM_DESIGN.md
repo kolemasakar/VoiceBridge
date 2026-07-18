@@ -16,7 +16,7 @@ Status:
 Draft
 
 Version:
-1.0.0
+1.1.0
 
 Last Updated:
 2026-07-18
@@ -171,46 +171,42 @@ Responsibilities:
 
 ## 4. Runtime Architecture
 
-The runtime architecture follows a staged speech translation flow:
-
-1. User provides speech input.
-2. Audio stream is captured.
-3. Speech recognition converts audio to text.
-4. Translation engine processes text.
-5. Speech synthesis generates output.
-6. Result is delivered to user.
+VoiceBridge uses a Cloud First runtime.
 
 Runtime sequence:
 
+1. The browser creates an authenticated translation session.
+2. The browser captures or receives supported audio.
+3. The browser streams audio to cloud ingestion.
+4. Cloud speech recognition converts audio to source text.
+5. Cloud translation converts source text to target text.
+6. Cloud speech synthesis generates target-language audio.
+7. The cloud streams translated audio and lifecycle events to the browser.
+8. The browser plays translated audio.
+9. The cloud Session Orchestrator maintains authoritative session state and performs cleanup.
+
 ```text
-User
-  |
-  v
-Client
-  |
-  v
-Session Controller
-  |
-  v
-Audio Capture Component
-  |
-  v
-Speech Recognition Component
-  |
-  v
-Translation Component
-  |
-  v
-Speech Synthesis Component
-  |
-  v
-Playback or Delivery Target
-  |
-  v
-User
+Browser Client
+    |
+    v
+Cloud API and Streaming Gateway
+    |
+    v
+Session Orchestrator
+    |
+    +-- Audio Processing
+    +-- Speech Recognition
+    +-- Translation
+    +-- Speech Synthesis
+    +-- Session State
+    |
+    v
+Browser Playback
 ```
 
-The Session Controller coordinates the workflow and records state transitions. Provider calls happen through the Provider Registry and integration adapters. Failures should be reported with actionable context while avoiding exposure of secrets, private audio, or unnecessary transcript data.
+For the test launch, the browser MAY use one shared test access token. The design excludes user registration, password management, organizations, and role administration until a production authentication design is approved.
+
+A future VoiceBridge Agent MAY capture system audio when browser or operating-system restrictions prevent direct capture. The Agent remains a minimal edge component and sends audio to the same cloud pipeline.
 
 ## 5. Data Flow
 
