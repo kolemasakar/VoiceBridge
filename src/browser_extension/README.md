@@ -13,7 +13,9 @@ Validate YouTube tab-audio capture, browser playback control, audio metadata, an
 1. Open `chrome://extensions`.
 2. Enable `Developer mode`.
 3. Select `Load unpacked`.
-4. Select the `src/browser_extension` directory.
+4. Select the directory that contains `manifest.json`:
+   - `src/browser_extension` in the repository;
+   - `extension` in the downloadable ZIP.
 5. Pin the VoiceBridge extension.
 
 ## Test
