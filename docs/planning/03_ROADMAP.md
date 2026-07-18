@@ -18,7 +18,7 @@ Status:
 Approved
 
 Version:
-1.0.0
+1.1.0
 
 Last Updated:
 2026-07-18
@@ -74,7 +74,17 @@ The long-term goal:
 
 ## 2. Development Strategy
 
-The project follows incremental validation.
+The project follows incremental validation and a Cloud First implementation model.
+
+Cloud First rules:
+
+- the browser is the primary client for Phases 1 through 4;
+- speech recognition, translation, speech synthesis, session orchestration, and state management run in the cloud;
+- users do not require a local development environment;
+- a minimal local cross-platform VoiceBridge Agent MAY be introduced in Phase 5 only when browser or operating-system security prevents required system-audio capture;
+- the Agent MUST NOT move AI processing, orchestration, or authoritative session state out of the cloud;
+- the test launch MAY use a single shared test access token without registration or account management;
+- production authentication MUST be designed and approved before public or multi-user deployment.
 
 Each phase MUST:
 
@@ -88,20 +98,20 @@ Each phase MUST:
 
 | Phase | Name | Objective | Status |
 |------|------|-----------|--------|
-|0|Repository Foundation|Create project foundation and governance|Active|
-|1|YouTube MVP|Translate YouTube videos with AI Ukrainian voice output|Planned|
-|2|Universal Audio Translation|Separate audio capture and translation pipeline|Planned|
-|3|Interpreter Mode|Enable two-way real-time conversations|Planned|
-|4|Multi Platform Expansion|Support external communication services|Planned|
-|5|Open Translation Platform|Create extensible multilingual platform|Planned|
+|0|Repository Foundation|Create project foundation and governance|Completed|
+|1|Cloud YouTube MVP|Browser client with cloud speech translation pipeline|Planned|
+|2|Universal Cloud Audio|Generalize browser audio input and cloud processing|Planned|
+|3|Cloud Service Hardening|Improve reliability, security, observability, and provider portability|Planned|
+|4|Multi Platform Expansion|Support browser-accessible communication services|Planned|
+|5|Interpreter Mode and Optional Agent|Enable two-way translation and add a minimal local agent only if required|Planned|
 
-## 4. Phase 1 YouTube MVP
+## 4. Phase 1 Cloud YouTube MVP
 
 Goal:
 Create the first working demonstration.
 
 Target scenario:
-User opens an English YouTube video and receives Ukrainian AI voice translation.
+User opens an English YouTube video in a browser and receives Ukrainian AI voice translation from the cloud pipeline.
 
 Validation criteria:
 
@@ -110,10 +120,10 @@ Validation criteria:
 - acceptable delay;
 - stable playback experience.
 
-## 5. Phase 2 Universal Audio Translation
+## 5. Phase 2 Universal Cloud Audio Translation
 
 Goal:
-Separate translation technology from YouTube.
+Separate browser audio capture from the cloud translation pipeline.
 
 Capabilities:
 
@@ -123,15 +133,18 @@ Capabilities:
 - text-to-speech output;
 - configurable languages.
 
-## 6. Phase 3 Interpreter Mode
+## 6. Phase 3 Cloud Service Hardening
 
 Goal:
-Create real-time two-way communication.
+Prepare the cloud platform for reliable expansion.
 
-VoiceBridge provides:
+Capabilities:
 
-- local user hears translation into Ukrainian;
-- remote participant hears translation into their language.
+- bounded streaming and recovery;
+- provider portability;
+- security and observability controls;
+- production authentication design;
+- multi-session readiness.
 
 ## 7. Phase 4 Multi Platform Expansion
 
@@ -145,17 +158,17 @@ Possible platforms:
 - browser communication;
 - mobile applications.
 
-## 8. Phase 5 Open Translation Platform
+## 8. Phase 5 Interpreter Mode and Optional Agent
 
 Goal:
-Transform VoiceBridge into an extensible open-source platform.
+Enable real-time two-way multilingual communication.
 
 Possible capabilities:
 
-- plugin architecture;
-- multiple AI providers;
-- multiple speech engines;
-- community extensions.
+- bidirectional translation sessions;
+- multiple AI providers and speech engines;
+- a minimal local cross-platform VoiceBridge Agent only when browser or operating-system restrictions prevent required system-audio capture;
+- cloud-hosted STT, translation, TTS, orchestration, and authoritative state even when the Agent is used.
 
 ## 9. Milestone Criteria
 
@@ -178,4 +191,5 @@ A phase is completed only when:
 
 | Version | Date | Description |
 |---------|------|-------------|
+|1.1.0|2026-07-18|Aligned roadmap with Cloud First architecture and simplified test authentication|
 |1.0.0|2026-07-18|Initial roadmap definition|
