@@ -295,6 +295,7 @@ Scalability work must preserve the documented architecture boundaries and securi
 - [04_ARCHITECTURE](../architecture/04_ARCHITECTURE.md)
 - [05_TECHNOLOGY_STACK](../architecture/05_TECHNOLOGY_STACK.md)
 - [09_FUNCTIONAL_REQUIREMENTS](../requirements/09_FUNCTIONAL_REQUIREMENTS.md)
+- [11_NON_FUNCTIONAL_REQUIREMENTS](../requirements/11_NON_FUNCTIONAL_REQUIREMENTS.md)
 
 ## 10. Version History
 

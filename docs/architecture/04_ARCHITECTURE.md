@@ -332,6 +332,7 @@ Accepted architecture changes SHOULD be recorded in an ADR when they introduce a
 - ../planning/03_ROADMAP.md
 - ../governance/15_REPOSITORY_RULES.md
 - ../governance/16_AI_DEVELOPMENT_RULES.md
+- ../requirements/11_NON_FUNCTIONAL_REQUIREMENTS.md
 
 ## 13. Version History
 

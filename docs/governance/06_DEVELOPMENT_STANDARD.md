@@ -347,6 +347,7 @@ A change MUST NOT be accepted when it contains:
 - `../architecture/05_TECHNOLOGY_STACK.md`
 - `../planning/02_REPOSITORY_STRUCTURE.md`
 - `../planning/03_ROADMAP.md`
+- `../requirements/11_NON_FUNCTIONAL_REQUIREMENTS.md`
 
 ## 14. Version History
 
