@@ -18,7 +18,7 @@ Status:
 Approved
 
 Version:
-1.0.0
+1.1.0
 
 Last Updated:
 2026-07-18
@@ -91,7 +91,7 @@ The project SHOULD evolve from a focused MVP into a modular platform that suppor
 - translation;
 - text-to-speech synthesis;
 - configurable provider integrations;
-- local playback of translated speech;
+- browser playback of cloud-generated translated speech;
 - privacy-aware operation by default.
 
 ## 4. Target Users
@@ -135,18 +135,23 @@ The MVP SHOULD demonstrate:
 
 The MVP MUST prioritize a working, understandable demo over broad platform support.
 
+The MVP uses the approved Cloud First architecture.
+
+The test launch MAY use one shared revocable access token without user registration, passwords, account recovery, organizations, or persistent profiles.
+
+A production authentication model MUST replace the shared token before public multi-user deployment.
+
 ## 7. Long Term Scope
 
 The long-term scope is an extensible translation platform.
 
 VoiceBridge MAY support:
 
-- browser-based usage;
-- local companion applications;
-- desktop wrappers;
-- optional cloud-assisted services;
-- provider plugins;
-- local speech and translation engines;
+- browser-based usage as the primary client model;
+- cloud-hosted speech recognition, translation, speech synthesis, orchestration, and state;
+- integration with communication platforms;
+- replaceable provider adapters;
+- a minimal local VoiceBridge Agent only in a later phase when browser or operating-system restrictions prevent required system-audio capture;
 - community language and voice extensions.
 
 Long-term expansion MUST preserve modular architecture and documented governance.
@@ -198,4 +203,5 @@ The project is successful when it can:
 
 | Version | Date | Description |
 |---------|------|-------------|
+| 1.1.0 | 2026-07-18 | Aligned project description with Cloud First architecture |
 | 1.0.0 | 2026-07-18 | Initial approved project description |
