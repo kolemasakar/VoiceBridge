@@ -1,0 +1,57 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1">
+    <title>VoiceBridge</title>
+    <link rel="stylesheet" href="popup.css">
+  </head>
+  <body>
+    <main>
+      <header>
+        <h1>VoiceBridge</h1>
+        <p>Capture feasibility</p>
+      </header>
+
+      <section class="status-card">
+        <span id="status-dot" class="status-dot"></span>
+        <strong id="status">Preparing...</strong>
+        <span id="elapsed">00:00</span>
+      </section>
+
+      <section class="controls">
+        <button id="start" class="primary">Start capture</button>
+        <button id="stop" disabled>Stop</button>
+      </section>
+
+      <section>
+        <label for="original-volume">
+          <span>Original volume</span>
+          <output id="original-value">50%</output>
+        </label>
+        <input id="original-volume" type="range" min="0" max="100" value="50">
+
+        <label for="ukrainian-volume">
+          <span>Ukrainian volume</span>
+          <output id="ukrainian-value">100%</output>
+        </label>
+        <input id="ukrainian-volume" type="range" min="0" max="100" value="100">
+
+        <button id="test-ducking" disabled>Test ducking for 3 seconds</button>
+      </section>
+
+      <section class="metrics">
+        <h2>Audio metadata</h2>
+        <dl>
+          <div><dt>Sample rate</dt><dd id="sample-rate">-</dd></div>
+          <div><dt>Channels</dt><dd id="channels">-</dd></div>
+          <div><dt>RMS</dt><dd id="rms">-</dd></div>
+          <div><dt>Peak</dt><dd id="peak">-</dd></div>
+        </dl>
+      </section>
+
+      <p id="error" role="alert"></p>
+    </main>
+    <script src="popup.js"></script>
+  </body>
+</html>
