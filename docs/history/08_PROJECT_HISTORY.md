@@ -212,3 +212,97 @@ Implementation documentation should prepare contributors to build the first work
 | Version | Date | Description |
 |---------|------|-------------|
 | 1.0.0 | 2026-07-18 | Created project history baseline |
+
+
+## Version History
+
+### v0.2 - Documentation Foundation Completed
+
+Status: Completed
+
+Date: 2026-07-18
+
+Summary:
+
+- Completed the first documentation foundation phase of the VoiceBridge repository.
+- Established the approved documentation structure under the `docs/` directory.
+- Separated documentation domains into dedicated areas:
+  - overview
+  - architecture
+  - planning
+  - governance
+  - requirements
+  - design
+  - security
+  - history
+
+Completed documents:
+
+- `docs/overview/01_PROJECT_OVERVIEW.md`
+  - Defines project identity, purpose, scope, documentation map, and source-of-truth principles.
+
+- `docs/planning/02_REPOSITORY_STRUCTURE.md`
+  - Defines repository organization rules and document placement model.
+
+- `docs/planning/03_ROADMAP.md`
+  - Defines project development direction and planned evolution stages.
+
+- `docs/architecture/04_ARCHITECTURE.md`
+  - Defines system architecture vision, layers, components, runtime model, and data flow.
+
+- `docs/architecture/05_TECHNOLOGY_STACK.md`
+  - Defines approved technology stack, runtime environment, AI providers, testing and evolution principles.
+
+- `docs/governance/06_DEVELOPMENT_STANDARD.md`
+  - Defines development rules, quality requirements, testing, documentation, security and AI-assisted development principles.
+
+- `docs/overview/07_PROJECT_DESCRIPTION.md`
+  - Defines project goals, MVP direction, non-goals and long-term vision.
+
+- `docs/history/08_PROJECT_HISTORY.md`
+  - Establishes project history baseline and repository evolution tracking.
+
+- `docs/requirements/09_FUNCTIONAL_REQUIREMENTS.md`
+  - Defines functional capabilities, system scope, user roles and core workflows.
+
+- `docs/design/10_SYSTEM_DESIGN.md`
+  - Defines system design model, components, runtime architecture and integration boundaries.
+
+- `docs/requirements/11_NON_FUNCTIONAL_REQUIREMENTS.md`
+  - Defines performance, scalability, reliability, security, maintainability and operational requirements.
+
+- `docs/security/12_SECURITY_MODEL.md`
+  - Defines security objectives, threat model, authentication, authorization, privacy and secure development rules.
+
+Key decisions:
+
+- Documentation format:
+  - Markdown files.
+  - ASCII-only content requirement.
+  - Ukrainian descriptions represented using ASCII transliteration where required.
+
+- Repository governance:
+  - Documentation locations are controlled by repository rules.
+  - Each document must contain metadata, references and version history.
+
+- Architecture governance:
+  - Architecture, design and requirements documents are separated.
+  - Source-of-truth principle established.
+
+- Development governance:
+  - AI-assisted development follows documented standards.
+  - Changes require validation before integration.
+
+Current repository state:
+
+- Documentation foundation completed.
+- Repository structure stabilized.
+- Core project definition completed.
+- Initial architecture baseline established.
+
+Next planned phase:
+
+- Continue system specification expansion.
+- Create API design documentation.
+- Define external interfaces and service contracts.
+- Prepare transition from documentation foundation to implementation planning.
