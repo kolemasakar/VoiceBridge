@@ -2,6 +2,11 @@ const elements = {
   status: document.querySelector("#status"),
   statusDot: document.querySelector("#status-dot"),
   elapsed: document.querySelector("#elapsed"),
+  cloudApiUrl: document.querySelector("#cloud-api-url"),
+  cloudToken: document.querySelector("#cloud-token"),
+  cloudStatus: document.querySelector("#cloud-status"),
+  cloudDetail: document.querySelector("#cloud-detail"),
+  saveCloud: document.querySelector("#save-cloud"),
   start: document.querySelector("#start"),
   stop: document.querySelector("#stop"),
   testDucking: document.querySelector("#test-ducking"),
@@ -18,6 +23,22 @@ const elements = {
   peak: document.querySelector("#peak"),
   error: document.querySelector("#error")
 };
+
+const DEFAULT_CLOUD_API_URL = "https://voicebridge-cloud.onrender.com";
+
+async function serviceWorkerMessage(type, data = undefined) {
+  const response = await chrome.runtime.sendMessage({
+    target: "service_worker",
+    type,
+    data
+  });
+
+  if (!response?.ok) {
+    throw new Error(response?.error || "The extension operation failed.");
+  }
+
+  return response;
+}
 
 function formatDuration(totalSeconds = 0) {
   const minutes = Math.floor(totalSeconds / 60);
@@ -56,15 +77,92 @@ function renderState(state) {
   elements.effectiveLevel.classList.toggle("ducking", ducking);
 }
 
-async function prepareOffscreen() {
-  const response = await chrome.runtime.sendMessage({
-    target: "service_worker",
-    type: "PREPARE_OFFSCREEN"
+function renderCloudState(state = {}) {
+  const status = state.status || "NOT_CONFIGURED";
+  elements.cloudStatus.textContent = status.replaceAll("_", " ");
+  elements.cloudStatus.className = status.toLowerCase();
+
+  if (state.session_id) {
+    elements.cloudDetail.textContent =
+      "Session " + state.session_id.slice(0, 8) + "...";
+  } else if (state.message) {
+    elements.cloudDetail.textContent = state.message;
+  } else if (status === "READY") {
+    elements.cloudDetail.textContent = "Cloud API and token are valid.";
+  } else if (status === "NOT_CONFIGURED") {
+    elements.cloudDetail.textContent =
+      "Enter the test token generated in Render.";
+  }
+}
+
+function validateCloudForm() {
+  const cloudApiUrl = elements.cloudApiUrl.value.trim().replace(/\/+$/, "");
+  const cloudToken = elements.cloudToken.value.trim();
+
+  if (!cloudApiUrl) {
+    throw new Error("Cloud API URL is required.");
+  }
+
+  let parsedUrl;
+  try {
+    parsedUrl = new URL(cloudApiUrl);
+  } catch {
+    throw new Error("Cloud API URL is not valid.");
+  }
+
+  const localHttp =
+    parsedUrl.protocol === "http:" &&
+    ["localhost", "127.0.0.1"].includes(parsedUrl.hostname);
+
+  if (parsedUrl.protocol !== "https:" && !localHttp) {
+    throw new Error("Cloud API URL must use HTTPS.");
+  }
+
+  if (cloudToken.length < 16) {
+    throw new Error("Test access token must contain at least 16 characters.");
+  }
+
+  return { cloud_api_url: cloudApiUrl, test_access_token: cloudToken };
+}
+
+async function saveCloudSettings(testConnection) {
+  const settings = validateCloudForm();
+  await chrome.storage.local.set(settings);
+
+  if (!testConnection) {
+    return;
+  }
+
+  elements.saveCloud.disabled = true;
+  renderCloudState({
+    status: "CHECKING",
+    message: "Checking authenticated cloud access..."
   });
 
-  if (!response?.ok) {
-    throw new Error(response?.error || "Unable to prepare audio runtime.");
+  try {
+    const response = await serviceWorkerMessage("TEST_CLOUD_CONNECTION");
+    renderCloudState(response.state);
+  } finally {
+    elements.saveCloud.disabled = false;
   }
+}
+
+async function loadCloudSettings() {
+  const settings = await chrome.storage.local.get([
+    "cloud_api_url",
+    "test_access_token"
+  ]);
+
+  elements.cloudApiUrl.value =
+    settings.cloud_api_url || DEFAULT_CLOUD_API_URL;
+  elements.cloudToken.value = settings.test_access_token || "";
+
+  const response = await serviceWorkerMessage("GET_CLOUD_STATE");
+  renderCloudState(response.state);
+}
+
+async function prepareOffscreen() {
+  await serviceWorkerMessage("PREPARE_OFFSCREEN");
 }
 
 async function refreshState() {
@@ -84,6 +182,7 @@ async function startCapture() {
 
   try {
     await prepareOffscreen();
+    await saveCloudSettings(false);
 
     const [tab] = await chrome.tabs.query({
       active: true,
@@ -94,28 +193,36 @@ async function startCapture() {
       throw new Error("Open a YouTube tab before starting capture.");
     }
 
-    const streamId = await chrome.tabCapture.getMediaStreamId({
-      targetTabId: tab.id
-    });
+    const cloudResponse = await serviceWorkerMessage("START_CLOUD_SESSION");
+    renderCloudState(cloudResponse.state);
 
-    const config = {
-      original_pause_volume: Number(elements.originalVolume.value) / 100,
-      original_duck_volume: 0.15,
-      ukrainian_volume: Number(elements.ukrainianVolume.value) / 100
-    };
+    try {
+      const streamId = await chrome.tabCapture.getMediaStreamId({
+        targetTabId: tab.id
+      });
 
-    const response = await chrome.runtime.sendMessage({
-      target: "offscreen",
-      type: "START_CAPTURE",
-      data: {
-        stream_id: streamId,
-        tab_id: tab.id,
-        config
+      const config = {
+        original_pause_volume: Number(elements.originalVolume.value) / 100,
+        original_duck_volume: 0.15,
+        ukrainian_volume: Number(elements.ukrainianVolume.value) / 100
+      };
+
+      const response = await chrome.runtime.sendMessage({
+        target: "offscreen",
+        type: "START_CAPTURE",
+        data: {
+          stream_id: streamId,
+          tab_id: tab.id,
+          config
+        }
+      });
+
+      if (!response?.ok) {
+        throw new Error(response?.error || "Unable to start capture.");
       }
-    });
-
-    if (!response?.ok) {
-      throw new Error(response?.error || "Unable to start capture.");
+    } catch (error) {
+      await serviceWorkerMessage("STOP_CLOUD_SESSION").catch(() => undefined);
+      throw error;
     }
 
     await refreshState();
@@ -126,16 +233,30 @@ async function startCapture() {
 }
 
 async function stopCapture() {
-  const response = await chrome.runtime.sendMessage({
-    target: "offscreen",
-    type: "STOP_CAPTURE"
-  });
+  elements.error.textContent = "";
+  const failures = [];
 
-  if (!response?.ok) {
-    elements.error.textContent = response?.error || "Unable to stop capture.";
+  try {
+    const response = await chrome.runtime.sendMessage({
+      target: "offscreen",
+      type: "STOP_CAPTURE"
+    });
+    if (!response?.ok) {
+      failures.push(response?.error || "Unable to stop capture.");
+    }
+  } catch (error) {
+    failures.push(error.message);
+  }
+
+  try {
+    const cloudResponse = await serviceWorkerMessage("STOP_CLOUD_SESSION");
+    renderCloudState(cloudResponse.state);
+  } catch (error) {
+    failures.push(error.message);
   }
 
   await refreshState();
+  elements.error.textContent = failures.join(" ");
 }
 
 async function sendVolumes() {
@@ -177,6 +298,13 @@ async function loadVolumes() {
 
 elements.start.addEventListener("click", startCapture);
 elements.stop.addEventListener("click", stopCapture);
+elements.saveCloud.addEventListener("click", () => {
+  elements.error.textContent = "";
+  saveCloudSettings(true).catch((error) => {
+    elements.error.textContent = error.message;
+    renderCloudState({ status: "ERROR", message: error.message });
+  });
+});
 elements.testDucking.addEventListener("click", async () => {
   const response = await chrome.runtime.sendMessage({
     target: "offscreen",
@@ -193,9 +321,17 @@ chrome.storage.onChanged.addListener((changes, areaName) => {
   if (areaName === "session" && changes.capture_state) {
     renderState(changes.capture_state.newValue);
   }
+  if (areaName === "session" && changes.cloud_state) {
+    renderCloudState(changes.cloud_state.newValue);
+  }
 });
 
-Promise.all([prepareOffscreen(), loadVolumes(), refreshState()])
+Promise.all([
+  prepareOffscreen(),
+  loadVolumes(),
+  loadCloudSettings(),
+  refreshState()
+])
   .catch((error) => {
     elements.error.textContent = error.message;
     renderState({ status: "ERROR", error: error.message });
