@@ -95,10 +95,6 @@ VoiceBridge/
 |-- LICENSE
 |-- .gitignore
 |
-|-- 01_PROJECT_DESCRIPTION.md
-|-- 04_ARCHITECTURE.md
-|-- 05_TECHNOLOGY_STACK.md
-|-- 06_DEVELOPMENT_STANDARD.md
 |-- 07_DECISIONS_REGISTER.md
 |-- 08_PROJECT_HISTORY.md
 |-- 09_CHANGELOG.md
@@ -110,6 +106,8 @@ VoiceBridge/
 |
 |-- docs/
 |   |-- adr/
+|   |-- overview/
+|   |   `-- 07_PROJECT_DESCRIPTION.md
 |   |-- design/
 |   |-- governance/
 |   |   |-- 15_REPOSITORY_RULES.md
@@ -148,6 +146,8 @@ Reusable project utilities MUST be stored in `tools/`.
 Temporary or one-time modifications MUST be stored in `patches/`.
 
 Architecture Decision Records MUST be stored in `docs/adr/`.
+
+Overview documents MUST be stored in `docs/overview/`.
 
 Phase-specific documents MUST be stored in `docs/phases/`.
 

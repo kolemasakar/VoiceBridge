@@ -58,10 +58,10 @@ VoiceBridge/
 |-- LICENSE
 |-- .gitignore
 |
-|-- 01_PROJECT_DESCRIPTION.md
-|
 |-- docs/
 |   |-- adr/
+|   |-- overview/
+|   |   `-- 07_PROJECT_DESCRIPTION.md
 |   |-- design/
 |   |-- governance/
 |   |   |-- 15_REPOSITORY_RULES.md
@@ -112,6 +112,7 @@ patches/
 docs/
 |
 |-- adr/
+|-- overview/
 |-- design/
 |-- governance/
 |-- phases/
@@ -120,6 +121,8 @@ docs/
 ```
 
 ADR documents are stored in `docs/adr/`.
+
+Overview documents are stored in `docs/overview/`.
 
 Governance documents are stored in `docs/governance/`.
 

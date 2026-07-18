@@ -327,7 +327,7 @@ Accepted architecture changes SHOULD be recorded in an ADR when they introduce a
 
 ## 12. References
 
-- ../../01_PROJECT_DESCRIPTION.md
+- ../overview/07_PROJECT_DESCRIPTION.md
 - ../planning/02_REPOSITORY_STRUCTURE.md
 - ../planning/03_ROADMAP.md
 - ../governance/15_REPOSITORY_RULES.md
