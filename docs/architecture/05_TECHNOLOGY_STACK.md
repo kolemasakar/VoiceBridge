@@ -18,7 +18,7 @@ Status:
 Approved
 
 Version:
-1.1.0
+1.2.0
 
 Last Updated:
 2026-07-18
@@ -125,11 +125,18 @@ Approved language choices:
 | Area | Approved Language | Status |
 |------|-------------------|--------|
 | Browser-facing code | TypeScript | Approved |
+| Cloud API and orchestration | TypeScript on Node.js 24+ | Approved for Phase 1 |
 | Local service or automation | Python | Approved |
 | Build and repository scripts | Bash or Python | Approved |
 | Configuration | JSON, YAML, TOML, or environment variables | Approved |
 
 TypeScript SHOULD be used for browser-facing application code because it supports web platform APIs and maintainable UI development.
+
+The Phase 1 cloud API uses TypeScript on Node.js 24 or later.
+
+The Milestone 2 skeleton uses the Node.js built-in HTTP server, zero production npm dependencies, in-memory session state, and Docker packaging.
+
+This runtime decision is recorded in `../adr/ADR-002_PHASE_1_CLOUD_SKELETON_RUNTIME.md`.
 
 Python MAY be used for local audio processing, provider orchestration, prototypes, and development tooling.
 
