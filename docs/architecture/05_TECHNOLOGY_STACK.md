@@ -18,7 +18,7 @@ Status:
 Approved
 
 Version:
-1.0.0
+1.1.0
 
 Last Updated:
 2026-07-18
@@ -97,18 +97,26 @@ The technology stack MUST follow these principles:
 
 ## 3. Application Runtime
 
-The approved initial runtime direction is a local developer-controlled application with a browser-focused MVP path.
-
-Approved runtime categories:
+The approved runtime direction is Cloud First.
 
 | Category | Approved Direction | Status |
 |----------|--------------------|--------|
-| MVP runtime | Browser extension, local companion app, or local web app | Planned |
-| Backend runtime | Local service when needed for audio processing or provider access | Planned |
-| Desktop runtime | Optional future wrapper for local audio capture and playback | Future |
-| Cloud runtime | Optional future deployment for shared services only | Future |
+| Primary client | Browser application | Approved |
+| API runtime | Cloud-hosted service | Approved |
+| STT runtime | Cloud service behind provider adapter | Approved |
+| Translation runtime | Cloud service behind provider adapter | Approved |
+| TTS runtime | Cloud service behind provider adapter | Approved |
+| Session orchestration | Cloud-hosted service | Approved |
+| Authoritative state | Cloud-managed state | Approved |
+| Local Agent | Minimal cross-platform edge adapter only if browser capture is insufficient | Future |
 
-The MVP implementation MUST NOT introduce a permanent cloud dependency unless an ADR approves it.
+The browser is the primary client for Phases 1 through 4.
+
+The MVP MUST NOT require users to install a local programming environment.
+
+A local VoiceBridge Agent MUST NOT be introduced in Phase 1. It MAY be considered later only when browser or operating-system security prevents required system-audio capture.
+
+The test launch MAY use a single shared bearer token supplied through approved secret configuration. This token MUST be replaceable and MUST NOT be used as the final production identity model.
 
 ## 4. Programming Languages
 
@@ -139,7 +147,9 @@ Approved UI directions:
 
 UI code MUST NOT contain direct provider secrets.
 
-UI code SHOULD communicate with provider or local service layers through documented interfaces.
+UI code SHOULD communicate with cloud service layers through documented interfaces.
+
+Provider credentials MUST remain in the cloud and MUST NOT be delivered to the browser.
 
 ## 6. Audio Layer
 
