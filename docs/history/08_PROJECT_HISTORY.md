@@ -12,7 +12,7 @@ Status:
 Approved
 
 Version:
-1.5.0
+1.6.0
 
 Last Updated:
 2026-07-18
@@ -166,27 +166,48 @@ The plan defines:
 Phase 1 status:
 Active.
 
-## 10. Milestone 1 Prototype
+## 10. Milestone 1 Browser Capture Validation
 
-The initial Chromium Manifest V3 prototype was created in:
+Milestone status:
+COMPLETED.
+
+Result:
+PASSED.
+
+Validated extension:
 
 `src/browser_extension/`
 
-Implemented:
+Validated version:
 
-- explicit user-initiated YouTube tab capture;
-- offscreen media runtime;
-- original tab-audio playback;
-- original volume control;
-- Ukrainian volume control placeholder;
-- three-second ducking simulation;
-- audio metadata and elapsed-time display;
-- clean stop and track-ended handling;
-- no cloud connection, credentials, recording, or persistence.
+`0.1.2`
 
-Static validation passed.
+Test scenarios:
 
-Browser runtime validation is pending.
+- mixed film audio;
+- audiobook;
+- music track.
+
+Validation results:
+
+- capture started normally;
+- original audio remained audible;
+- original-volume control worked;
+- ducking worked;
+- visible `DUCKING` indication worked;
+- audio metadata worked;
+- continuous capture remained stable for 12 minutes;
+- stop and cleanup completed normally;
+- status returned to `IDLE`.
+
+Resolved defects:
+
+- unsupported `chrome.storage.local` access in the offscreen document;
+- missing visual ducking indication.
+
+Validation report:
+
+`docs/phases/PHASE_1_MILESTONE_1_BROWSER_CAPTURE_VALIDATION.md`
 
 ## 11. Bootstrap and Author Notes
 
@@ -204,9 +225,18 @@ This file is an approved UTF-8 personal exception and is non-authoritative.
 
 ## 12. Next Engineering Action
 
-Install the unpacked extension in Chrome 116 or later and execute the Milestone 1 browser validation checklist.
+Implement Milestone 2 - Cloud Skeleton.
 
-Milestone 1 MUST remain incomplete until the ten-minute stability test and clean shutdown checks pass.
+Required output:
+
+- deployable cloud service baseline;
+- `GET /api/v1/health`;
+- shared test-token validation;
+- session creation and lifecycle;
+- request and correlation identifiers;
+- environment-based secret configuration;
+- automated tests;
+- deployment instructions.
 
 ## 13. References
 
@@ -225,6 +255,7 @@ Milestone 1 MUST remain incomplete until the ten-minute stability test and clean
 
 | Version | Date | Description |
 |---------|------|-------------|
+| 1.6.0 | 2026-07-18 | Completed Milestone 1 validation and activated Milestone 2 Cloud Skeleton |
 | 1.5.0 | 2026-07-18 | Added Bootstrap storage and UTF-8 personal author notes |
 | 1.4.0 | 2026-07-18 | Added Milestone 1 browser extension prototype and pending validation status |
 | 1.3.0 | 2026-07-18 | Added Phase 1 browser audio ducking and volume-control decision |
