@@ -18,7 +18,7 @@ Status:
 Draft
 
 Version:
-1.1.0
+1.2.0
 
 Last Updated:
 2026-07-18
@@ -193,6 +193,20 @@ The system MUST support token rotation, revocation, request limits, provider quo
 
 The shared test token MUST be replaced before public multi-user production deployment.
 
+### 4.8 Browser Audio Mixing
+
+VoiceBridge MUST mix original tab audio and Ukrainian synthesized speech in the browser.
+
+While Ukrainian speech is active, VoiceBridge MUST automatically reduce the complete original tab audio.
+
+During gaps in Ukrainian speech, VoiceBridge SHOULD raise the original audio to a configurable background level.
+
+Gain changes MUST be smooth.
+
+The user MUST be able to adjust original and Ukrainian volume independently and mute the original audio.
+
+Phase 1 MUST NOT require separation of source speech from music or sound effects.
+
 ## 5. Non-Functional Requirements
 
 Non-functional requirements define quality attributes that support the functional requirements.
@@ -252,5 +266,6 @@ Future extensions MUST preserve the core goal of translating spoken source-langu
 
 | Version | Date | Description |
 |---------|------|-------------|
+| 1.2.0 | 2026-07-18 | Added browser audio mixing and automatic ducking requirements |
 | 1.1.0 | 2026-07-18 | Aligned functional requirements with Cloud First architecture and test access control |
 | 1.0.0 | 2026-07-18 | Created functional requirements baseline |
