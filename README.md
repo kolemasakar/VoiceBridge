@@ -31,7 +31,7 @@ Completed:
 
 Next:
 
-- execute Milestone 1 browser tab-audio capture feasibility.
+- implement Milestone 2 Cloud Skeleton.
 
 ## Test Authentication
 
