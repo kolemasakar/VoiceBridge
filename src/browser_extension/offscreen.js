@@ -4,7 +4,9 @@ let sourceNode = null;
 let analyserNode = null;
 let originalGainNode = null;
 let metricsTimer = null;
+let duckingTimer = null;
 let startedAt = null;
+let duckingActive = false;
 let currentConfig = {
   original_pause_volume: 0.5,
   original_duck_volume: 0.15,
@@ -38,6 +40,11 @@ function stopMetrics() {
     clearInterval(metricsTimer);
     metricsTimer = null;
   }
+
+  if (duckingTimer) {
+    clearTimeout(duckingTimer);
+    duckingTimer = null;
+  }
 }
 
 async function stopCapture(reason = "USER_STOP") {
@@ -64,6 +71,7 @@ async function stopCapture(reason = "USER_STOP") {
   analyserNode = null;
   originalGainNode = null;
   startedAt = null;
+  duckingActive = false;
 
   await publishState({
     status: "IDLE",
@@ -108,6 +116,10 @@ async function publishMetrics(track) {
     rms: Number(level.rms.toFixed(4)),
     peak: Number(level.peak.toFixed(4)),
     original_volume: currentConfig.original_pause_volume,
+    effective_original_volume: duckingActive
+      ? currentConfig.original_duck_volume
+      : currentConfig.original_pause_volume,
+    ducking_active: duckingActive,
     ukrainian_volume: currentConfig.ukrainian_volume,
     error: null
   });
@@ -182,8 +194,20 @@ async function testDucking() {
     throw new Error("Capture is not active.");
   }
 
+  if (duckingTimer) {
+    clearTimeout(duckingTimer);
+  }
+
+  duckingActive = true;
   smoothGain(currentConfig.original_duck_volume);
-  setTimeout(() => smoothGain(currentConfig.original_pause_volume), 3000);
+  await publishMetrics(mediaStream.getAudioTracks()[0]);
+
+  duckingTimer = setTimeout(() => {
+    duckingActive = false;
+    smoothGain(currentConfig.original_pause_volume);
+    publishMetrics(mediaStream.getAudioTracks()[0]).catch(() => undefined);
+    duckingTimer = null;
+  }, 3000);
 }
 
 chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
