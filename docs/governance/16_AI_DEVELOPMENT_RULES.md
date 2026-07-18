@@ -476,7 +476,7 @@ If any required condition is missing, AI MUST report the task as incomplete.
 - `13_PROJECT_STATUS.md`
 - `14_VERSIONING.md`
 - `15_REPOSITORY_RULES.md`
-- `docs/adr/`
+- `../adr/`
 
 ## 18. Version History
 
