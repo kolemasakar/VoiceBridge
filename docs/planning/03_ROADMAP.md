@@ -18,7 +18,7 @@ Status:
 Approved
 
 Version:
-1.1.0
+1.2.0
 
 Last Updated:
 2026-07-18
@@ -99,7 +99,7 @@ Each phase MUST:
 | Phase | Name | Objective | Status |
 |------|------|-----------|--------|
 |0|Repository Foundation|Create project foundation and governance|Completed|
-|1|Cloud YouTube MVP|Browser client with cloud speech translation pipeline|Planned|
+|1|Cloud YouTube MVP|Browser client with cloud speech translation pipeline|Active|
 |2|Universal Cloud Audio|Generalize browser audio input and cloud processing|Planned|
 |3|Cloud Service Hardening|Improve reliability, security, observability, and provider portability|Planned|
 |4|Multi Platform Expansion|Support browser-accessible communication services|Planned|
@@ -191,5 +191,6 @@ A phase is completed only when:
 
 | Version | Date | Description |
 |---------|------|-------------|
+|1.2.0|2026-07-18|Activated Phase 1 Cloud YouTube MVP planning and execution|
 |1.1.0|2026-07-18|Aligned roadmap with Cloud First architecture and simplified test authentication|
 |1.0.0|2026-07-18|Initial roadmap definition|
