@@ -145,7 +145,16 @@ Automated validation includes:
 - reused tickets are rejected;
 - existing HTTP tests remain green.
 
-Browser and ten-minute deployment validation remain required before Milestone 3 is complete.
+Browser validation completed on 2026-07-19:
+
+- extension version 0.3.0 streamed real YouTube tab audio;
+- the stream remained active for 10 minutes and 3 seconds;
+- 30902 frames and 59331840 bytes were sent before clean shutdown;
+- zero frames were dropped;
+- the unacknowledged count remained below the maximum of 50;
+- Stop returned the stream and cloud session to `COMPLETED`.
+
+Milestone 3 validation result: PASSED.
 
 ## References
 
@@ -154,9 +163,11 @@ Browser and ten-minute deployment validation remain required before Milestone 3 
 - [ADR-003_PHASE_1_TEST_HOSTING_RENDER](ADR-003_PHASE_1_TEST_HOSTING_RENDER.md)
 - [13_API_DESIGN](../api/13_API_DESIGN.md)
 - [PHASE_1_CLOUD_YOUTUBE_MVP](../phases/PHASE_1_CLOUD_YOUTUBE_MVP.md)
+- [PHASE_1_MILESTONE_3_STREAMING_TRANSPORT_VALIDATION](../phases/PHASE_1_MILESTONE_3_STREAMING_TRANSPORT_VALIDATION.md)
 
 ## Version History
 
 | Version | Date | Description |
 |---------|------|-------------|
+| 1.1.0 | 2026-07-19 | Added successful ten-minute browser streaming validation |
 | 1.0.0 | 2026-07-18 | Accepted standard WebSocket and one-time stream-ticket binding |

@@ -481,9 +481,10 @@ Completed milestones:
 
 - 1 - Browser Capture Feasibility: PASSED.
 - 2 - Cloud Skeleton: PASSED.
+- 3 - Streaming Transport: PASSED.
 
 Active milestone:
-3 - Streaming Transport.
+4 - STT Integration.
 
 Milestone 2 result:
 The Docker service is live on Render, the HTTPS health endpoint is available, and extension version 0.2.0 completed the authenticated create, start, and stop session lifecycle.
@@ -525,7 +526,7 @@ Validation record:
 `docs/phases/PHASE_1_MILESTONE_2_CLOUD_SKELETON_VALIDATION.md`
 
 Milestone 3 status:
-Implementation created; Render deployment and browser stability validation pending.
+PASSED.
 
 Milestone 3 implementation:
 
@@ -543,14 +544,19 @@ Milestone 3 implementation:
 - visible stream status, frames, bytes, dropped frames, and unacknowledged frames;
 - 10 automated tests.
 
-Pending Milestone 3 exit validation:
+Completed Milestone 3 exit validation:
 
-- deploy cloud service 0.2.0 to Render;
-- load browser extension 0.3.0;
-- confirm real YouTube audio frames reach the server;
-- confirm counters remain bounded;
-- complete a ten-minute browser streaming test;
-- confirm clean Stop returns stream and session to `COMPLETED`.
+- cloud service 0.2.0 deployed to Render;
+- browser extension 0.3.0 confirmed;
+- real YouTube audio streamed for 10 minutes and 3 seconds;
+- 30902 frames and 59331840 bytes sent;
+- zero frames dropped;
+- unacknowledged frames remained below the maximum of 50;
+- clean Stop returned capture to `IDLE` and both stream and session to `COMPLETED`.
+
+Validation record:
+
+`docs/phases/PHASE_1_MILESTONE_3_STREAMING_TRANSPORT_VALIDATION.md`
 
 ### Milestone 1 - Browser Capture Feasibility
 
@@ -837,6 +843,7 @@ Technical references:
 
 | Version | Date | Description |
 |---------|------|-------------|
+| 1.7.0 | 2026-07-19 | Completed ten-minute Milestone 3 streaming validation and activated Milestone 4 |
 | 1.6.0 | 2026-07-18 | Added Milestone 3 WebSocket transport implementation and pending live validation |
 | 1.5.0 | 2026-07-18 | Completed Milestone 2 deployment and extension lifecycle validation; activated Milestone 3 |
 | 1.4.0 | 2026-07-18 | Added Milestone 2 Cloud Skeleton implementation and pending deployment status |

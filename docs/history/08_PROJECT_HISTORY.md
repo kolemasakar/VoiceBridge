@@ -280,17 +280,17 @@ PASSED.
 
 ## 13. Next Engineering Action
 
-Deploy and validate Milestone 3 - Streaming Transport.
+Begin Milestone 4 - STT Integration.
 
-Required evidence:
+Required work:
 
-- Render deploys cloud service 0.2.0;
-- extension 0.3.0 reaches `STREAM_STARTED`;
-- real binary audio counters increase;
-- unacknowledged frames remain bounded;
-- dropped frames remain visible;
-- a ten-minute stream completes;
-- Stop returns stream and session to `COMPLETED`.
+- select the Phase 1 streaming STT provider;
+- configure provider credentials cloud-side;
+- implement the provider adapter;
+- forward ordered PCM frames from the WebSocket transport;
+- return partial and final English transcripts;
+- expose transcript events in the browser extension;
+- record latency, accuracy, failures, and provider cost evidence.
 
 ## 14. Milestone 3 Streaming Transport
 
@@ -320,8 +320,22 @@ Decision:
 
 `docs/adr/ADR-004_PHASE_1_STREAMING_TRANSPORT.md`
 
+Validation:
+
+- cloud service 0.2.0 reached `Live` on Render;
+- browser extension 0.3.0 was confirmed;
+- real YouTube audio streamed for 10 minutes and 3 seconds;
+- 30902 frames and 59331840 bytes were sent;
+- zero frames were dropped;
+- unacknowledged frames remained below the maximum of 50;
+- Stop returned capture to `IDLE` and both stream and session to `COMPLETED`.
+
+Validation record:
+
+`docs/phases/PHASE_1_MILESTONE_3_STREAMING_TRANSPORT_VALIDATION.md`
+
 Status:
-Implementation complete; Render deployment and ten-minute browser validation pending.
+PASSED.
 
 ## 15. References
 
@@ -340,6 +354,7 @@ Implementation complete; Render deployment and ten-minute browser validation pen
 
 | Version | Date | Description |
 |---------|------|-------------|
+| 1.10.0 | 2026-07-19 | Completed ten-minute Milestone 3 streaming validation and activated STT integration |
 | 1.9.0 | 2026-07-18 | Added Milestone 3 bounded WebSocket and browser PCM streaming implementation |
 | 1.8.0 | 2026-07-18 | Completed Render deployment and authenticated extension lifecycle validation |
 | 1.7.0 | 2026-07-18 | Added Milestone 2 Cloud Skeleton implementation and validation |
