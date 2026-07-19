@@ -284,10 +284,11 @@ Configure and validate Milestone 4 - STT Integration.
 
 Required evidence:
 
-- `DEEPGRAM_API_KEY` is configured only in Render;
-- cloud service 0.3.0 reports configured Deepgram STT;
-- extension 0.4.0 displays ordered partial and final English text;
-- record latency, accuracy, failures, and provider cost evidence.
+- an AssemblyAI free account is created without a payment method;
+- `ASSEMBLYAI_API_KEY` is configured only in Render;
+- cloud service 0.3.1 reports configured AssemblyAI STT;
+- extension 0.4.1 displays ordered partial and final English text;
+- record latency, accuracy, failures, and free-credit usage.
 
 ## 14. Milestone 3 Streaming Transport
 
@@ -338,22 +339,23 @@ PASSED.
 
 Decision:
 
-- Deepgram Nova-3 for Phase 1 monolingual English streaming STT;
+- AssemblyAI Universal-Streaming English on the free tier for Phase 1 STT;
 - provider binding remains behind the cloud-side `SttProvider` interface;
 - provider credentials remain in Render environment configuration;
 - browser clients continue to connect only to VoiceBridge Cloud.
 
 Implemented:
 
-- cloud service 0.3.0;
-- Deepgram streaming adapter for raw PCM S16LE;
+- cloud service 0.3.1;
+- AssemblyAI streaming adapter for raw PCM S16LE;
+- aggregation of five nominal 20 millisecond frames into 100 millisecond provider packets;
 - ordered partial and final transcript events;
 - recognition-latency and error measurements;
 - bounded provider output buffering;
 - clean provider stream completion;
-- extension 0.4.0 English transcript display;
+- extension 0.4.1 English transcript display;
 - bounded browser session transcript state;
-- 11 automated tests.
+- 12 automated tests.
 
 Decision record:
 
@@ -385,7 +387,8 @@ Implementation complete; Render configuration and live browser validation pendin
 
 | Version | Date | Description |
 |---------|------|-------------|
-| 1.11.0 | 2026-07-19 | Added Milestone 4 Deepgram STT implementation and pending live validation |
+| 1.12.0 | 2026-07-19 | Replaced the initial Milestone 4 STT adapter with AssemblyAI Free |
+| 1.11.0 | 2026-07-19 | Added Milestone 4 provider-neutral STT implementation and pending live validation |
 | 1.10.0 | 2026-07-19 | Completed ten-minute Milestone 3 streaming validation and activated STT integration |
 | 1.9.0 | 2026-07-18 | Added Milestone 3 bounded WebSocket and browser PCM streaming implementation |
 | 1.8.0 | 2026-07-18 | Completed Render deployment and authenticated extension lifecycle validation |

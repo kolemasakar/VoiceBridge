@@ -34,7 +34,7 @@ Completed:
 
 Active:
 
-- Milestone 4 Deepgram streaming STT implementation is complete;
+- Milestone 4 AssemblyAI Free streaming STT implementation is complete;
 - Render credential configuration and live browser transcript validation are pending.
 
 ## Test Authentication

@@ -2,7 +2,7 @@
   "manifest_version": 3,
   "name": "VoiceBridge Capture Feasibility",
   "description": "Phase 1 prototype for cloud streaming STT, browser capture, and audio control.",
-  "version": "0.4.0",
+  "version": "0.4.1",
   "minimum_chrome_version": "116",
   "permissions": [
     "activeTab",

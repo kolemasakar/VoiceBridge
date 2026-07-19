@@ -4,7 +4,7 @@ Purpose:
 Validate the authenticated VoiceBridge Cloud session lifecycle and bounded WebSocket PCM streaming together with YouTube tab-audio capture, browser playback control, audio metadata, and clean shutdown.
 
 Version:
-0.4.0
+0.4.1
 
 ## Requirements
 
@@ -12,7 +12,7 @@ Version:
 - A supported YouTube video tab.
 - A deployed VoiceBridge Cloud API.
 - The shared test access token configured in the cloud environment.
-- A Deepgram API key configured only in the cloud environment.
+- An AssemblyAI free-tier API key configured only in the cloud environment.
 
 ## Install
 
@@ -77,6 +77,7 @@ Version:
 
 ## Version History
 
+- 0.4.1: Replaced the initial STT provider preference with AssemblyAI Free.
 - 0.4.0: Added cloud STT status, bounded partial and final English transcript display, and recognition-latency metrics.
 - 0.3.0: Added one-time stream tickets, WebSocket PCM upload, acknowledgements, flow limits, and visible stream metrics.
 - 0.2.0: Added authenticated Cloud API settings, connection test, and session lifecycle.

@@ -1,8 +1,10 @@
 import WebSocket, { type RawData } from "ws";
 
-const DEEPGRAM_ENDPOINT = "wss://api.deepgram.com/v1/listen";
+const ASSEMBLYAI_ENDPOINT = "wss://streaming.assemblyai.com/v3/ws";
 const CONNECT_TIMEOUT_MS = 10000;
 const CLOSE_TIMEOUT_MS = 3000;
+const TARGET_AUDIO_CHUNK_MS = 100;
+const MINIMUM_AUDIO_CHUNK_MS = 50;
 const MAX_PROVIDER_BUFFERED_BYTES = 524288;
 const MAX_PROVIDER_MESSAGE_BYTES = 1048576;
 
@@ -53,7 +55,7 @@ class DisabledSttConnection implements SttConnection {
 }
 
 export class DisabledSttProvider implements SttProvider {
-  readonly name = "deepgram";
+  readonly name = "assemblyai";
   readonly configured = false;
 
   async connect(
@@ -65,20 +67,20 @@ export class DisabledSttProvider implements SttProvider {
   }
 }
 
-interface DeepgramAlternative {
-  transcript?: unknown;
+interface AssemblyAiWord {
+  start?: unknown;
+  end?: unknown;
   confidence?: unknown;
 }
 
-interface DeepgramResult {
+interface AssemblyAiMessage {
   type?: unknown;
-  start?: unknown;
-  duration?: unknown;
-  is_final?: unknown;
-  speech_final?: unknown;
-  channel?: {
-    alternatives?: DeepgramAlternative[];
-  };
+  transcript?: unknown;
+  end_of_turn?: unknown;
+  turn_is_formatted?: unknown;
+  words?: AssemblyAiWord[];
+  error?: unknown;
+  message?: unknown;
 }
 
 function rawDataText(data: RawData): string {
@@ -91,50 +93,81 @@ function rawDataText(data: RawData): string {
   return data.toString("utf8");
 }
 
-function finiteNumber(value: unknown, fallback: number): number {
+function finiteNumber(value: unknown): number | null {
   return typeof value === "number" && Number.isFinite(value)
     ? value
-    : fallback;
+    : null;
 }
 
 function parseTranscript(
-  result: DeepgramResult,
-  connectedAt: number
+  result: AssemblyAiMessage,
+  openedAt: number
 ): SttTranscript | null {
-  if (result.type !== "Results") {
+  if (result.type !== "Turn") {
     return null;
   }
 
-  const alternative = result.channel?.alternatives?.[0];
-  const text = typeof alternative?.transcript === "string"
-    ? alternative.transcript.trim().slice(-8000)
+  const text = typeof result.transcript === "string"
+    ? result.transcript.trim().slice(-8000)
     : "";
 
   if (!text) {
     return null;
   }
 
-  const audioStartMs = Math.round(finiteNumber(result.start, 0) * 1000);
-  const audioDurationMs = Math.round(
-    finiteNumber(result.duration, 0) * 1000
-  );
-  const audioEndMs = audioStartMs + audioDurationMs;
-  const streamElapsedMs = Date.now() - connectedAt;
-  const confidence = finiteNumber(alternative?.confidence, -1);
+  const words = Array.isArray(result.words) ? result.words : [];
+  const starts = words
+    .map((word) => finiteNumber(word.start))
+    .filter((value): value is number => value !== null);
+  const ends = words
+    .map((word) => finiteNumber(word.end))
+    .filter((value): value is number => value !== null);
+  const confidences = words
+    .map((word) => finiteNumber(word.confidence))
+    .filter((value): value is number => value !== null && value >= 0);
+
+  const audioStartMs = starts.length > 0 ? Math.min(...starts) : 0;
+  const audioEndMs = ends.length > 0 ? Math.max(...ends) : audioStartMs;
+  const confidence = confidences.length > 0
+    ? confidences.reduce((total, value) => total + value, 0) /
+      confidences.length
+    : null;
+  const isFinal =
+    result.end_of_turn === true && result.turn_is_formatted === true;
 
   return {
     text,
-    isFinal: result.is_final === true,
-    speechFinal: result.speech_final === true,
-    confidence: confidence >= 0 ? confidence : null,
-    audioStartMs,
-    audioDurationMs,
-    recognitionLatencyMs: Math.max(0, streamElapsedMs - audioEndMs)
+    isFinal,
+    speechFinal: isFinal,
+    confidence,
+    audioStartMs: Math.round(audioStartMs),
+    audioDurationMs: Math.max(0, Math.round(audioEndMs - audioStartMs)),
+    recognitionLatencyMs: Math.max(
+      0,
+      Date.now() - openedAt - Math.round(audioEndMs)
+    )
   };
 }
 
-class DeepgramSttConnection implements SttConnection {
-  constructor(private readonly socket: WebSocket) {}
+class AssemblyAiSttConnection implements SttConnection {
+  private readonly targetChunkBytes: number;
+  private readonly minimumChunkBytes: number;
+  private pendingFrames: Buffer[] = [];
+  private pendingBytes = 0;
+
+  constructor(
+    private readonly socket: WebSocket,
+    sampleRateHz: number,
+    channels: number
+  ) {
+    const bytesPerMillisecond = sampleRateHz * channels * 2 / 1000;
+    this.targetChunkBytes = Math.ceil(
+      bytesPerMillisecond * TARGET_AUDIO_CHUNK_MS
+    );
+    this.minimumChunkBytes = Math.ceil(
+      bytesPerMillisecond * MINIMUM_AUDIO_CHUNK_MS
+    );
+  }
 
   sendAudio(frame: Buffer): boolean {
     if (
@@ -144,7 +177,29 @@ class DeepgramSttConnection implements SttConnection {
       return false;
     }
 
-    this.socket.send(frame);
+    this.pendingFrames.push(frame);
+    this.pendingBytes += frame.byteLength;
+
+    if (this.pendingBytes < this.targetChunkBytes) {
+      return true;
+    }
+
+    return this.flushPendingAudio();
+  }
+
+  private flushPendingAudio(): boolean {
+    if (
+      this.pendingBytes === 0 ||
+      this.socket.readyState !== WebSocket.OPEN ||
+      this.socket.bufferedAmount > MAX_PROVIDER_BUFFERED_BYTES
+    ) {
+      return this.pendingBytes === 0;
+    }
+
+    const audio = Buffer.concat(this.pendingFrames, this.pendingBytes);
+    this.pendingFrames = [];
+    this.pendingBytes = 0;
+    this.socket.send(audio);
     return true;
   }
 
@@ -153,14 +208,21 @@ class DeepgramSttConnection implements SttConnection {
       return;
     }
 
+    const closed = new Promise<void>((resolve) => {
+      this.socket.once("close", () => resolve());
+    });
+
     if (this.socket.readyState === WebSocket.OPEN) {
-      this.socket.send(JSON.stringify({ type: "CloseStream" }));
+      if (this.pendingBytes >= this.minimumChunkBytes) {
+        this.flushPendingAudio();
+      }
+      this.pendingFrames = [];
+      this.pendingBytes = 0;
+      this.socket.send(JSON.stringify({ type: "Terminate" }));
     }
 
     await Promise.race([
-      new Promise<void>((resolve) => {
-        this.socket.once("close", () => resolve());
-      }),
+      closed,
       new Promise<void>((resolve) => {
         setTimeout(resolve, CLOSE_TIMEOUT_MS);
       })
@@ -169,42 +231,41 @@ class DeepgramSttConnection implements SttConnection {
     if (Number(this.socket.readyState) !== WebSocket.CLOSED) {
       this.socket.terminate();
     }
-
   }
 }
 
-export class DeepgramSttProvider implements SttProvider {
-  readonly name = "deepgram";
+export class AssemblyAiSttProvider implements SttProvider {
+  readonly name = "assemblyai";
   readonly configured = true;
 
-  constructor(private readonly apiKey: string) {}
+  constructor(
+    private readonly apiKey: string,
+    private readonly endpoint = ASSEMBLYAI_ENDPOINT
+  ) {}
 
   connect(
     options: SttStreamOptions,
     observer: SttObserver
   ): Promise<SttConnection> {
-    const url = new URL(DEEPGRAM_ENDPOINT);
-    url.searchParams.set("model", "nova-3");
-    url.searchParams.set("language", options.language);
-    url.searchParams.set("encoding", "linear16");
+    const url = new URL(this.endpoint);
     url.searchParams.set("sample_rate", String(options.sampleRateHz));
-    url.searchParams.set("channels", String(options.channels));
-    url.searchParams.set("interim_results", "true");
-    url.searchParams.set("smart_format", "true");
-    url.searchParams.set("punctuate", "true");
-    url.searchParams.set("endpointing", "300");
-    url.searchParams.set("utterance_end_ms", "1000");
-    url.searchParams.set("vad_events", "true");
+    url.searchParams.set("speech_model", "universal-streaming-english");
+    url.searchParams.set("format_turns", "true");
 
     return new Promise((resolve, reject) => {
-      const connectedAt = Date.now();
+      let openedAt = Date.now();
       const socket = new WebSocket(url, {
-        headers: { authorization: `Token ${this.apiKey}` },
+        headers: { Authorization: this.apiKey },
         perMessageDeflate: false,
         maxPayload: MAX_PROVIDER_MESSAGE_BYTES
       });
+      const connection = new AssemblyAiSttConnection(
+        socket,
+        options.sampleRateHz,
+        options.channels
+      );
       let settled = false;
-      let opened = false;
+      let ready = false;
       const timeout = setTimeout(() => {
         if (settled) {
           return;
@@ -215,14 +276,7 @@ export class DeepgramSttProvider implements SttProvider {
       }, CONNECT_TIMEOUT_MS);
 
       socket.on("open", () => {
-        if (settled) {
-          return;
-        }
-        settled = true;
-        opened = true;
-        clearTimeout(timeout);
-        observer.onStatus("READY");
-        resolve(new DeepgramSttConnection(socket));
+        openedAt = Date.now();
       });
 
       socket.on("message", (data, isBinary) => {
@@ -230,9 +284,9 @@ export class DeepgramSttProvider implements SttProvider {
           return;
         }
 
-        let result: DeepgramResult;
+        let result: AssemblyAiMessage;
         try {
-          result = JSON.parse(rawDataText(data)) as DeepgramResult;
+          result = JSON.parse(rawDataText(data)) as AssemblyAiMessage;
         } catch {
           observer.onError(
             "STT_INVALID_RESPONSE",
@@ -241,7 +295,32 @@ export class DeepgramSttProvider implements SttProvider {
           return;
         }
 
-        const transcript = parseTranscript(result, connectedAt);
+        if (result.type === "Begin" && !settled) {
+          settled = true;
+          ready = true;
+          clearTimeout(timeout);
+          observer.onStatus("READY");
+          resolve(connection);
+          return;
+        }
+
+        if (result.type === "Error") {
+          const providerMessage = typeof result.error === "string"
+            ? result.error
+            : typeof result.message === "string"
+              ? result.message
+              : "The STT provider reported an error.";
+          if (!settled) {
+            settled = true;
+            clearTimeout(timeout);
+            reject(new Error("STT provider rejected the session."));
+            return;
+          }
+          observer.onError("STT_PROVIDER_ERROR", providerMessage.slice(0, 500));
+          return;
+        }
+
+        const transcript = parseTranscript(result, openedAt);
         if (transcript) {
           observer.onTranscript(transcript);
         }
@@ -273,7 +352,7 @@ export class DeepgramSttProvider implements SttProvider {
 
       socket.on("close", () => {
         clearTimeout(timeout);
-        if (!opened) {
+        if (!ready) {
           if (!settled) {
             settled = true;
             reject(new Error("STT provider closed before becoming ready."));
@@ -288,6 +367,6 @@ export class DeepgramSttProvider implements SttProvider {
 
 export function createSttProvider(apiKey: string | null): SttProvider {
   return apiKey
-    ? new DeepgramSttProvider(apiKey)
+    ? new AssemblyAiSttProvider(apiKey)
     : new DisabledSttProvider();
 }

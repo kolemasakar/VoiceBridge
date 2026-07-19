@@ -2,7 +2,7 @@ import assert from "node:assert/strict";
 import { after, before, test } from "node:test";
 import type { Server } from "node:http";
 import type { AddressInfo } from "node:net";
-import WebSocket, { type RawData } from "ws";
+import WebSocket, { WebSocketServer, type RawData } from "ws";
 import type { AppConfig } from "../src/config.js";
 import { loadConfig } from "../src/config.js";
 import { createVoiceBridgeServer } from "../src/server.js";
@@ -12,13 +12,14 @@ import type {
   SttProvider,
   SttStreamOptions
 } from "../src/stt_provider.js";
+import { AssemblyAiSttProvider } from "../src/stt_provider.js";
 
 const TOKEN = "voicebridge-test-token-123456789";
 const config: AppConfig = {
   host: "127.0.0.1",
   port: 0,
   testAccessToken: TOKEN,
-  deepgramApiKey: null,
+  assemblyAiApiKey: null,
   corsAllowedOrigin: "*",
   maxRequestBodyBytes: 32768,
   rateLimitRequestsPerMinute: 1000
@@ -197,7 +198,7 @@ test("health endpoint is public and returns identifiers", async () => {
   assert.equal(response.headers.get("x-request-id"), "test-health");
   const body = await response.json();
   assert.equal(body.status, "ok");
-  assert.equal(body.version, "0.3.0");
+  assert.equal(body.version, "0.3.1");
   assert.deepEqual(body.capabilities.stt, {
     provider: "fake-stt",
     configured: true
@@ -213,9 +214,139 @@ test("configuration requires a sufficiently long token", () => {
   );
 });
 
-test("Deepgram credential is optional before live STT setup", () => {
+test("AssemblyAI credential is optional before live STT setup", () => {
   const loaded = loadConfig({ TEST_ACCESS_TOKEN: TOKEN });
-  assert.equal(loaded.deepgramApiKey, null);
+  assert.equal(loaded.assemblyAiApiKey, null);
+});
+
+test("AssemblyAI adapter aggregates audio and maps transcript turns", async () => {
+  const providerServer = new WebSocketServer({
+    host: "127.0.0.1",
+    port: 0
+  });
+  await new Promise<void>((resolve, reject) => {
+    providerServer.once("listening", resolve);
+    providerServer.once("error", reject);
+  });
+
+  const providerAddress = providerServer.address() as AddressInfo;
+  const binaryPackets: Buffer[] = [];
+  let authorization = "";
+  let requestPath = "";
+  let terminated = false;
+
+  providerServer.on("connection", (socket, request) => {
+    authorization = String(request.headers.authorization || "");
+    requestPath = request.url || "";
+    socket.send(JSON.stringify({
+      type: "Begin",
+      id: "assembly-test-session"
+    }));
+
+    socket.on("message", (data, isBinary) => {
+      if (isBinary) {
+        binaryPackets.push(Buffer.from(data as Buffer));
+        socket.send(JSON.stringify({
+          type: "Turn",
+          transcript: "Hello",
+          end_of_turn: false,
+          turn_is_formatted: false,
+          words: [{ start: 0, end: 80, confidence: 0.9 }]
+        }));
+        socket.send(JSON.stringify({
+          type: "Turn",
+          transcript: "hello world",
+          end_of_turn: true,
+          turn_is_formatted: false,
+          words: [
+            { start: 0, end: 80, confidence: 0.9 },
+            { start: 80, end: 100, confidence: 1 }
+          ]
+        }));
+        socket.send(JSON.stringify({
+          type: "Turn",
+          transcript: "Hello world.",
+          end_of_turn: true,
+          turn_is_formatted: true,
+          words: [
+            { start: 0, end: 80, confidence: 0.9 },
+            { start: 80, end: 100, confidence: 1 }
+          ]
+        }));
+        return;
+      }
+
+      const message = JSON.parse(data.toString()) as { type?: string };
+      if (message.type === "Terminate") {
+        terminated = true;
+        socket.send(JSON.stringify({
+          type: "Termination",
+          audio_duration_seconds: 0.1,
+          session_duration_seconds: 0.1
+        }));
+        socket.close(1000);
+      }
+    });
+  });
+
+  const statuses: string[] = [];
+  const transcripts: Array<{ text: string; isFinal: boolean }> = [];
+  let resolveFinal: (() => void) | null = null;
+  const finalReceived = new Promise<void>((resolve) => {
+    resolveFinal = resolve;
+  });
+  const provider = new AssemblyAiSttProvider(
+    "assembly-test-key",
+    `ws://127.0.0.1:${providerAddress.port}/v3/ws`
+  );
+  const connection = await provider.connect(
+    { sampleRateHz: 48000, channels: 1, language: "en-US" },
+    {
+      onStatus: (status) => statuses.push(status),
+      onTranscript: (transcript) => {
+        transcripts.push({
+          text: transcript.text,
+          isFinal: transcript.isFinal
+        });
+        if (transcript.isFinal) {
+          resolveFinal?.();
+        }
+      },
+      onError: (_code, message) => assert.fail(message)
+    }
+  );
+
+  for (let frame = 0; frame < 5; frame += 1) {
+    assert.equal(connection.sendAudio(Buffer.alloc(1920)), true);
+  }
+  await Promise.race([
+    finalReceived,
+    new Promise<void>((_resolve, reject) => {
+      setTimeout(() => reject(new Error("Timed out waiting for final turn.")), 3000);
+    })
+  ]);
+  await connection.close();
+  await new Promise<void>((resolve, reject) => {
+    providerServer.close((error) => error ? reject(error) : resolve());
+  });
+
+  const requestUrl = new URL(requestPath, "http://provider.local");
+  assert.equal(authorization, "assembly-test-key");
+  assert.equal(requestUrl.searchParams.get("sample_rate"), "48000");
+  assert.equal(
+    requestUrl.searchParams.get("speech_model"),
+    "universal-streaming-english"
+  );
+  assert.equal(requestUrl.searchParams.get("format_turns"), "true");
+  assert.equal(binaryPackets.length, 1);
+  assert.equal(binaryPackets[0]?.byteLength, 9600);
+  assert.deepEqual(transcripts, [
+    { text: "Hello", isFinal: false },
+    { text: "hello world", isFinal: false },
+    { text: "Hello world.", isFinal: true }
+  ]);
+  assert.equal(terminated, true);
+  assert.deepEqual(statuses, ["READY", "CLOSED"]);
 });
 
 test("protected endpoint rejects a missing token", async () => {

@@ -4,7 +4,7 @@ Purpose:
 Provide the Phase 1 cloud API, bounded streaming transport, and streaming STT integration.
 
 Version:
-0.3.0
+0.3.1
 
 Status:
 Implementation
@@ -22,7 +22,7 @@ Implementation
 - acknowledgement and flow-control events;
 - per-stream counters without audio persistence;
 - provider-neutral cloud-side STT boundary;
-- Deepgram Nova-3 streaming STT;
+- AssemblyAI Universal-Streaming English STT;
 - ordered partial and final English transcript events;
 - recognition-latency measurements;
 - canonical error envelopes;
@@ -53,10 +53,12 @@ TEST_ACCESS_TOKEN
 Required for live STT:
 
 ```text
-DEEPGRAM_API_KEY
+ASSEMBLYAI_API_KEY
 ```
 
-Without `DEEPGRAM_API_KEY`, the service remains healthy and reports STT as `NOT_CONFIGURED`.
+Without `ASSEMBLYAI_API_KEY`, the service remains healthy and reports STT as `NOT_CONFIGURED`.
+
+The Phase 1 account uses the AssemblyAI free tier without a payment method. If free credit is exhausted, STT stops instead of switching to paid usage.
 
 Optional:
 
@@ -148,7 +150,7 @@ Sec-WebSocket-Protocol: voicebridge.v1, voicebridge.ticket.TICKET
 
 After `STREAM_READY`, send a JSON `STREAM_START` event describing mono `pcm_s16le` audio. Binary frames are limited to 32768 bytes. The server sends `AUDIO_ACK` every 10 frames. The client MUST keep no more than 50 frames unacknowledged and MUST bound its WebSocket output buffer.
 
-When Deepgram is configured, the stream also emits:
+When AssemblyAI is configured, the stream also emits:
 
 ```text
 STT_STATUS
@@ -165,7 +167,7 @@ Transcript events include provider name, English text, final-state flags, confid
 docker build -t voicebridge-cloud .
 docker run --rm -p 8080:8080 \
   -e TEST_ACCESS_TOKEN=replace-with-a-long-random-token \
-  -e DEEPGRAM_API_KEY=replace-with-a-deepgram-api-key \
+  -e ASSEMBLYAI_API_KEY=replace-with-an-assemblyai-api-key \
   voicebridge-cloud
 ```
 
@@ -174,7 +176,7 @@ docker run --rm -p 8080:8080 \
 - single process;
 - in-memory sessions;
 - no persistence;
-- Deepgram is the only implemented STT provider;
+- AssemblyAI is the only implemented STT provider;
 - no STT reconnect or audio replay;
 - transcript display is bounded to recent text in browser session storage;
 - no translation;
