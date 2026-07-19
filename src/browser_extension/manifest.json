@@ -11,7 +11,7 @@
     "tabCapture"
   ],
   "host_permissions": [
-    "https://voicebridge-cloud.onrender.com/*",
+    "https://voicebridge-cloud-us.onrender.com/*",
     "http://127.0.0.1/*",
     "http://localhost/*"
   ],

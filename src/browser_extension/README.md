@@ -1,7 +1,7 @@
 # VoiceBridge Browser Capture Feasibility
 
 Purpose:
-Validate the authenticated VoiceBridge Cloud session lifecycle and bounded WebSocket PCM streaming together with YouTube tab-audio capture, browser playback control, audio metadata, and clean shutdown.
+Validate the authenticated VoiceBridge Cloud session lifecycle and bounded WebSocket PCM streaming together with YouTube tab-audio capture, browser playback control, audio metadata, live English STT, and clean shutdown.
 
 Version:
 0.4.1
@@ -29,7 +29,7 @@ Version:
 1. Open a YouTube video.
 2. Start video playback.
 3. Open the VoiceBridge extension.
-4. Confirm the API URL is `https://voicebridge-cloud.onrender.com`.
+4. Confirm the API URL is `https://voicebridge-cloud-us.onrender.com`.
 5. Paste the shared test access token from Render.
 6. Select `Save and test`.
 7. Confirm cloud status changes to `READY`.
@@ -46,9 +46,9 @@ Version:
 18. Confirm the effective-level indicator changes to `DUCKING 15%`.
 19. Confirm the original audio lowers smoothly and returns.
 20. Confirm sample rate, channel count, RMS, peak, and elapsed time update.
-21. Keep capture active for at least ten minutes.
+21. Keep capture active for at least ten minutes for the Milestone 4 exit test.
 22. Select `Stop`.
-23. Confirm capture returns to `IDLE`, cloud state becomes `COMPLETED`, and stream state becomes `COMPLETED`.
+23. Confirm capture returns to `IDLE`, cloud state becomes `COMPLETED`, stream state becomes `COMPLETED`, and STT becomes `CLOSED`.
 
 ## Expected Result
 
@@ -67,6 +67,27 @@ Version:
 - Capture runs for at least ten minutes without interruption.
 - Stop releases the media stream and audio context.
 
+## Live Validation Status
+
+First AssemblyAI browser smoke test on 2026-07-19:
+
+- extension version `0.4.1` confirmed by the user;
+- Virginia cloud endpoint returned `READY`;
+- stream and STT reached `ACTIVE`;
+- provider displayed `assemblyai`;
+- partial and final English text appeared;
+- at least two final segments were recorded;
+- observed recognition latency was 618 milliseconds;
+- 3661 frames and 7029120 bytes were sent;
+- dropped frames remained zero;
+- Stop returned capture to `IDLE`, cloud and stream to `COMPLETED`, and STT to `CLOSED`.
+
+Result:
+
+LIVE SMOKE VALIDATION PASSED.
+
+The ten-minute Milestone 4 endurance exit test remains pending.
+
 ## Limitations
 
 - No translation.
@@ -77,7 +98,7 @@ Version:
 
 ## Version History
 
-- 0.4.1: Replaced the initial STT provider preference with AssemblyAI Free.
+- 0.4.1: Replaced the initial STT provider preference with AssemblyAI Free and passed the first live browser smoke validation.
 - 0.4.0: Added cloud STT status, bounded partial and final English transcript display, and recognition-latency metrics.
 - 0.3.0: Added one-time stream tickets, WebSocket PCM upload, acknowledgements, flow limits, and visible stream metrics.
 - 0.2.0: Added authenticated Cloud API settings, connection test, and session lifecycle.

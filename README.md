@@ -30,12 +30,18 @@ Completed:
 - simplified test authentication model;
 - Milestone 1 browser capture feasibility validation;
 - Milestone 2 cloud skeleton deployment on Render;
-- Milestone 3 bounded browser-to-cloud audio streaming validation.
+- Milestone 3 bounded browser-to-cloud audio streaming validation;
+- Milestone 4 AssemblyAI implementation and first live browser smoke validation.
 
 Active:
 
-- Milestone 4 AssemblyAI Free streaming STT implementation is complete;
-- Render credential configuration and live browser transcript validation are pending.
+- Milestone 4 ten-minute AssemblyAI endurance validation;
+- transcript quality and free-credit evidence recording;
+- test-token rotation after successful validation.
+
+Active Phase 1 cloud endpoint:
+
+`https://voicebridge-cloud-us.onrender.com`
 
 ## Test Authentication
 
@@ -60,6 +66,7 @@ A production identity model must replace the shared test token before public mul
 - [Security Model](docs/security/12_SECURITY_MODEL.md)
 - [API Design](docs/api/13_API_DESIGN.md)
 - [Phase 1 Cloud YouTube MVP Plan](docs/phases/PHASE_1_CLOUD_YOUTUBE_MVP.md)
+- [Milestone 4 STT Validation](docs/phases/PHASE_1_MILESTONE_4_STT_INTEGRATION_VALIDATION.md)
 - [Development Standard](docs/governance/06_DEVELOPMENT_STANDARD.md)
 - [Repository Rules](docs/governance/15_REPOSITORY_RULES.md)
 - [AI Development Rules](docs/governance/16_AI_DEVELOPMENT_RULES.md)
