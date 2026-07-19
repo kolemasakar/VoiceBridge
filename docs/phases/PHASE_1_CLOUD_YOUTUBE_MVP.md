@@ -558,6 +558,39 @@ Validation record:
 
 `docs/phases/PHASE_1_MILESTONE_3_STREAMING_TRANSPORT_VALIDATION.md`
 
+Milestone 4 status:
+Implementation complete; Render configuration and live browser validation pending.
+
+Milestone 4 implementation:
+
+- Deepgram Nova-3 selected behind a provider-neutral cloud interface;
+- cloud service 0.3.0 forwards ordered PCM frames to the STT provider;
+- provider credentials remain in `DEEPGRAM_API_KEY` cloud configuration;
+- partial and final English transcript events;
+- confidence, audio timing, recognition latency, status, and error events;
+- bounded provider output buffering;
+- graceful provider stream close;
+- browser extension 0.4.0 transcript, status, count, latency, and error display;
+- bounded browser session transcript state;
+- 11 automated cloud tests.
+
+Pending Milestone 4 exit validation:
+
+- configure `DEEPGRAM_API_KEY` in Render;
+- deploy and verify cloud service 0.3.0;
+- load browser extension 0.4.0;
+- validate partial and final English text for at least ten minutes;
+- record transcript quality, latency, failures, and cost evidence;
+- confirm clean Stop and zero secret exposure.
+
+Decision:
+
+`docs/adr/ADR-005_PHASE_1_STREAMING_STT_PROVIDER.md`
+
+Validation record:
+
+`docs/phases/PHASE_1_MILESTONE_4_STT_INTEGRATION_VALIDATION.md`
+
 ### Milestone 1 - Browser Capture Feasibility
 
 Deliver:
@@ -843,6 +876,7 @@ Technical references:
 
 | Version | Date | Description |
 |---------|------|-------------|
+| 1.8.0 | 2026-07-19 | Added Milestone 4 Deepgram STT implementation and pending live validation |
 | 1.7.0 | 2026-07-19 | Completed ten-minute Milestone 3 streaming validation and activated Milestone 4 |
 | 1.6.0 | 2026-07-18 | Added Milestone 3 WebSocket transport implementation and pending live validation |
 | 1.5.0 | 2026-07-18 | Completed Milestone 2 deployment and extension lifecycle validation; activated Milestone 3 |

@@ -12,9 +12,13 @@ import {
 } from "./session_store.js";
 import { StreamTicketStore } from "./stream_ticket_store.js";
 import { attachStreamTransport } from "./stream_transport.js";
+import {
+  createSttProvider,
+  type SttProvider
+} from "./stt_provider.js";
 
 const SERVICE_NAME = "voicebridge-cloud";
-const SERVICE_VERSION = "0.2.0";
+const SERVICE_VERSION = "0.3.0";
 const SESSION_PATH = /^\/api\/v1\/sessions\/([A-Za-z0-9-]+)$/;
 const COMMAND_PATH =
   /^\/api\/v1\/sessions\/([A-Za-z0-9-]+)\/(start|pause|resume|stop)$/;
@@ -189,7 +193,8 @@ function clientKey(request: IncomingMessage): string {
 
 export function createVoiceBridgeServer(
   config: AppConfig,
-  sessionStore = new SessionStore()
+  sessionStore = new SessionStore(),
+  sttProvider: SttProvider = createSttProvider(config.deepgramApiKey)
 ) {
   const rateLimiter = new FixedWindowRateLimiter(
     config.rateLimitRequestsPerMinute
@@ -231,6 +236,12 @@ export function createVoiceBridgeServer(
           status: "ok",
           service: SERVICE_NAME,
           version: SERVICE_VERSION,
+          capabilities: {
+            stt: {
+              provider: sttProvider.name,
+              configured: sttProvider.configured
+            }
+          },
           request_id: context.requestId,
           correlation_id: context.correlationId,
           timestamp: new Date().toISOString()
@@ -458,7 +469,8 @@ export function createVoiceBridgeServer(
     server,
     sessionStore,
     streamTickets,
-    config.corsAllowedOrigin
+    config.corsAllowedOrigin,
+    sttProvider
   );
   return server;
 }

@@ -6,12 +6,19 @@ import WebSocket, { type RawData } from "ws";
 import type { AppConfig } from "../src/config.js";
 import { loadConfig } from "../src/config.js";
 import { createVoiceBridgeServer } from "../src/server.js";
+import type {
+  SttConnection,
+  SttObserver,
+  SttProvider,
+  SttStreamOptions
+} from "../src/stt_provider.js";
 
 const TOKEN = "voicebridge-test-token-123456789";
 const config: AppConfig = {
   host: "127.0.0.1",
   port: 0,
   testAccessToken: TOKEN,
+  deepgramApiKey: null,
   corsAllowedOrigin: "*",
   maxRequestBodyBytes: 32768,
   rateLimitRequestsPerMinute: 1000
@@ -20,8 +27,62 @@ const config: AppConfig = {
 let server: Server;
 let baseUrl: string;
 
+class FakeSttConnection implements SttConnection {
+  private frames = 0;
+
+  constructor(private readonly observer: SttObserver) {}
+
+  sendAudio(_frame: Buffer): boolean {
+    this.frames += 1;
+    if (this.frames === 1) {
+      this.observer.onTranscript({
+        text: "Hello",
+        isFinal: false,
+        speechFinal: false,
+        confidence: 0.91,
+        audioStartMs: 0,
+        audioDurationMs: 20,
+        recognitionLatencyMs: 80
+      });
+    }
+    if (this.frames === 10) {
+      this.observer.onTranscript({
+        text: "Hello world.",
+        isFinal: true,
+        speechFinal: true,
+        confidence: 0.97,
+        audioStartMs: 0,
+        audioDurationMs: 200,
+        recognitionLatencyMs: 120
+      });
+    }
+    return true;
+  }
+
+  async close(): Promise<void> {
+    this.observer.onStatus("CLOSED");
+  }
+}
+
+class FakeSttProvider implements SttProvider {
+  readonly name = "fake-stt";
+  readonly configured = true;
+
+  async connect(
+    _options: SttStreamOptions,
+    observer: SttObserver
+  ): Promise<SttConnection> {
+    observer.onStatus("READY");
+    return new FakeSttConnection(observer);
+  }
+}
+
 before(async () => {
-  server = createVoiceBridgeServer(config);
+  server = createVoiceBridgeServer(
+    config,
+    undefined,
+    new FakeSttProvider()
+  );
   await new Promise<void>((resolve, reject) => {
     server.once("error", reject);
     server.listen(0, "127.0.0.1", () => resolve());
@@ -136,6 +197,11 @@ test("health endpoint is public and returns identifiers", async () => {
   assert.equal(response.headers.get("x-request-id"), "test-health");
   const body = await response.json();
   assert.equal(body.status, "ok");
+  assert.equal(body.version, "0.3.0");
+  assert.deepEqual(body.capabilities.stt, {
+    provider: "fake-stt",
+    configured: true
+  });
   assert.equal(body.request_id, "test-health");
   assert.equal(body.correlation_id, "test-correlation");
 });
@@ -145,6 +211,11 @@ test("configuration requires a sufficiently long token", () => {
     () => loadConfig({ TEST_ACCESS_TOKEN: "short" }),
     /at least 16 characters/
   );
+});
+
+test("Deepgram credential is optional before live STT setup", () => {
+  const loaded = loadConfig({ TEST_ACCESS_TOKEN: TOKEN });
+  assert.equal(loaded.deepgramApiKey, null);
 });
 
 test("protected endpoint rejects a missing token", async () => {
@@ -330,12 +401,22 @@ test("authenticated WebSocket stream accepts bounded binary audio", async () => 
   await startedPromise;
 
   const ackPromise = nextSocketEvent(socket, "AUDIO_ACK");
+  const partialPromise = nextSocketEvent(socket, "TRANSCRIPT_PARTIAL");
+  const finalPromise = nextSocketEvent(socket, "TRANSCRIPT_FINAL");
   for (let index = 0; index < 10; index += 1) {
     socket.send(Buffer.alloc(1920));
   }
   const ack = await ackPromise;
+  const partial = await partialPromise;
+  const final = await finalPromise;
   assert.equal(ack.data.frames_received, 10);
   assert.equal(ack.data.bytes_received, 19200);
+  assert.equal(partial.data.text, "Hello");
+  assert.equal(partial.data.is_final, false);
+  assert.equal(final.data.text, "Hello world.");
+  assert.equal(final.data.is_final, true);
+  assert.ok(partial.sequence < final.sequence);
+  assert.equal(final.data.recognition_latency_ms, 120);
 
   const completedPromise = nextSocketEvent(socket, "STREAM_COMPLETED");
   socket.send(JSON.stringify({
@@ -346,6 +427,9 @@ test("authenticated WebSocket stream accepts bounded binary audio", async () => 
   }));
   const completed = await completedPromise;
   assert.equal(completed.data.frames_received, 10);
+  assert.equal(completed.data.partial_transcripts, 1);
+  assert.equal(completed.data.final_transcripts, 1);
+  assert.equal(completed.data.average_recognition_latency_ms, 100);
   await socketClosed(socket);
 
   await new Promise<void>((resolve, reject) => {

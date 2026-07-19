@@ -1,10 +1,10 @@
 # VoiceBridge Cloud Skeleton
 
 Purpose:
-Provide the Phase 1 cloud API and bounded streaming transport baseline.
+Provide the Phase 1 cloud API, bounded streaming transport, and streaming STT integration.
 
 Version:
-0.2.0
+0.3.0
 
 Status:
 Implementation
@@ -21,6 +21,10 @@ Implementation
 - bounded binary PCM audio frames;
 - acknowledgement and flow-control events;
 - per-stream counters without audio persistence;
+- provider-neutral cloud-side STT boundary;
+- Deepgram Nova-3 streaming STT;
+- ordered partial and final English transcript events;
+- recognition-latency measurements;
 - canonical error envelopes;
 - request and correlation identifiers;
 - bounded JSON request bodies;
@@ -45,6 +49,14 @@ Required:
 ```text
 TEST_ACCESS_TOKEN
 ```
+
+Required for live STT:
+
+```text
+DEEPGRAM_API_KEY
+```
+
+Without `DEEPGRAM_API_KEY`, the service remains healthy and reports STT as `NOT_CONFIGURED`.
 
 Optional:
 
@@ -136,12 +148,24 @@ Sec-WebSocket-Protocol: voicebridge.v1, voicebridge.ticket.TICKET
 
 After `STREAM_READY`, send a JSON `STREAM_START` event describing mono `pcm_s16le` audio. Binary frames are limited to 32768 bytes. The server sends `AUDIO_ACK` every 10 frames. The client MUST keep no more than 50 frames unacknowledged and MUST bound its WebSocket output buffer.
 
+When Deepgram is configured, the stream also emits:
+
+```text
+STT_STATUS
+TRANSCRIPT_PARTIAL
+TRANSCRIPT_FINAL
+STT_ERROR
+```
+
+Transcript events include provider name, English text, final-state flags, confidence, audio timing, and measured recognition latency. Transcript text and audio are not persisted by the cloud service.
+
 ## Docker
 
 ```text
 docker build -t voicebridge-cloud .
 docker run --rm -p 8080:8080 \
   -e TEST_ACCESS_TOKEN=replace-with-a-long-random-token \
+  -e DEEPGRAM_API_KEY=replace-with-a-deepgram-api-key \
   voicebridge-cloud
 ```
 
@@ -150,9 +174,9 @@ docker run --rm -p 8080:8080 \
 - single process;
 - in-memory sessions;
 - no persistence;
-- streamed audio is counted and discarded after validation;
-- no audio decoding or provider forwarding;
-- no STT;
+- Deepgram is the only implemented STT provider;
+- no STT reconnect or audio replay;
+- transcript display is bounded to recent text in browser session storage;
 - no translation;
 - no TTS;
 - shared token is not a production identity model.

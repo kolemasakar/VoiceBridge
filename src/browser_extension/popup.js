@@ -12,6 +12,14 @@ const elements = {
   streamBytes: document.querySelector("#stream-bytes"),
   streamDropped: document.querySelector("#stream-dropped"),
   streamUnacked: document.querySelector("#stream-unacked"),
+  sttStatus: document.querySelector("#stt-status"),
+  sttProvider: document.querySelector("#stt-provider"),
+  sttLatency: document.querySelector("#stt-latency"),
+  sttError: document.querySelector("#stt-error"),
+  transcriptFinal: document.querySelector("#transcript-final"),
+  transcriptPartial: document.querySelector("#transcript-partial"),
+  transcriptEmpty: document.querySelector("#transcript-empty"),
+  transcriptCount: document.querySelector("#transcript-count"),
   start: document.querySelector("#start"),
   stop: document.querySelector("#stop"),
   testDucking: document.querySelector("#test-ducking"),
@@ -77,6 +85,26 @@ function renderState(state) {
   elements.streamBytes.textContent = state.stream_bytes_sent ?? 0;
   elements.streamDropped.textContent = state.stream_frames_dropped ?? 0;
   elements.streamUnacked.textContent = state.stream_unacknowledged ?? 0;
+  const sttStatus = state.stt_status || "OFFLINE";
+  const finalTranscript = state.transcript_final || "";
+  const partialTranscript = state.transcript_partial || "";
+  elements.sttStatus.textContent = sttStatus.replaceAll("_", " ");
+  elements.sttStatus.className = sttStatus.toLowerCase();
+  elements.sttProvider.textContent = state.stt_provider || "-";
+  elements.sttLatency.textContent =
+    state.recognition_latency_ms === null ||
+    state.recognition_latency_ms === undefined
+      ? "-"
+      : state.recognition_latency_ms + " ms";
+  elements.sttError.textContent = state.stt_error || "";
+  elements.transcriptFinal.textContent = finalTranscript;
+  elements.transcriptPartial.textContent = partialTranscript
+    ? (finalTranscript ? " " : "") + partialTranscript
+    : "";
+  elements.transcriptEmpty.hidden = Boolean(
+    finalTranscript || partialTranscript
+  );
+  elements.transcriptCount.textContent = state.transcript_final_count ?? 0;
 
   const effectivePercent = Math.round(
     (state.effective_original_volume ??

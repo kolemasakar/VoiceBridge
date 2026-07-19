@@ -2,6 +2,7 @@ export interface AppConfig {
   host: string;
   port: number;
   testAccessToken: string;
+  deepgramApiKey: string | null;
   corsAllowedOrigin: string;
   maxRequestBodyBytes: number;
   rateLimitRequestsPerMinute: number;
@@ -44,6 +45,7 @@ export function loadConfig(
     host: environment.HOST || "0.0.0.0",
     port: parseInteger(environment.PORT, 8080, "PORT", 1, 65535),
     testAccessToken,
+    deepgramApiKey: environment.DEEPGRAM_API_KEY || null,
     corsAllowedOrigin: environment.CORS_ALLOWED_ORIGIN || "*",
     maxRequestBodyBytes: parseInteger(
       environment.MAX_REQUEST_BODY_BYTES,

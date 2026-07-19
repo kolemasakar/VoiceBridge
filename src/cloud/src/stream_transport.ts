@@ -3,6 +3,11 @@ import { randomUUID } from "node:crypto";
 import type { Duplex } from "node:stream";
 import WebSocket, { WebSocketServer, type RawData } from "ws";
 import type { SessionStore } from "./session_store.js";
+import type {
+  SttConnection,
+  SttProvider,
+  SttTranscript
+} from "./stt_provider.js";
 import type { StreamTicketStore } from "./stream_ticket_store.js";
 
 const STREAM_PATH = /^\/api\/v1\/sessions\/([A-Za-z0-9-]+)\/stream$/;
@@ -24,10 +29,17 @@ interface ClientEvent {
 interface StreamContext {
   sessionId: string;
   started: boolean;
+  starting: boolean;
+  stopping: boolean;
   framesReceived: number;
   bytesReceived: number;
   sequence: number;
   connectedAt: number;
+  sttConnection: SttConnection | null;
+  partialTranscripts: number;
+  finalTranscripts: number;
+  latencyTotalMs: number;
+  latencyMaximumMs: number;
 }
 
 function rejectUpgrade(socket: Duplex, statusCode: number, message: string): void {
@@ -75,6 +87,16 @@ function rawDataText(data: RawData): string {
   return data.toString("utf8");
 }
 
+function rawDataBuffer(data: RawData): Buffer {
+  if (Array.isArray(data)) {
+    return Buffer.concat(data);
+  }
+  if (data instanceof ArrayBuffer) {
+    return Buffer.from(data);
+  }
+  return Buffer.from(data.buffer, data.byteOffset, data.byteLength);
+}
+
 function validStartPayload(payload: Record<string, unknown> | undefined): boolean {
   return Boolean(
     payload &&
@@ -90,10 +112,20 @@ function validStartPayload(payload: Record<string, unknown> | undefined): boolea
 }
 
 function summary(context: StreamContext): Record<string, unknown> {
+  const transcriptCount =
+    context.partialTranscripts + context.finalTranscripts;
   return {
     frames_received: context.framesReceived,
     bytes_received: context.bytesReceived,
-    duration_ms: Date.now() - context.connectedAt
+    duration_ms: Date.now() - context.connectedAt,
+    partial_transcripts: context.partialTranscripts,
+    final_transcripts: context.finalTranscripts,
+    average_recognition_latency_ms: transcriptCount > 0
+      ? Math.round(context.latencyTotalMs / transcriptCount)
+      : null,
+    maximum_recognition_latency_ms: transcriptCount > 0
+      ? context.latencyMaximumMs
+      : null
   };
 }
 
@@ -101,7 +133,8 @@ export function attachStreamTransport(
   server: HttpServer,
   sessions: SessionStore,
   tickets: StreamTicketStore,
-  allowedOrigin: string
+  allowedOrigin: string,
+  sttProvider: SttProvider
 ): void {
   const requestSessions = new WeakMap<IncomingMessage, string>();
   const activeSessions = new Map<string, WebSocket>();
@@ -171,10 +204,17 @@ export function attachStreamTransport(
     const context: StreamContext = {
       sessionId,
       started: false,
+      starting: false,
+      stopping: false,
       framesReceived: 0,
       bytesReceived: 0,
       sequence: 0,
-      connectedAt: Date.now()
+      connectedAt: Date.now(),
+      sttConnection: null,
+      partialTranscripts: 0,
+      finalTranscripts: 0,
+      latencyTotalMs: 0,
+      latencyMaximumMs: 0
     };
     const correlationId = randomUUID();
 
@@ -201,10 +241,39 @@ export function attachStreamTransport(
       protocol: BASE_PROTOCOL,
       max_binary_frame_bytes: MAX_BINARY_FRAME_BYTES,
       max_unacked_frames: MAX_UNACKED_FRAMES,
-      ack_every_frames: ACK_EVERY_FRAMES
+      ack_every_frames: ACK_EVERY_FRAMES,
+      stt_provider: sttProvider.name,
+      stt_configured: sttProvider.configured
     });
 
-    webSocket.on("message", (data, isBinary) => {
+    const handleTranscript = (transcript: SttTranscript): void => {
+      if (transcript.isFinal) {
+        context.finalTranscripts += 1;
+      } else {
+        context.partialTranscripts += 1;
+      }
+      context.latencyTotalMs += transcript.recognitionLatencyMs;
+      context.latencyMaximumMs = Math.max(
+        context.latencyMaximumMs,
+        transcript.recognitionLatencyMs
+      );
+
+      sendEvent(
+        transcript.isFinal ? "TRANSCRIPT_FINAL" : "TRANSCRIPT_PARTIAL",
+        {
+          provider: sttProvider.name,
+          text: transcript.text,
+          is_final: transcript.isFinal,
+          speech_final: transcript.speechFinal,
+          confidence: transcript.confidence,
+          audio_start_ms: transcript.audioStartMs,
+          audio_duration_ms: transcript.audioDurationMs,
+          recognition_latency_ms: transcript.recognitionLatencyMs
+        }
+      );
+    };
+
+    webSocket.on("message", async (data, isBinary) => {
       if (isBinary) {
         const frameBytes = rawDataLength(data);
         if (!context.started) {
@@ -218,6 +287,20 @@ export function attachStreamTransport(
 
         context.framesReceived += 1;
         context.bytesReceived += frameBytes;
+
+        const forwarded = context.sttConnection?.sendAudio(
+          rawDataBuffer(data)
+        ) ?? false;
+        if (!forwarded) {
+          sendEvent("STT_ERROR", {
+            provider: sttProvider.name,
+            code: "STT_PROVIDER_BACKPRESSURE",
+            message: "The STT provider cannot accept audio fast enough.",
+            retryable: true
+          });
+          webSocket.close(1013, "STT provider backpressure");
+          return;
+        }
 
         if (context.framesReceived % ACK_EVERY_FRAMES === 0) {
           sendEvent("AUDIO_ACK", {
@@ -250,19 +333,71 @@ export function attachStreamTransport(
       }
 
       if (event.event_type === "STREAM_START") {
-        if (context.started || !validStartPayload(event.data)) {
+        if (
+          context.started ||
+          context.starting ||
+          !validStartPayload(event.data)
+        ) {
           webSocket.close(1008, "Invalid stream.start event");
           return;
         }
-        context.started = true;
-        sendEvent("STREAM_STARTED", {
-          accepted_format: "pcm_s16le",
-          ...event.data
+
+        context.starting = true;
+        sendEvent("STT_STATUS", {
+          provider: sttProvider.name,
+          status: sttProvider.configured ? "CONNECTING" : "NOT_CONFIGURED"
         });
+
+        try {
+          context.sttConnection = await sttProvider.connect(
+            {
+              sampleRateHz: Number(event.data?.sample_rate_hz),
+              channels: 1,
+              language: "en-US"
+            },
+            {
+              onStatus: (status) => sendEvent("STT_STATUS", {
+                provider: sttProvider.name,
+                status
+              }),
+              onTranscript: handleTranscript,
+              onError: (code, message) => sendEvent("STT_ERROR", {
+                provider: sttProvider.name,
+                code,
+                message,
+                retryable: false
+              })
+            }
+          );
+          context.started = true;
+          context.starting = false;
+          sendEvent("STREAM_STARTED", {
+            accepted_format: "pcm_s16le",
+            stt_provider: sttProvider.name,
+            stt_configured: sttProvider.configured,
+            ...event.data
+          });
+        } catch (error) {
+          context.starting = false;
+          sendEvent("STT_ERROR", {
+            provider: sttProvider.name,
+            code: "STT_CONNECTION_FAILED",
+            message: error instanceof Error
+              ? error.message
+              : "Unable to connect to the STT provider.",
+            retryable: true
+          });
+          webSocket.close(1011, "STT connection failed");
+        }
         return;
       }
 
       if (event.event_type === "STREAM_STOP") {
+        if (context.stopping) {
+          return;
+        }
+        context.stopping = true;
+        await context.sttConnection?.close();
         sendEvent("STREAM_COMPLETED", summary(context));
         webSocket.close(1000, "Stream completed");
         return;
@@ -279,6 +414,10 @@ export function attachStreamTransport(
     webSocket.on("close", () => {
       if (activeSessions.get(sessionId) === webSocket) {
         activeSessions.delete(sessionId);
+      }
+      if (!context.stopping) {
+        context.stopping = true;
+        context.sttConnection?.close().catch(() => undefined);
       }
     });
   });

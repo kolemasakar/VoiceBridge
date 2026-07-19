@@ -280,16 +280,13 @@ PASSED.
 
 ## 13. Next Engineering Action
 
-Begin Milestone 4 - STT Integration.
+Configure and validate Milestone 4 - STT Integration.
 
-Required work:
+Required evidence:
 
-- select the Phase 1 streaming STT provider;
-- configure provider credentials cloud-side;
-- implement the provider adapter;
-- forward ordered PCM frames from the WebSocket transport;
-- return partial and final English transcripts;
-- expose transcript events in the browser extension;
+- `DEEPGRAM_API_KEY` is configured only in Render;
+- cloud service 0.3.0 reports configured Deepgram STT;
+- extension 0.4.0 displays ordered partial and final English text;
 - record latency, accuracy, failures, and provider cost evidence.
 
 ## 14. Milestone 3 Streaming Transport
@@ -337,7 +334,39 @@ Validation record:
 Status:
 PASSED.
 
-## 15. References
+## 15. Milestone 4 Streaming STT
+
+Decision:
+
+- Deepgram Nova-3 for Phase 1 monolingual English streaming STT;
+- provider binding remains behind the cloud-side `SttProvider` interface;
+- provider credentials remain in Render environment configuration;
+- browser clients continue to connect only to VoiceBridge Cloud.
+
+Implemented:
+
+- cloud service 0.3.0;
+- Deepgram streaming adapter for raw PCM S16LE;
+- ordered partial and final transcript events;
+- recognition-latency and error measurements;
+- bounded provider output buffering;
+- clean provider stream completion;
+- extension 0.4.0 English transcript display;
+- bounded browser session transcript state;
+- 11 automated tests.
+
+Decision record:
+
+`docs/adr/ADR-005_PHASE_1_STREAMING_STT_PROVIDER.md`
+
+Validation record:
+
+`docs/phases/PHASE_1_MILESTONE_4_STT_INTEGRATION_VALIDATION.md`
+
+Status:
+Implementation complete; Render configuration and live browser validation pending.
+
+## 16. References
 
 - [01_PROJECT_OVERVIEW](../overview/01_PROJECT_OVERVIEW.md)
 - [03_ROADMAP](../planning/03_ROADMAP.md)
@@ -349,11 +378,14 @@ PASSED.
 - [11_NON_FUNCTIONAL_REQUIREMENTS](../requirements/11_NON_FUNCTIONAL_REQUIREMENTS.md)
 - [12_SECURITY_MODEL](../security/12_SECURITY_MODEL.md)
 - [13_API_DESIGN](../api/13_API_DESIGN.md)
+- [ADR-005_PHASE_1_STREAMING_STT_PROVIDER](../adr/ADR-005_PHASE_1_STREAMING_STT_PROVIDER.md)
+- [PHASE_1_MILESTONE_4_STT_INTEGRATION_VALIDATION](../phases/PHASE_1_MILESTONE_4_STT_INTEGRATION_VALIDATION.md)
 
-## 16. Version History
+## 17. Version History
 
 | Version | Date | Description |
 |---------|------|-------------|
+| 1.11.0 | 2026-07-19 | Added Milestone 4 Deepgram STT implementation and pending live validation |
 | 1.10.0 | 2026-07-19 | Completed ten-minute Milestone 3 streaming validation and activated STT integration |
 | 1.9.0 | 2026-07-18 | Added Milestone 3 bounded WebSocket and browser PCM streaming implementation |
 | 1.8.0 | 2026-07-18 | Completed Render deployment and authenticated extension lifecycle validation |

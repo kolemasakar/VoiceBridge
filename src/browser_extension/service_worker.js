@@ -12,7 +12,7 @@ function sessionRequestBody() {
     input_type: "BROWSER_AUDIO",
     output_type: "BROWSER_PLAYBACK",
     provider_preferences: {
-      recognition: null,
+      recognition: "deepgram",
       translation: null,
       synthesis: null
     },

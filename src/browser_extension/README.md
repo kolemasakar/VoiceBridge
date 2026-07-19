@@ -4,7 +4,7 @@ Purpose:
 Validate the authenticated VoiceBridge Cloud session lifecycle and bounded WebSocket PCM streaming together with YouTube tab-audio capture, browser playback control, audio metadata, and clean shutdown.
 
 Version:
-0.3.0
+0.4.0
 
 ## Requirements
 
@@ -12,6 +12,7 @@ Version:
 - A supported YouTube video tab.
 - A deployed VoiceBridge Cloud API.
 - The shared test access token configured in the cloud environment.
+- A Deepgram API key configured only in the cloud environment.
 
 ## Install
 
@@ -36,15 +37,18 @@ Version:
 9. Confirm cloud status, capture status, and audio stream change to `ACTIVE`.
 10. Confirm `Frames sent` and `Bytes sent` increase.
 11. Confirm `Unacknowledged` remains bounded and `Dropped` remains zero under normal conditions.
-12. Confirm audio remains audible.
-13. Change `Original volume`.
-14. Select `Test ducking for 3 seconds`.
-15. Confirm the effective-level indicator changes to `DUCKING 15%`.
-16. Confirm the original audio lowers smoothly and returns.
-17. Confirm sample rate, channel count, RMS, peak, and elapsed time update.
-18. Keep capture active for at least ten minutes.
-19. Select `Stop`.
-20. Confirm capture returns to `IDLE`, cloud state becomes `COMPLETED`, and stream state becomes `COMPLETED`.
+12. Confirm STT status changes to `ACTIVE` when English speech is detected.
+13. Confirm partial English text appears and is replaced by final text.
+14. Confirm recognition latency and final-segment count update.
+15. Confirm audio remains audible.
+16. Change `Original volume`.
+17. Select `Test ducking for 3 seconds`.
+18. Confirm the effective-level indicator changes to `DUCKING 15%`.
+19. Confirm the original audio lowers smoothly and returns.
+20. Confirm sample rate, channel count, RMS, peak, and elapsed time update.
+21. Keep capture active for at least ten minutes.
+22. Select `Stop`.
+23. Confirm capture returns to `IDLE`, cloud state becomes `COMPLETED`, and stream state becomes `COMPLETED`.
 
 ## Expected Result
 
@@ -53,6 +57,8 @@ Version:
 - A one-time stream ticket opens the WebSocket without placing the shared token in the URL.
 - Captured tab audio is converted to mono PCM 16-bit little-endian frames.
 - Server acknowledgements keep the unacknowledged frame count bounded.
+- Partial and final English transcripts arrive from the cloud STT adapter.
+- Recent transcript text and recognition latency are visible.
 - Browser buffer and acknowledgement limits drop frames instead of allowing unbounded memory growth.
 - A capture startup failure closes the cloud session automatically.
 - Original tab audio is routed through the extension.
@@ -63,7 +69,6 @@ Version:
 
 ## Limitations
 
-- No STT.
 - No translation.
 - No Ukrainian speech synthesis.
 - The Ukrainian volume control is a placeholder until TTS integration.
@@ -72,6 +77,7 @@ Version:
 
 ## Version History
 
+- 0.4.0: Added cloud STT status, bounded partial and final English transcript display, and recognition-latency metrics.
 - 0.3.0: Added one-time stream tickets, WebSocket PCM upload, acknowledgements, flow limits, and visible stream metrics.
 - 0.2.0: Added authenticated Cloud API settings, connection test, and session lifecycle.
 - 0.1.2: Added effective original-volume and ducking-state indicators.
@@ -87,6 +93,7 @@ Version:
 - No remote code.
 - No user-content persistence.
 - No audio recording.
+- Recent transcripts use browser session storage only and are cleared with the browser session.
 
 ## References
 

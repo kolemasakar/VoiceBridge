@@ -64,6 +64,24 @@
         </dl>
       </section>
 
+      <section class="transcript-card">
+        <div class="section-title">
+          <h2>English transcript</h2>
+          <strong id="stt-status">OFFLINE</strong>
+        </div>
+        <dl class="transcript-meta">
+          <div><dt>Provider</dt><dd id="stt-provider">-</dd></div>
+          <div><dt>Final segments</dt><dd id="transcript-count">0</dd></div>
+          <div><dt>Recognition latency</dt><dd id="stt-latency">-</dd></div>
+        </dl>
+        <div id="transcript-text" class="transcript-text" aria-live="polite">
+          <span id="transcript-final"></span>
+          <em id="transcript-partial"></em>
+          <span id="transcript-empty">Waiting for speech...</span>
+        </div>
+        <p id="stt-error" role="alert"></p>
+      </section>
+
       <section class="controls">
         <button id="start" class="primary">Start capture</button>
         <button id="stop" disabled>Stop</button>

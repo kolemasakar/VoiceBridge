@@ -87,6 +87,26 @@ section {
   color: #b91c1c;
 }
 
+#stt-status {
+  color: #64748b;
+  font-size: 11px;
+}
+
+#stt-status.ready,
+#stt-status.active,
+#stt-status.closed {
+  color: #15803d;
+}
+
+#stt-status.connecting,
+#stt-status.not_configured {
+  color: #b45309;
+}
+
+#stt-status.error {
+  color: #b91c1c;
+}
+
 label.field {
   display: block;
 }
@@ -236,6 +256,46 @@ progress {
 .stream-metrics {
   border: 1px solid #cbd5e1;
   background: #ffffff;
+}
+
+.transcript-card {
+  padding: 12px;
+  border: 1px solid #cbd5e1;
+  border-radius: 10px;
+  background: #ffffff;
+}
+
+.transcript-meta {
+  margin-top: 8px;
+  font-size: 12px;
+}
+
+.transcript-text {
+  min-height: 64px;
+  max-height: 160px;
+  margin-top: 8px;
+  padding: 9px;
+  overflow-y: auto;
+  border-radius: 7px;
+  background: #f1f5f9;
+  font-size: 13px;
+  line-height: 1.45;
+  white-space: pre-wrap;
+}
+
+#transcript-partial {
+  color: #64748b;
+}
+
+#transcript-empty {
+  color: #94a3b8;
+}
+
+#stt-error {
+  min-height: 14px;
+  margin: 7px 0 0;
+  color: #b91c1c;
+  font-size: 11px;
 }
 
 dl {

@@ -27,11 +27,15 @@ Completed:
 - governance, requirements, system design, and security baselines;
 - Cloud First architecture decision;
 - Cloud First API design baseline;
-- simplified test authentication model.
+- simplified test authentication model;
+- Milestone 1 browser capture feasibility validation;
+- Milestone 2 cloud skeleton deployment on Render;
+- Milestone 3 bounded browser-to-cloud audio streaming validation.
 
-Next:
+Active:
 
-- implement Milestone 2 Cloud Skeleton.
+- Milestone 4 Deepgram streaming STT implementation is complete;
+- Render credential configuration and live browser transcript validation are pending.
 
 ## Test Authentication
 
@@ -49,6 +53,7 @@ A production identity model must replace the shared test token before public mul
 - [Architecture](docs/architecture/04_ARCHITECTURE.md)
 - [Technology Stack](docs/architecture/05_TECHNOLOGY_STACK.md)
 - [Cloud First ADR](docs/adr/ADR-001_CLOUD_FIRST_ARCHITECTURE.md)
+- [Streaming STT Provider ADR](docs/adr/ADR-005_PHASE_1_STREAMING_STT_PROVIDER.md)
 - [Functional Requirements](docs/requirements/09_FUNCTIONAL_REQUIREMENTS.md)
 - [System Design](docs/design/10_SYSTEM_DESIGN.md)
 - [Non-Functional Requirements](docs/requirements/11_NON_FUNCTIONAL_REQUIREMENTS.md)

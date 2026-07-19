@@ -32,8 +32,19 @@ function initialStreamState() {
     framesAcknowledged: 0,
     maxUnacknowledged: 50,
     pausedUntil: 0,
-    error: null
+    error: null,
+    sttStatus: "OFFLINE",
+    sttProvider: null,
+    sttError: null,
+    transcriptPartial: "",
+    transcriptFinalSegments: [],
+    transcriptFinalCount: 0,
+    recognitionLatencyMs: null
   };
+}
+
+function finalTranscriptText() {
+  return streamState.transcriptFinalSegments.join(" ").slice(-8000);
 }
 
 function streamSnapshot() {
@@ -45,7 +56,14 @@ function streamSnapshot() {
     stream_unacknowledged: Math.max(
       0,
       streamState.framesSent - streamState.framesAcknowledged
-    )
+    ),
+    stt_status: streamState.sttStatus,
+    stt_provider: streamState.sttProvider,
+    stt_error: streamState.sttError,
+    transcript_partial: streamState.transcriptPartial,
+    transcript_final: finalTranscriptText(),
+    transcript_final_count: streamState.transcriptFinalCount,
+    recognition_latency_ms: streamState.recognitionLatencyMs
   };
 }
 
@@ -100,7 +118,46 @@ function handleStreamEvent(event) {
   if (event.event_type === "STREAM_READY") {
     streamState.maxUnacknowledged =
       event.data?.max_unacked_frames || streamState.maxUnacknowledged;
+    streamState.sttProvider = event.data?.stt_provider || null;
+    streamState.sttStatus = event.data?.stt_configured
+      ? "READY"
+      : "NOT_CONFIGURED";
     return;
+  }
+
+  if (event.event_type === "STT_STATUS") {
+    streamState.sttProvider = event.data?.provider || streamState.sttProvider;
+    streamState.sttStatus = event.data?.status || "UNKNOWN";
+    streamState.sttError = null;
+  }
+
+  if (event.event_type === "STT_ERROR") {
+    streamState.sttProvider = event.data?.provider || streamState.sttProvider;
+    streamState.sttStatus = "ERROR";
+    streamState.sttError = event.data?.message || "STT failed.";
+  }
+
+  if (event.event_type === "TRANSCRIPT_PARTIAL") {
+    streamState.sttStatus = "ACTIVE";
+    streamState.transcriptPartial = String(
+      event.data?.text || ""
+    ).slice(-2000);
+    streamState.recognitionLatencyMs =
+      event.data?.recognition_latency_ms ?? streamState.recognitionLatencyMs;
+  }
+
+  if (event.event_type === "TRANSCRIPT_FINAL") {
+    const text = String(event.data?.text || "").trim().slice(-2000);
+    if (text) {
+      streamState.transcriptFinalSegments.push(text);
+      streamState.transcriptFinalSegments =
+        streamState.transcriptFinalSegments.slice(-20);
+      streamState.transcriptFinalCount += 1;
+    }
+    streamState.sttStatus = "ACTIVE";
+    streamState.transcriptPartial = "";
+    streamState.recognitionLatencyMs =
+      event.data?.recognition_latency_ms ?? streamState.recognitionLatencyMs;
   }
 
   if (event.event_type === "AUDIO_ACK") {
@@ -125,6 +182,22 @@ function handleStreamEvent(event) {
 
   if (event.event_type === "STREAM_COMPLETED") {
     streamState.status = "COMPLETED";
+    if (event.data?.average_recognition_latency_ms !== null) {
+      streamState.recognitionLatencyMs =
+        event.data?.average_recognition_latency_ms ??
+        streamState.recognitionLatencyMs;
+    }
+  }
+
+  if (
+    typeof event.event_type === "string" &&
+    (event.event_type.startsWith("STT_") ||
+      event.event_type.startsWith("TRANSCRIPT_"))
+  ) {
+    const track = mediaStream?.getAudioTracks()?.[0];
+    if (track) {
+      publishMetrics(track).catch(() => undefined);
+    }
   }
 }
 
@@ -173,6 +246,15 @@ function connectCloudStream(stream, sampleRate) {
       }
 
       handleStreamEvent(event);
+      if (event.event_type === "STT_ERROR" && !settled) {
+        settled = true;
+        clearTimeout(timeout);
+        streamState.status = "ERROR";
+        streamState.error = streamState.sttError;
+        socket.close();
+        reject(new Error(streamState.sttError));
+        return;
+      }
       if (event.event_type === "STREAM_STARTED" && !settled) {
         settled = true;
         clearTimeout(timeout);
@@ -287,7 +369,7 @@ async function closeCloudStream() {
       new Promise((resolve) => socket.addEventListener("close", resolve, {
         once: true
       })),
-      new Promise((resolve) => setTimeout(resolve, 750))
+      new Promise((resolve) => setTimeout(resolve, 3500))
     ]);
   }
 
