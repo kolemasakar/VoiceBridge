@@ -37,7 +37,7 @@ const elements = {
   error: document.querySelector("#error")
 };
 
-const DEFAULT_CLOUD_API_URL = "https://voicebridge-cloud.onrender.com";
+const DEFAULT_CLOUD_API_URL = "https://voicebridge-cloud-us.onrender.com";
 
 async function serviceWorkerMessage(type, data = undefined) {
   const response = await chrome.runtime.sendMessage({
@@ -45,25 +45,19 @@ async function serviceWorkerMessage(type, data = undefined) {
     type,
     data
   });
-
-  if (!response?.ok) {
-    throw new Error(response?.error || "The extension operation failed.");
-  }
-
+  if (!response?.ok) throw new Error(response?.error || "The extension operation failed.");
   return response;
 }
 
 function formatDuration(totalSeconds = 0) {
   const minutes = Math.floor(totalSeconds / 60);
   const seconds = totalSeconds % 60;
-  return String(minutes).padStart(2, "0") + ":" +
-    String(seconds).padStart(2, "0");
+  return String(minutes).padStart(2, "0") + ":" + String(seconds).padStart(2, "0");
 }
 
 function renderState(state) {
   const active = state.status === "ACTIVE";
   const error = state.status === "ERROR";
-
   elements.status.textContent = state.status || "IDLE";
   elements.statusDot.classList.toggle("active", active);
   elements.statusDot.classList.toggle("error", error);
@@ -71,9 +65,7 @@ function renderState(state) {
   elements.start.disabled = active;
   elements.stop.disabled = !active;
   elements.testDucking.disabled = !active;
-  elements.sampleRate.textContent = state.sample_rate_hz
-    ? state.sample_rate_hz + " Hz"
-    : "-";
+  elements.sampleRate.textContent = state.sample_rate_hz ? state.sample_rate_hz + " Hz" : "-";
   elements.channels.textContent = state.channels ?? "-";
   elements.rms.textContent = state.rms ?? "-";
   elements.peak.textContent = state.peak ?? "-";
@@ -91,29 +83,16 @@ function renderState(state) {
   elements.sttStatus.textContent = sttStatus.replaceAll("_", " ");
   elements.sttStatus.className = sttStatus.toLowerCase();
   elements.sttProvider.textContent = state.stt_provider || "-";
-  elements.sttLatency.textContent =
-    state.recognition_latency_ms === null ||
-    state.recognition_latency_ms === undefined
-      ? "-"
-      : state.recognition_latency_ms + " ms";
+  elements.sttLatency.textContent = state.recognition_latency_ms == null ? "-" : state.recognition_latency_ms + " ms";
   elements.sttError.textContent = state.stt_error || "";
   elements.transcriptFinal.textContent = finalTranscript;
-  elements.transcriptPartial.textContent = partialTranscript
-    ? (finalTranscript ? " " : "") + partialTranscript
-    : "";
-  elements.transcriptEmpty.hidden = Boolean(
-    finalTranscript || partialTranscript
-  );
+  elements.transcriptPartial.textContent = partialTranscript ? (finalTranscript ? " " : "") + partialTranscript : "";
+  elements.transcriptEmpty.hidden = Boolean(finalTranscript || partialTranscript);
   elements.transcriptCount.textContent = state.transcript_final_count ?? 0;
-
-  const effectivePercent = Math.round(
-    (state.effective_original_volume ??
-      Number(elements.originalVolume.value) / 100) * 100
-  );
+  const effectivePercent = Math.round((state.effective_original_volume ?? Number(elements.originalVolume.value) / 100) * 100);
   const ducking = Boolean(state.ducking_active);
   elements.effectiveVolume.value = effectivePercent;
-  elements.effectiveLabel.textContent =
-    (ducking ? "DUCKING " : "Background ") + effectivePercent + "%";
+  elements.effectiveLabel.textContent = (ducking ? "DUCKING " : "Background ") + effectivePercent + "%";
   elements.effectiveLevel.classList.toggle("ducking", ducking);
 }
 
@@ -121,152 +100,78 @@ function renderCloudState(state = {}) {
   const status = state.status || "NOT_CONFIGURED";
   elements.cloudStatus.textContent = status.replaceAll("_", " ");
   elements.cloudStatus.className = status.toLowerCase();
-
-  if (state.session_id) {
-    elements.cloudDetail.textContent =
-      "Session " + state.session_id.slice(0, 8) + "...";
-  } else if (state.message) {
-    elements.cloudDetail.textContent = state.message;
-  } else if (status === "READY") {
-    elements.cloudDetail.textContent = "Cloud API and token are valid.";
-  } else if (status === "NOT_CONFIGURED") {
-    elements.cloudDetail.textContent =
-      "Enter the test token generated in Render.";
-  }
+  if (state.session_id) elements.cloudDetail.textContent = "Session " + state.session_id.slice(0, 8) + "...";
+  else if (state.message) elements.cloudDetail.textContent = state.message;
+  else if (status === "READY") elements.cloudDetail.textContent = "Cloud API and token are valid.";
+  else if (status === "NOT_CONFIGURED") elements.cloudDetail.textContent = "Enter the test token generated in Render.";
 }
 
 function validateCloudForm() {
   const cloudApiUrl = elements.cloudApiUrl.value.trim().replace(/\/+$/, "");
   const cloudToken = elements.cloudToken.value.trim();
-
-  if (!cloudApiUrl) {
-    throw new Error("Cloud API URL is required.");
-  }
-
+  if (!cloudApiUrl) throw new Error("Cloud API URL is required.");
   let parsedUrl;
-  try {
-    parsedUrl = new URL(cloudApiUrl);
-  } catch {
-    throw new Error("Cloud API URL is not valid.");
-  }
-
-  const localHttp =
-    parsedUrl.protocol === "http:" &&
-    ["localhost", "127.0.0.1"].includes(parsedUrl.hostname);
-
-  if (parsedUrl.protocol !== "https:" && !localHttp) {
-    throw new Error("Cloud API URL must use HTTPS.");
-  }
-
-  if (cloudToken.length < 16) {
-    throw new Error("Test access token must contain at least 16 characters.");
-  }
-
+  try { parsedUrl = new URL(cloudApiUrl); } catch { throw new Error("Cloud API URL is not valid."); }
+  const localHttp = parsedUrl.protocol === "http:" && ["localhost", "127.0.0.1"].includes(parsedUrl.hostname);
+  if (parsedUrl.protocol !== "https:" && !localHttp) throw new Error("Cloud API URL must use HTTPS.");
+  if (cloudToken.length < 16) throw new Error("Test access token must contain at least 16 characters.");
   return { cloud_api_url: cloudApiUrl, test_access_token: cloudToken };
 }
 
 async function saveCloudSettings(testConnection) {
   const settings = validateCloudForm();
   await chrome.storage.local.set(settings);
-
-  if (!testConnection) {
-    return;
-  }
-
+  if (!testConnection) return;
   elements.saveCloud.disabled = true;
-  renderCloudState({
-    status: "CHECKING",
-    message: "Checking authenticated cloud access..."
-  });
-
+  renderCloudState({ status: "CHECKING", message: "Checking authenticated cloud access..." });
   try {
     const response = await serviceWorkerMessage("TEST_CLOUD_CONNECTION");
     renderCloudState(response.state);
-  } finally {
-    elements.saveCloud.disabled = false;
-  }
+  } finally { elements.saveCloud.disabled = false; }
 }
 
 async function loadCloudSettings() {
-  const settings = await chrome.storage.local.get([
-    "cloud_api_url",
-    "test_access_token"
-  ]);
-
-  elements.cloudApiUrl.value =
-    settings.cloud_api_url || DEFAULT_CLOUD_API_URL;
+  const settings = await chrome.storage.local.get(["cloud_api_url", "test_access_token"]);
+  elements.cloudApiUrl.value = settings.cloud_api_url || DEFAULT_CLOUD_API_URL;
   elements.cloudToken.value = settings.test_access_token || "";
-
   const response = await serviceWorkerMessage("GET_CLOUD_STATE");
   renderCloudState(response.state);
 }
 
-async function prepareOffscreen() {
-  await serviceWorkerMessage("PREPARE_OFFSCREEN");
-}
-
+async function prepareOffscreen() { await serviceWorkerMessage("PREPARE_OFFSCREEN"); }
 async function refreshState() {
-  const response = await chrome.runtime.sendMessage({
-    target: "service_worker",
-    type: "GET_STATE"
-  });
-
-  if (response?.ok) {
-    renderState(response.state);
-  }
+  const response = await chrome.runtime.sendMessage({ target: "service_worker", type: "GET_STATE" });
+  if (response?.ok) renderState(response.state);
 }
 
 async function startCapture() {
   elements.error.textContent = "";
   elements.start.disabled = true;
-
   try {
     await prepareOffscreen();
     await saveCloudSettings(false);
-
-    const [tab] = await chrome.tabs.query({
-      active: true,
-      currentWindow: true
-    });
-
-    if (!tab?.id || !tab.url?.startsWith("https://www.youtube.com/")) {
-      throw new Error("Open a YouTube tab before starting capture.");
-    }
-
+    const [tab] = await chrome.tabs.query({ active: true, currentWindow: true });
+    if (!tab?.id || !tab.url?.startsWith("https://www.youtube.com/")) throw new Error("Open a YouTube tab before starting capture.");
     const cloudResponse = await serviceWorkerMessage("START_CLOUD_SESSION");
     renderCloudState(cloudResponse.state);
     const streamResponse = await serviceWorkerMessage("GET_STREAM_TICKET");
-
     try {
-      const streamId = await chrome.tabCapture.getMediaStreamId({
-        targetTabId: tab.id
-      });
-
+      const streamId = await chrome.tabCapture.getMediaStreamId({ targetTabId: tab.id });
       const config = {
         original_pause_volume: Number(elements.originalVolume.value) / 100,
         original_duck_volume: 0.15,
         ukrainian_volume: Number(elements.ukrainianVolume.value) / 100
       };
-
       const response = await chrome.runtime.sendMessage({
         target: "offscreen",
         type: "START_CAPTURE",
-        data: {
-          stream_id: streamId,
-          tab_id: tab.id,
-          config,
-          stream: streamResponse.stream
-        }
+        data: { stream_id: streamId, tab_id: tab.id, config, stream: streamResponse.stream }
       });
-
-      if (!response?.ok) {
-        throw new Error(response?.error || "Unable to start capture.");
-      }
+      if (!response?.ok) throw new Error(response?.error || "Unable to start capture.");
     } catch (error) {
       await serviceWorkerMessage("STOP_CLOUD_SESSION").catch(() => undefined);
       throw error;
     }
-
     await refreshState();
   } catch (error) {
     elements.error.textContent = error.message;
@@ -277,26 +182,14 @@ async function startCapture() {
 async function stopCapture() {
   elements.error.textContent = "";
   const failures = [];
-
   try {
-    const response = await chrome.runtime.sendMessage({
-      target: "offscreen",
-      type: "STOP_CAPTURE"
-    });
-    if (!response?.ok) {
-      failures.push(response?.error || "Unable to stop capture.");
-    }
-  } catch (error) {
-    failures.push(error.message);
-  }
-
+    const response = await chrome.runtime.sendMessage({ target: "offscreen", type: "STOP_CAPTURE" });
+    if (!response?.ok) failures.push(response?.error || "Unable to stop capture.");
+  } catch (error) { failures.push(error.message); }
   try {
     const cloudResponse = await serviceWorkerMessage("STOP_CLOUD_SESSION");
     renderCloudState(cloudResponse.state);
-  } catch (error) {
-    failures.push(error.message);
-  }
-
+  } catch (error) { failures.push(error.message); }
   await refreshState();
   elements.error.textContent = failures.join(" ");
 }
@@ -306,34 +199,18 @@ async function sendVolumes() {
     original_pause_volume: Number(elements.originalVolume.value) / 100,
     ukrainian_volume: Number(elements.ukrainianVolume.value) / 100
   };
-
   elements.originalValue.textContent = elements.originalVolume.value + "%";
   elements.ukrainianValue.textContent = elements.ukrainianVolume.value + "%";
   elements.effectiveVolume.value = elements.originalVolume.value;
-  elements.effectiveLabel.textContent =
-    "Background " + elements.originalVolume.value + "%";
-
+  elements.effectiveLabel.textContent = "Background " + elements.originalVolume.value + "%";
   await chrome.storage.local.set(data);
-
-  await chrome.runtime.sendMessage({
-    target: "offscreen",
-    type: "SET_VOLUMES",
-    data
-  });
+  await chrome.runtime.sendMessage({ target: "offscreen", type: "SET_VOLUMES", data });
 }
 
 async function loadVolumes() {
-  const settings = await chrome.storage.local.get([
-    "original_pause_volume",
-    "ukrainian_volume"
-  ]);
-
-  elements.originalVolume.value = Math.round(
-    (settings.original_pause_volume ?? 0.5) * 100
-  );
-  elements.ukrainianVolume.value = Math.round(
-    (settings.ukrainian_volume ?? 1) * 100
-  );
+  const settings = await chrome.storage.local.get(["original_pause_volume", "ukrainian_volume"]);
+  elements.originalVolume.value = Math.round((settings.original_pause_volume ?? 0.5) * 100);
+  elements.ukrainianVolume.value = Math.round((settings.ukrainian_volume ?? 1) * 100);
   elements.originalValue.textContent = elements.originalVolume.value + "%";
   elements.ukrainianValue.textContent = elements.ukrainianVolume.value + "%";
 }
@@ -348,33 +225,16 @@ elements.saveCloud.addEventListener("click", () => {
   });
 });
 elements.testDucking.addEventListener("click", async () => {
-  const response = await chrome.runtime.sendMessage({
-    target: "offscreen",
-    type: "TEST_DUCKING"
-  });
-  if (!response?.ok) {
-    elements.error.textContent = response?.error || "Ducking test failed.";
-  }
+  const response = await chrome.runtime.sendMessage({ target: "offscreen", type: "TEST_DUCKING" });
+  if (!response?.ok) elements.error.textContent = response?.error || "Ducking test failed.";
 });
 elements.originalVolume.addEventListener("input", sendVolumes);
 elements.ukrainianVolume.addEventListener("input", sendVolumes);
-
 chrome.storage.onChanged.addListener((changes, areaName) => {
-  if (areaName === "session" && changes.capture_state) {
-    renderState(changes.capture_state.newValue);
-  }
-  if (areaName === "session" && changes.cloud_state) {
-    renderCloudState(changes.cloud_state.newValue);
-  }
+  if (areaName === "session" && changes.capture_state) renderState(changes.capture_state.newValue);
+  if (areaName === "session" && changes.cloud_state) renderCloudState(changes.cloud_state.newValue);
 });
-
-Promise.all([
-  prepareOffscreen(),
-  loadVolumes(),
-  loadCloudSettings(),
-  refreshState()
-])
-  .catch((error) => {
-    elements.error.textContent = error.message;
-    renderState({ status: "ERROR", error: error.message });
-  });
+Promise.all([prepareOffscreen(), loadVolumes(), loadCloudSettings(), refreshState()]).catch((error) => {
+  elements.error.textContent = error.message;
+  renderState({ status: "ERROR", error: error.message });
+});
