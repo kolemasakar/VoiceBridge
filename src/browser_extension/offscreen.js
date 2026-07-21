@@ -39,12 +39,22 @@ function initialStreamState() {
     transcriptPartial: "",
     transcriptFinalSegments: [],
     transcriptFinalCount: 0,
-    recognitionLatencyMs: null
+    recognitionLatencyMs: null,
+    translationStatus: "OFFLINE",
+    translationProvider: null,
+    translationError: null,
+    translationFinalSegments: [],
+    translationFinalCount: 0,
+    translationLatencyMs: null
   };
 }
 
 function finalTranscriptText() {
   return streamState.transcriptFinalSegments.join(" ").slice(-8000);
+}
+
+function finalTranslationText() {
+  return streamState.translationFinalSegments.join(" ").slice(-12000);
 }
 
 function streamSnapshot() {
@@ -63,7 +73,13 @@ function streamSnapshot() {
     transcript_partial: streamState.transcriptPartial,
     transcript_final: finalTranscriptText(),
     transcript_final_count: streamState.transcriptFinalCount,
-    recognition_latency_ms: streamState.recognitionLatencyMs
+    recognition_latency_ms: streamState.recognitionLatencyMs,
+    translation_status: streamState.translationStatus,
+    translation_provider: streamState.translationProvider,
+    translation_error: streamState.translationError,
+    translation_final: finalTranslationText(),
+    translation_final_count: streamState.translationFinalCount,
+    translation_latency_ms: streamState.translationLatencyMs
   };
 }
 
@@ -76,10 +92,7 @@ async function publishState(state) {
 }
 
 function smoothGain(value) {
-  if (!originalGainNode || !audioContext) {
-    return;
-  }
-
+  if (!originalGainNode || !audioContext) return;
   const safeValue = Math.max(0, Math.min(1, Number(value)));
   originalGainNode.gain.cancelScheduledValues(audioContext.currentTime);
   originalGainNode.gain.setTargetAtTime(
@@ -94,7 +107,6 @@ function stopMetrics() {
     clearInterval(metricsTimer);
     metricsTimer = null;
   }
-
   if (duckingTimer) {
     clearTimeout(duckingTimer);
     duckingTimer = null;
@@ -102,9 +114,7 @@ function stopMetrics() {
 }
 
 function sendStreamControl(type, payload = {}) {
-  if (!streamSocket || streamSocket.readyState !== WebSocket.OPEN) {
-    return;
-  }
+  if (!streamSocket || streamSocket.readyState !== WebSocket.OPEN) return;
   streamSocket.send(JSON.stringify({
     event_type: type,
     session_id: streamState.sessionId,
@@ -114,12 +124,22 @@ function sendStreamControl(type, payload = {}) {
   }));
 }
 
+function requestMetricsPublish() {
+  const track = mediaStream?.getAudioTracks()?.[0];
+  if (track) publishMetrics(track).catch(() => undefined);
+}
+
 function handleStreamEvent(event) {
   if (event.event_type === "STREAM_READY") {
     streamState.maxUnacknowledged =
       event.data?.max_unacked_frames || streamState.maxUnacknowledged;
     streamState.sttProvider = event.data?.stt_provider || null;
     streamState.sttStatus = event.data?.stt_configured
+      ? "READY"
+      : "NOT_CONFIGURED";
+    streamState.translationProvider =
+      event.data?.translation_provider || null;
+    streamState.translationStatus = event.data?.translation_configured
       ? "READY"
       : "NOT_CONFIGURED";
     return;
@@ -160,6 +180,39 @@ function handleStreamEvent(event) {
       event.data?.recognition_latency_ms ?? streamState.recognitionLatencyMs;
   }
 
+  if (event.event_type === "TRANSLATION_STATUS") {
+    streamState.translationProvider =
+      event.data?.provider || streamState.translationProvider;
+    streamState.translationStatus = event.data?.status || "UNKNOWN";
+    if (streamState.translationStatus !== "ERROR") {
+      streamState.translationError = null;
+    }
+  }
+
+  if (event.event_type === "TRANSLATION_ERROR") {
+    streamState.translationProvider =
+      event.data?.provider || streamState.translationProvider;
+    streamState.translationStatus = "ERROR";
+    streamState.translationError =
+      event.data?.message || "Translation failed.";
+  }
+
+  if (event.event_type === "TRANSLATION_FINAL") {
+    const text = String(event.data?.translated_text || "")
+      .trim()
+      .slice(-4000);
+    if (text) {
+      streamState.translationFinalSegments.push(text);
+      streamState.translationFinalSegments =
+        streamState.translationFinalSegments.slice(-20);
+      streamState.translationFinalCount += 1;
+    }
+    streamState.translationStatus = "ACTIVE";
+    streamState.translationError = null;
+    streamState.translationLatencyMs =
+      event.data?.translation_latency_ms ?? streamState.translationLatencyMs;
+  }
+
   if (event.event_type === "AUDIO_ACK") {
     streamState.framesAcknowledged = Math.max(
       streamState.framesAcknowledged,
@@ -173,9 +226,7 @@ function handleStreamEvent(event) {
     streamState.pausedUntil = Date.now() + Math.max(10, retryAfter);
     streamState.status = "PAUSED";
     setTimeout(() => {
-      if (streamState.status === "PAUSED") {
-        streamState.status = "ACTIVE";
-      }
+      if (streamState.status === "PAUSED") streamState.status = "ACTIVE";
     }, Math.max(10, retryAfter));
     return;
   }
@@ -187,17 +238,20 @@ function handleStreamEvent(event) {
         event.data?.average_recognition_latency_ms ??
         streamState.recognitionLatencyMs;
     }
+    if (event.data?.average_translation_latency_ms !== null) {
+      streamState.translationLatencyMs =
+        event.data?.average_translation_latency_ms ??
+        streamState.translationLatencyMs;
+    }
   }
 
   if (
     typeof event.event_type === "string" &&
     (event.event_type.startsWith("STT_") ||
-      event.event_type.startsWith("TRANSCRIPT_"))
+      event.event_type.startsWith("TRANSCRIPT_") ||
+      event.event_type.startsWith("TRANSLATION_"))
   ) {
-    const track = mediaStream?.getAudioTracks()?.[0];
-    if (track) {
-      publishMetrics(track).catch(() => undefined);
-    }
+    requestMetricsPublish();
   }
 }
 
@@ -234,10 +288,7 @@ function connectCloudStream(stream, sampleRate) {
     });
 
     socket.addEventListener("message", (message) => {
-      if (typeof message.data !== "string") {
-        return;
-      }
-
+      if (typeof message.data !== "string") return;
       let event;
       try {
         event = JSON.parse(message.data);
@@ -283,18 +334,11 @@ function connectCloudStream(stream, sampleRate) {
         reject(new Error(streamState.error));
         return;
       }
-
       if (streamCloseExpected || event.code === 1000) {
-        if (streamState.status !== "ERROR") {
-          streamState.status = "COMPLETED";
-        }
+        if (streamState.status !== "ERROR") streamState.status = "COMPLETED";
         return;
       }
-
-      if (streamState.status === "ERROR" && !startedAt) {
-        return;
-      }
-
+      if (streamState.status === "ERROR" && !startedAt) return;
       streamState.status = "ERROR";
       streamState.error = "Audio stream disconnected: " + event.code + ".";
       if (mediaStream) {
@@ -327,16 +371,13 @@ function sendPcmFrame(samples) {
     !streamSocket ||
     streamSocket.readyState !== WebSocket.OPEN ||
     !["ACTIVE", "PAUSED"].includes(streamState.status)
-  ) {
-    return;
-  }
+  ) return;
 
   const unacknowledged =
     streamState.framesSent - streamState.framesAcknowledged;
   const flowPaused = Date.now() < streamState.pausedUntil;
   const browserBuffered =
     streamSocket.bufferedAmount > MAX_CLIENT_BUFFERED_BYTES;
-
   if (
     flowPaused ||
     browserBuffered ||
@@ -345,10 +386,7 @@ function sendPcmFrame(samples) {
     streamState.framesDropped += 1;
     return;
   }
-
-  if (streamState.status === "PAUSED") {
-    streamState.status = "ACTIVE";
-  }
+  if (streamState.status === "PAUSED") streamState.status = "ACTIVE";
 
   const pcm = encodePcm16(samples);
   streamSocket.send(pcm);
@@ -358,9 +396,7 @@ function sendPcmFrame(samples) {
 
 async function closeCloudStream() {
   const socket = streamSocket;
-  if (!socket) {
-    return;
-  }
+  if (!socket) return;
 
   streamCloseExpected = true;
   if (socket.readyState === WebSocket.OPEN) {
@@ -369,32 +405,26 @@ async function closeCloudStream() {
       new Promise((resolve) => socket.addEventListener("close", resolve, {
         once: true
       })),
-      new Promise((resolve) => setTimeout(resolve, 3500))
+      new Promise((resolve) => setTimeout(resolve, 5000))
     ]);
   }
-
   if (
     socket.readyState === WebSocket.OPEN ||
     socket.readyState === WebSocket.CONNECTING
   ) {
     socket.close(1000, "Capture stopped");
   }
-
-  if (streamState.status !== "ERROR") {
-    streamState.status = "COMPLETED";
-  }
+  if (streamState.status !== "ERROR") streamState.status = "COMPLETED";
   streamSocket = null;
 }
 
 async function stopCapture(reason = "USER_STOP") {
   stopMetrics();
-
   if (audioProcessorNode) {
     audioProcessorNode.port.onmessage = null;
     audioProcessorNode.disconnect();
   }
   streamSinkGainNode?.disconnect();
-
   await closeCloudStream();
 
   if (mediaStream) {
@@ -403,11 +433,9 @@ async function stopCapture(reason = "USER_STOP") {
       track.stop();
     }
   }
-
   sourceNode?.disconnect();
   analyserNode?.disconnect();
   originalGainNode?.disconnect();
-
   if (audioContext && audioContext.state !== "closed") {
     await audioContext.close();
   }
@@ -431,22 +459,16 @@ async function stopCapture(reason = "USER_STOP") {
 }
 
 function calculateLevel() {
-  if (!analyserNode) {
-    return { rms: 0, peak: 0 };
-  }
-
+  if (!analyserNode) return { rms: 0, peak: 0 };
   const samples = new Float32Array(analyserNode.fftSize);
   analyserNode.getFloatTimeDomainData(samples);
-
   let sumSquares = 0;
   let peak = 0;
-
   for (const sample of samples) {
     const absolute = Math.abs(sample);
     sumSquares += sample * sample;
     peak = Math.max(peak, absolute);
   }
-
   return {
     rms: Math.sqrt(sumSquares / samples.length),
     peak
@@ -456,7 +478,6 @@ function calculateLevel() {
 async function publishMetrics(track) {
   const settings = track.getSettings();
   const level = calculateLevel();
-
   await publishState({
     status: "ACTIVE",
     started_at: startedAt,
@@ -477,14 +498,8 @@ async function publishMetrics(track) {
 }
 
 async function startCapture(streamId, config, streamConfig) {
-  if (mediaStream) {
-    await stopCapture("RESTART");
-  }
-
-  currentConfig = {
-    ...currentConfig,
-    ...config
-  };
+  if (mediaStream) await stopCapture("RESTART");
+  currentConfig = { ...currentConfig, ...config };
 
   try {
     mediaStream = await navigator.mediaDevices.getUserMedia({
@@ -496,7 +511,6 @@ async function startCapture(streamId, config, streamConfig) {
       },
       video: false
     });
-
     audioContext = new AudioContext();
     await audioContext.resume();
     await audioContext.audioWorklet.addModule(
@@ -519,9 +533,7 @@ async function startCapture(streamId, config, streamConfig) {
         processorOptions: { frameDurationMs: 20 }
       }
     );
-    audioProcessorNode.port.onmessage = (event) => {
-      sendPcmFrame(event.data);
-    };
+    audioProcessorNode.port.onmessage = (event) => sendPcmFrame(event.data);
     streamSinkGainNode = audioContext.createGain();
     streamSinkGainNode.gain.value = 0;
 
@@ -540,7 +552,6 @@ async function startCapture(streamId, config, streamConfig) {
     await connectCloudStream(streamConfig, audioContext.sampleRate);
     startedAt = new Date().toISOString();
     await publishMetrics(audioTrack);
-
     metricsTimer = setInterval(() => {
       publishMetrics(audioTrack).catch(() => undefined);
     }, 1000);
@@ -557,27 +568,16 @@ async function startCapture(streamId, config, streamConfig) {
 }
 
 async function updateVolumes(data) {
-  currentConfig = {
-    ...currentConfig,
-    ...data
-  };
-
+  currentConfig = { ...currentConfig, ...data };
   smoothGain(currentConfig.original_pause_volume);
 }
 
 async function testDucking() {
-  if (!originalGainNode) {
-    throw new Error("Capture is not active.");
-  }
-
-  if (duckingTimer) {
-    clearTimeout(duckingTimer);
-  }
-
+  if (!originalGainNode) throw new Error("Capture is not active.");
+  if (duckingTimer) clearTimeout(duckingTimer);
   duckingActive = true;
   smoothGain(currentConfig.original_duck_volume);
   await publishMetrics(mediaStream.getAudioTracks()[0]);
-
   duckingTimer = setTimeout(() => {
     duckingActive = false;
     smoothGain(currentConfig.original_pause_volume);
@@ -587,12 +587,8 @@ async function testDucking() {
 }
 
 chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
-  if (message.target !== "offscreen") {
-    return false;
-  }
-
+  if (message.target !== "offscreen") return false;
   let operation;
-
   if (message.type === "START_CAPTURE") {
     operation = startCapture(
       message.data.stream_id,
@@ -608,10 +604,8 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
   } else {
     return false;
   }
-
   operation
     .then(() => sendResponse({ ok: true }))
     .catch((error) => sendResponse({ ok: false, error: error.message }));
-
   return true;
 });
