@@ -18,7 +18,7 @@ Status:
 Approved
 
 Version:
-1.4.0
+1.5.0
 
 Last Updated:
 2026-07-21
@@ -128,7 +128,7 @@ Current milestone state:
 |2|Cloud Skeleton|Passed|
 |3|Streaming Transport|Passed|
 |4|Streaming STT Integration|Passed|
-|5|English-to-Ukrainian Translation Integration|Implementation complete; live validation pending|
+|5|English-to-Ukrainian Translation Integration|Live translation passed; final drain control test pending|
 |6|Ukrainian TTS and Browser Playback|Planned|
 |7|End-to-End Hardening and Demo Validation|Planned|
 
@@ -143,29 +143,30 @@ Milestone 4 validated:
 - zero dropped frames;
 - clean `IDLE`, `COMPLETED`, and `CLOSED` shutdown states.
 
-Milestone 5 implemented:
+Milestone 5 implemented and live-tested:
 
 - Gemini Developer API selected behind a provider-neutral cloud boundary;
-- cloud service `0.4.0`;
+- cloud service `0.4.2`;
 - browser extension `0.5.0`;
 - translation of final STT segments only;
 - final STT segment identity preserved through translation;
 - bounded sequential queue with a maximum of 20 pending operations;
 - context limited to four prior final segments and 3000 characters;
 - 15-second provider timeout;
+- ten-second graceful shutdown drain;
 - visible translation status, provider, count, latency, and sanitized errors;
 - translation failure isolated from audio streaming and STT;
 - safe `NOT_CONFIGURED` operation while `GEMINI_API_KEY` is absent;
+- readable ordered Ukrainian text validated with live Gemini;
+- zero dropped audio frames during controlled tests;
 - no cloud content persistence.
 
 Milestone 5 remaining validation:
 
-- complete automated cloud and browser checks;
-- deploy cloud service `0.4.0`;
-- load and confirm extension `0.5.0`;
-- configure `GEMINI_API_KEY` only when the controlled live test begins;
-- validate readable ordered Ukrainian text;
-- validate clean shutdown and zero secret exposure.
+- deploy cloud service `0.4.2`;
+- run a one-to-two-minute controlled public YouTube test;
+- confirm equal final English and Ukrainian segment counts after Stop when the accepted queue completes within ten seconds;
+- confirm clean shutdown and zero secret exposure.
 
 ## 5. Phase 2 Universal Cloud Audio Translation
 
@@ -240,6 +241,7 @@ A phase is completed only when:
 
 | Version | Date | Description |
 |---------|------|-------------|
+|1.5.0|2026-07-21|Recorded live Gemini validation and cloud 0.4.2 ten-second graceful drain|
 |1.4.0|2026-07-21|Completed Milestone 5 implementation and retained the controlled live validation gate|
 |1.3.0|2026-07-21|Completed Milestone 4 live STT validation and activated Milestone 5 Translation Integration|
 |1.2.0|2026-07-18|Activated Phase 1 Cloud YouTube MVP planning and execution|

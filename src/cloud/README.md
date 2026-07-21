@@ -4,10 +4,10 @@ Purpose:
 Provide the Phase 1 cloud API, bounded audio streaming, AssemblyAI STT, and ordered English-to-Ukrainian translation.
 
 Version:
-0.4.1
+0.4.2
 
 Status:
-Implementation complete; live Gemini validation pending.
+Implementation complete; final controlled graceful-drain validation pending.
 
 ## Capabilities
 
@@ -27,7 +27,7 @@ Implementation complete; live Gemini validation pending.
 - provider-neutral cloud-side translation boundary;
 - Gemini English-to-Ukrainian translation adapter;
 - ordered bounded per-session translation queue;
-- graceful drain of already accepted translations for up to 3000 milliseconds on Stop;
+- graceful drain of already accepted translations for up to 10000 milliseconds on Stop;
 - cancellation after drain timeout or unexpected disconnect;
 - STT segment identity preserved in translation events;
 - bounded prior English context;
@@ -182,6 +182,8 @@ TRANSLATION_ERROR
 ```
 
 Only final English transcript segments are translated. `TRANSLATION_FINAL` preserves the original final STT `segment_id`. The queue accepts at most 20 pending operations and uses at most four previous final English segments, bounded to 3000 context characters.
+
+On `STREAM_STOP`, the service first closes STT, stops accepting new translation work, and allows already accepted translations up to 10000 milliseconds to complete in order. If the queue does not drain within the bound, remaining work is cancelled and the completion summary reports the timeout.
 
 Translation errors do not terminate audio streaming or STT. Audio, transcripts, provider prompts, provider responses, and translations are not persisted by VoiceBridge Cloud.
 

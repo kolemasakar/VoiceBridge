@@ -22,7 +22,7 @@ import {
 } from "./translation_provider.js";
 
 const SERVICE_NAME = "voicebridge-cloud";
-const SERVICE_VERSION = "0.4.1";
+const SERVICE_VERSION = "0.4.2";
 const SESSION_PATH = /^\/api\/v1\/sessions\/([A-Za-z0-9-]+)$/;
 const COMMAND_PATH =
   /^\/api\/v1\/sessions\/([A-Za-z0-9-]+)\/(start|pause|resume|stop)$/;
