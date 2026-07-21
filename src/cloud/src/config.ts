@@ -1,3 +1,5 @@
+export type TtsProviderName = "gemini" | "azure";
+
 export interface AppConfig {
   host: string;
   port: number;
@@ -5,8 +7,12 @@ export interface AppConfig {
   assemblyAiApiKey: string | null;
   geminiApiKey: string | null;
   geminiTranslationModel: string;
+  ttsProvider?: TtsProviderName;
   geminiTtsModel?: string;
   geminiTtsVoice?: string;
+  azureSpeechKey?: string | null;
+  azureSpeechRegion?: string;
+  azureTtsVoice?: string;
   corsAllowedOrigin: string;
   maxRequestBodyBytes: number;
   rateLimitRequestsPerMinute: number;
@@ -46,6 +52,14 @@ function parseIdentifier(
   return identifier;
 }
 
+function parseTtsProvider(value: string | undefined): TtsProviderName {
+  const provider = (value || "gemini").trim().toLowerCase();
+  if (provider !== "gemini" && provider !== "azure") {
+    throw new Error("TTS_PROVIDER must be either gemini or azure.");
+  }
+  return provider;
+}
+
 export function loadConfig(
   environment: NodeJS.ProcessEnv = process.env
 ): AppConfig {
@@ -67,6 +81,7 @@ export function loadConfig(
       "gemini-3.1-flash-lite",
       "GEMINI_TRANSLATION_MODEL"
     ),
+    ttsProvider: parseTtsProvider(environment.TTS_PROVIDER),
     geminiTtsModel: parseIdentifier(
       environment.GEMINI_TTS_MODEL,
       "gemini-2.5-flash-preview-tts",
@@ -76,6 +91,17 @@ export function loadConfig(
       environment.GEMINI_TTS_VOICE,
       "Iapetus",
       "GEMINI_TTS_VOICE"
+    ),
+    azureSpeechKey: environment.AZURE_SPEECH_KEY || null,
+    azureSpeechRegion: parseIdentifier(
+      environment.AZURE_SPEECH_REGION,
+      "eastus",
+      "AZURE_SPEECH_REGION"
+    ).toLowerCase(),
+    azureTtsVoice: parseIdentifier(
+      environment.AZURE_TTS_VOICE,
+      "uk-UA-OstapNeural",
+      "AZURE_TTS_VOICE"
     ),
     corsAllowedOrigin: environment.CORS_ALLOWED_ORIGIN || "*",
     maxRequestBodyBytes: parseInteger(
