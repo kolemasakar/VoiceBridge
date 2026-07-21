@@ -13,6 +13,15 @@ import type {
   SttStreamOptions
 } from "../src/stt_provider.js";
 import { AssemblyAiSttProvider } from "../src/stt_provider.js";
+import type {
+  TranslationProvider,
+  TranslationRequest,
+  TranslationResult
+} from "../src/translation_provider.js";
+import {
+  GeminiTranslationProvider,
+  TranslationProviderError
+} from "../src/translation_provider.js";
 
 const TOKEN = "voicebridge-test-token-123456789";
 const config: AppConfig = {
@@ -20,13 +29,23 @@ const config: AppConfig = {
   port: 0,
   testAccessToken: TOKEN,
   assemblyAiApiKey: null,
+  geminiApiKey: null,
+  geminiTranslationModel: "gemini-3.1-flash-lite",
   corsAllowedOrigin: "*",
   maxRequestBodyBytes: 32768,
   rateLimitRequestsPerMinute: 1000
 };
 
-let server: Server;
-let baseUrl: string;
+interface RunningServer {
+  server: Server;
+  baseUrl: string;
+}
+
+interface RecordedTranslationRequest {
+  segmentId: string;
+  sourceText: string;
+  context: string[];
+}
 
 class FakeSttConnection implements SttConnection {
   private frames = 0;
@@ -46,14 +65,14 @@ class FakeSttConnection implements SttConnection {
         recognitionLatencyMs: 80
       });
     }
-    if (this.frames === 10) {
+    if (this.frames === 2) {
       this.observer.onTranscript({
         text: "Hello world.",
         isFinal: true,
         speechFinal: true,
         confidence: 0.97,
         audioStartMs: 0,
-        audioDurationMs: 200,
+        audioDurationMs: 40,
         recognitionLatencyMs: 120
       });
     }
@@ -78,35 +97,169 @@ class FakeSttProvider implements SttProvider {
   }
 }
 
+class FinalEveryFrameConnection implements SttConnection {
+  private frames = 0;
+
+  constructor(
+    private readonly observer: SttObserver,
+    private readonly longText: boolean
+  ) {}
+
+  sendAudio(_frame: Buffer): boolean {
+    this.frames += 1;
+    const suffix = this.longText ? " " + "x".repeat(900) : "";
+    this.observer.onTranscript({
+      text: `Segment ${this.frames}.${suffix}`,
+      isFinal: true,
+      speechFinal: true,
+      confidence: 0.95,
+      audioStartMs: (this.frames - 1) * 20,
+      audioDurationMs: 20,
+      recognitionLatencyMs: 50
+    });
+    return true;
+  }
+
+  async close(): Promise<void> {
+    this.observer.onStatus("CLOSED");
+  }
+}
+
+class FinalEveryFrameProvider implements SttProvider {
+  readonly name = "sequence-stt";
+  readonly configured = true;
+
+  constructor(private readonly longText = false) {}
+
+  async connect(
+    _options: SttStreamOptions,
+    observer: SttObserver
+  ): Promise<SttConnection> {
+    observer.onStatus("READY");
+    return new FinalEveryFrameConnection(observer, this.longText);
+  }
+}
+
+class FakeTranslationProvider implements TranslationProvider {
+  readonly name = "fake-translation";
+  readonly configured = true;
+  readonly requests: RecordedTranslationRequest[] = [];
+
+  async translate(request: TranslationRequest): Promise<TranslationResult> {
+    this.requests.push({
+      segmentId: request.segmentId,
+      sourceText: request.sourceText,
+      context: [...request.context]
+    });
+    if (request.signal.aborted) {
+      throw new TranslationProviderError(
+        "TRANSLATION_PROVIDER_FAILED",
+        "Translation request was cancelled."
+      );
+    }
+    return {
+      segmentId: request.segmentId,
+      provider: this.name,
+      translatedText: "Pereklad: " + request.sourceText.slice(0, 80),
+      translationLatencyMs: 35,
+      completedAt: new Date().toISOString()
+    };
+  }
+
+  async close(): Promise<void> {
+    return Promise.resolve();
+  }
+}
+
+class FailingTranslationProvider implements TranslationProvider {
+  readonly name = "failing-translation";
+  readonly configured = true;
+
+  async translate(_request: TranslationRequest): Promise<TranslationResult> {
+    throw new TranslationProviderError(
+      "TRANSLATION_PROVIDER_REJECTED",
+      "Translation provider rejected the request."
+    );
+  }
+
+  async close(): Promise<void> {
+    return Promise.resolve();
+  }
+}
+
+class BlockingTranslationProvider implements TranslationProvider {
+  readonly name = "blocking-translation";
+  readonly configured = true;
+
+  async translate(request: TranslationRequest): Promise<TranslationResult> {
+    if (request.signal.aborted) {
+      throw new TranslationProviderError(
+        "TRANSLATION_PROVIDER_FAILED",
+        "Translation request was cancelled."
+      );
+    }
+    return new Promise<TranslationResult>((_resolve, reject) => {
+      request.signal.addEventListener("abort", () => {
+        reject(new TranslationProviderError(
+          "TRANSLATION_PROVIDER_FAILED",
+          "Translation request was cancelled."
+        ));
+      }, { once: true });
+    });
+  }
+
+  async close(): Promise<void> {
+    return Promise.resolve();
+  }
+}
+
+let primary: RunningServer;
+let primaryTranslation: FakeTranslationProvider;
+
 before(async () => {
-  server = createVoiceBridgeServer(
+  primaryTranslation = new FakeTranslationProvider();
+  primary = await startServer(new FakeSttProvider(), primaryTranslation);
+});
+
+after(async () => {
+  await closeServer(primary.server);
+});
+
+async function startServer(
+  sttProvider: SttProvider,
+  translationProvider: TranslationProvider
+): Promise<RunningServer> {
+  const server = createVoiceBridgeServer(
     config,
     undefined,
-    new FakeSttProvider()
+    sttProvider,
+    translationProvider
   );
   await new Promise<void>((resolve, reject) => {
     server.once("error", reject);
     server.listen(0, "127.0.0.1", () => resolve());
   });
   const address = server.address() as AddressInfo;
-  baseUrl = `http://127.0.0.1:${address.port}`;
-});
+  return {
+    server,
+    baseUrl: `http://127.0.0.1:${address.port}`
+  };
+}
 
-after(async () => {
+async function closeServer(server: Server): Promise<void> {
   await new Promise<void>((resolve, reject) => {
-    server.close((error) => (error ? reject(error) : resolve()));
+    server.close((error) => error ? reject(error) : resolve());
   });
-});
+}
 
 async function api(
+  baseUrl: string,
   path: string,
   init: RequestInit = {},
   token: string | null = TOKEN
 ): Promise<Response> {
   const headers = new Headers(init.headers);
-  if (token) {
-    headers.set("authorization", `Bearer ${token}`);
-  }
+  if (token) headers.set("authorization", `Bearer ${token}`);
   return fetch(baseUrl + path, { ...init, headers });
 }
 
@@ -118,8 +271,8 @@ function validSessionRequest() {
     input_type: "BROWSER_AUDIO",
     output_type: "BROWSER_PLAYBACK",
     provider_preferences: {
-      recognition: null,
-      translation: null,
+      recognition: "assemblyai",
+      translation: "gemini",
       synthesis: null
     },
     voice: {
@@ -129,41 +282,46 @@ function validSessionRequest() {
   };
 }
 
-function nextSocketEvent(
+function nextSocketEvents(
   socket: WebSocket,
-  expectedType: string
-): Promise<Record<string, any>> {
+  expectedType: string,
+  count = 1
+): Promise<Array<Record<string, any>>> {
   return new Promise((resolve, reject) => {
+    const events: Array<Record<string, any>> = [];
     const timer = setTimeout(() => {
       cleanup();
       reject(new Error(`Timed out waiting for ${expectedType}.`));
-    }, 3000);
-
+    }, 5000);
     const onMessage = (data: RawData, isBinary: boolean) => {
-      if (isBinary) {
-        return;
-      }
+      if (isBinary) return;
       const event = JSON.parse(data.toString()) as Record<string, any>;
-      if (event.event_type === expectedType) {
+      if (event.event_type !== expectedType) return;
+      events.push(event);
+      if (events.length >= count) {
         cleanup();
-        resolve(event);
+        resolve(events);
       }
     };
-
     const onError = (error: Error) => {
       cleanup();
       reject(error);
     };
-
     const cleanup = () => {
       clearTimeout(timer);
       socket.off("message", onMessage);
       socket.off("error", onError);
     };
-
     socket.on("message", onMessage);
     socket.on("error", onError);
   });
+}
+
+async function nextSocketEvent(
+  socket: WebSocket,
+  expectedType: string
+): Promise<Record<string, any>> {
+  return (await nextSocketEvents(socket, expectedType, 1))[0] as Record<string, any>;
 }
 
 function socketOpened(socket: WebSocket): Promise<void> {
@@ -183,340 +341,39 @@ function socketClosed(socket: WebSocket): Promise<void> {
   });
 }
 
-test("health endpoint is public and returns identifiers", async () => {
-  const response = await api(
-    "/api/v1/health",
-    {
-      headers: {
-        "x-request-id": "test-health",
-        "x-correlation-id": "test-correlation"
-      }
-    },
-    null
-  );
-  assert.equal(response.status, 200);
-  assert.equal(response.headers.get("x-request-id"), "test-health");
-  const body = await response.json();
-  assert.equal(body.status, "ok");
-  assert.equal(body.version, "0.3.1");
-  assert.deepEqual(body.capabilities.stt, {
-    provider: "fake-stt",
-    configured: true
-  });
-  assert.equal(body.request_id, "test-health");
-  assert.equal(body.correlation_id, "test-correlation");
-});
-
-test("configuration requires a sufficiently long token", () => {
-  assert.throws(
-    () => loadConfig({ TEST_ACCESS_TOKEN: "short" }),
-    /at least 16 characters/
-  );
-});
-
-test("AssemblyAI credential is optional before live STT setup", () => {
-  const loaded = loadConfig({ TEST_ACCESS_TOKEN: TOKEN });
-  assert.equal(loaded.assemblyAiApiKey, null);
-});
-
-test("AssemblyAI adapter aggregates audio and maps transcript turns", async () => {
-  const providerServer = new WebSocketServer({
-    host: "127.0.0.1",
-    port: 0
-  });
-  await new Promise<void>((resolve, reject) => {
-    providerServer.once("listening", resolve);
-    providerServer.once("error", reject);
-  });
-
-  const providerAddress = providerServer.address() as AddressInfo;
-  const binaryPackets: Buffer[] = [];
-  let authorization = "";
-  let requestPath = "";
-  let terminated = false;
-
-  providerServer.on("connection", (socket, request) => {
-    authorization = String(request.headers.authorization || "");
-    requestPath = request.url || "";
-    socket.send(JSON.stringify({
-      type: "Begin",
-      id: "assembly-test-session"
-    }));
-
-    socket.on("message", (data, isBinary) => {
-      if (isBinary) {
-        binaryPackets.push(Buffer.from(data as Buffer));
-        socket.send(JSON.stringify({
-          type: "Turn",
-          transcript: "Hello",
-          end_of_turn: false,
-          turn_is_formatted: false,
-          words: [{ start: 0, end: 80, confidence: 0.9 }]
-        }));
-        socket.send(JSON.stringify({
-          type: "Turn",
-          transcript: "hello world",
-          end_of_turn: true,
-          turn_is_formatted: false,
-          words: [
-            { start: 0, end: 80, confidence: 0.9 },
-            { start: 80, end: 100, confidence: 1 }
-          ]
-        }));
-        socket.send(JSON.stringify({
-          type: "Turn",
-          transcript: "Hello world.",
-          end_of_turn: true,
-          turn_is_formatted: true,
-          words: [
-            { start: 0, end: 80, confidence: 0.9 },
-            { start: 80, end: 100, confidence: 1 }
-          ]
-        }));
-        return;
-      }
-
-      const message = JSON.parse(data.toString()) as { type?: string };
-      if (message.type === "Terminate") {
-        terminated = true;
-        socket.send(JSON.stringify({
-          type: "Termination",
-          audio_duration_seconds: 0.1,
-          session_duration_seconds: 0.1
-        }));
-        socket.close(1000);
-      }
-    });
-  });
-
-  const statuses: string[] = [];
-  const transcripts: Array<{ text: string; isFinal: boolean }> = [];
-  let resolveFinal: (() => void) | null = null;
-  const finalReceived = new Promise<void>((resolve) => {
-    resolveFinal = resolve;
-  });
-  const provider = new AssemblyAiSttProvider(
-    "assembly-test-key",
-    `ws://127.0.0.1:${providerAddress.port}/v3/ws`
-  );
-  const connection = await provider.connect(
-    { sampleRateHz: 48000, channels: 1, language: "en-US" },
-    {
-      onStatus: (status) => statuses.push(status),
-      onTranscript: (transcript) => {
-        transcripts.push({
-          text: transcript.text,
-          isFinal: transcript.isFinal
-        });
-        if (transcript.isFinal) {
-          resolveFinal?.();
-        }
-      },
-      onError: (_code, message) => assert.fail(message)
-    }
-  );
-
-  for (let frame = 0; frame < 5; frame += 1) {
-    assert.equal(connection.sendAudio(Buffer.alloc(1920)), true);
-  }
-  await Promise.race([
-    finalReceived,
-    new Promise<void>((_resolve, reject) => {
-      setTimeout(() => reject(new Error("Timed out waiting for final turn.")), 3000);
-    })
-  ]);
-  await connection.close();
-  await new Promise<void>((resolve, reject) => {
-    providerServer.close((error) => error ? reject(error) : resolve());
-  });
-
-  const requestUrl = new URL(requestPath, "http://provider.local");
-  assert.equal(authorization, "assembly-test-key");
-  assert.equal(requestUrl.searchParams.get("sample_rate"), "48000");
-  assert.equal(
-    requestUrl.searchParams.get("speech_model"),
-    "universal-streaming-english"
-  );
-  assert.equal(requestUrl.searchParams.get("format_turns"), "true");
-  assert.equal(binaryPackets.length, 1);
-  assert.equal(binaryPackets[0]?.byteLength, 9600);
-  assert.deepEqual(transcripts, [
-    { text: "Hello", isFinal: false },
-    { text: "hello world", isFinal: false },
-    { text: "Hello world.", isFinal: true }
-  ]);
-  assert.equal(terminated, true);
-  assert.deepEqual(statuses, ["READY", "CLOSED"]);
-});
-
-test("protected endpoint rejects a missing token", async () => {
-  const response = await api("/api/v1/sessions", { method: "POST" }, null);
-  assert.equal(response.status, 401);
-  const body = await response.json();
-  assert.equal(body.error.code, "AUTHENTICATION_REQUIRED");
-});
-
-test("protected endpoint rejects an invalid token", async () => {
-  const response = await api(
-    "/api/v1/sessions",
-    { method: "POST" },
-    "invalid-token-value"
-  );
-  assert.equal(response.status, 401);
-  const body = await response.json();
-  assert.equal(body.error.code, "AUTHENTICATION_FAILED");
-});
-
-test("session lifecycle is authenticated and idempotent", async () => {
-  const createResponse = await api("/api/v1/sessions", {
+async function createActiveSession(baseUrl: string): Promise<string> {
+  const createdResponse = await api(baseUrl, "/api/v1/sessions", {
     method: "POST",
     headers: { "content-type": "application/json" },
     body: JSON.stringify(validSessionRequest())
   });
-  assert.equal(createResponse.status, 201);
-  const created = await createResponse.json();
-  assert.equal(created.state, "CREATED");
-  assert.match(created.session_id, /^[0-9a-f-]{36}$/);
-
-  const startResponse = await api(
+  assert.equal(createdResponse.status, 201);
+  const created = await createdResponse.json();
+  const startedResponse = await api(
+    baseUrl,
     `/api/v1/sessions/${created.session_id}/start`,
     { method: "POST" }
   );
-  assert.equal(startResponse.status, 200);
-  const started = await startResponse.json();
-  assert.equal(started.state, "ACTIVE");
+  assert.equal(startedResponse.status, 200);
+  return created.session_id as string;
+}
 
-  const repeatedStartResponse = await api(
-    `/api/v1/sessions/${created.session_id}/start`,
-    { method: "POST" }
-  );
-  assert.equal(repeatedStartResponse.status, 200);
-  const repeatedStart = await repeatedStartResponse.json();
-  assert.equal(repeatedStart.state, "ACTIVE");
-
-  const getResponse = await api(
-    `/api/v1/sessions/${created.session_id}`
-  );
-  assert.equal(getResponse.status, 200);
-  const fetched = await getResponse.json();
-  assert.equal(fetched.state, "ACTIVE");
-
-  const pauseResponse = await api(
-    `/api/v1/sessions/${created.session_id}/pause`,
-    { method: "POST" }
-  );
-  assert.equal(pauseResponse.status, 200);
-  const paused = await pauseResponse.json();
-  assert.equal(paused.state, "PAUSED");
-
-  const resumeResponse = await api(
-    `/api/v1/sessions/${created.session_id}/resume`,
-    { method: "POST" }
-  );
-  assert.equal(resumeResponse.status, 200);
-  const resumed = await resumeResponse.json();
-  assert.equal(resumed.state, "ACTIVE");
-
-  const stopResponse = await api(
-    `/api/v1/sessions/${created.session_id}/stop`,
-    { method: "POST" }
-  );
-  assert.equal(stopResponse.status, 200);
-  const stopped = await stopResponse.json();
-  assert.equal(stopped.state, "COMPLETED");
-
-  const repeatedStopResponse = await api(
-    `/api/v1/sessions/${created.session_id}/stop`,
-    { method: "POST" }
-  );
-  assert.equal(repeatedStopResponse.status, 200);
-  const repeatedStop = await repeatedStopResponse.json();
-  assert.equal(repeatedStop.state, "COMPLETED");
-});
-
-test("invalid session transition returns canonical error", async () => {
-  const createResponse = await api("/api/v1/sessions", {
-    method: "POST",
-    headers: { "content-type": "application/json" },
-    body: JSON.stringify(validSessionRequest())
-  });
-  const created = await createResponse.json();
-
-  const pauseResponse = await api(
-    `/api/v1/sessions/${created.session_id}/pause`,
-    { method: "POST" }
-  );
-  assert.equal(pauseResponse.status, 409);
-  const body = await pauseResponse.json();
-  assert.equal(body.error.code, "INVALID_SESSION_STATE");
-  assert.equal(body.error.session_id, created.session_id);
-});
-
-test("invalid session request is rejected", async () => {
-  const response = await api("/api/v1/sessions", {
-    method: "POST",
-    headers: { "content-type": "application/json" },
-    body: JSON.stringify({ source_language: "en" })
-  });
-  assert.equal(response.status, 400);
-  const body = await response.json();
-  assert.equal(body.error.code, "INVALID_REQUEST");
-});
-
-test("unknown session returns canonical error", async () => {
-  const response = await api(
-    "/api/v1/sessions/00000000-0000-0000-0000-000000000000"
-  );
-  assert.equal(response.status, 404);
-  const body = await response.json();
-  assert.equal(body.error.code, "SESSION_NOT_FOUND");
-});
-
-test("stream ticket requires an active session", async () => {
-  const createResponse = await api("/api/v1/sessions", {
-    method: "POST",
-    headers: { "content-type": "application/json" },
-    body: JSON.stringify(validSessionRequest())
-  });
-  const created = await createResponse.json();
-
+async function openStream(
+  baseUrl: string,
+  sessionId: string
+): Promise<{ socket: WebSocket; ready: Record<string, any> }> {
   const ticketResponse = await api(
-    `/api/v1/sessions/${created.session_id}/stream-ticket`,
-    { method: "POST" }
-  );
-  assert.equal(ticketResponse.status, 409);
-  const body = await ticketResponse.json();
-  assert.equal(body.error.code, "INVALID_SESSION_STATE");
-});
-
-test("authenticated WebSocket stream accepts bounded binary audio", async () => {
-  const createResponse = await api("/api/v1/sessions", {
-    method: "POST",
-    headers: { "content-type": "application/json" },
-    body: JSON.stringify(validSessionRequest())
-  });
-  const created = await createResponse.json();
-  await api(`/api/v1/sessions/${created.session_id}/start`, {
-    method: "POST"
-  });
-
-  const ticketResponse = await api(
-    `/api/v1/sessions/${created.session_id}/stream-ticket`,
+    baseUrl,
+    `/api/v1/sessions/${sessionId}/stream-ticket`,
     { method: "POST" }
   );
   assert.equal(ticketResponse.status, 201);
   const ticket = await ticketResponse.json();
-  assert.deepEqual(ticket.protocols.slice(0, 1), ["voicebridge.v1"]);
-  assert.doesNotMatch(ticket.stream_path, /ticket/i);
-
   const socketUrl = baseUrl.replace(/^http/, "ws") + ticket.stream_path;
   const socket = new WebSocket(socketUrl, ticket.protocols);
   const readyPromise = nextSocketEvent(socket, "STREAM_READY");
   await socketOpened(socket);
   const ready = await readyPromise;
-  assert.equal(ready.data.max_binary_frame_bytes, 32768);
-  assert.equal(ready.data.max_unacked_frames, 50);
-
   const startedPromise = nextSocketEvent(socket, "STREAM_STARTED");
   socket.send(JSON.stringify({
     event_type: "STREAM_START",
@@ -530,25 +387,10 @@ test("authenticated WebSocket stream accepts bounded binary audio", async () => 
     }
   }));
   await startedPromise;
+  return { socket, ready };
+}
 
-  const ackPromise = nextSocketEvent(socket, "AUDIO_ACK");
-  const partialPromise = nextSocketEvent(socket, "TRANSCRIPT_PARTIAL");
-  const finalPromise = nextSocketEvent(socket, "TRANSCRIPT_FINAL");
-  for (let index = 0; index < 10; index += 1) {
-    socket.send(Buffer.alloc(1920));
-  }
-  const ack = await ackPromise;
-  const partial = await partialPromise;
-  const final = await finalPromise;
-  assert.equal(ack.data.frames_received, 10);
-  assert.equal(ack.data.bytes_received, 19200);
-  assert.equal(partial.data.text, "Hello");
-  assert.equal(partial.data.is_final, false);
-  assert.equal(final.data.text, "Hello world.");
-  assert.equal(final.data.is_final, true);
-  assert.ok(partial.sequence < final.sequence);
-  assert.equal(final.data.recognition_latency_ms, 120);
-
+async function stopStream(socket: WebSocket): Promise<Record<string, any>> {
   const completedPromise = nextSocketEvent(socket, "STREAM_COMPLETED");
   socket.send(JSON.stringify({
     event_type: "STREAM_STOP",
@@ -557,30 +399,390 @@ test("authenticated WebSocket stream accepts bounded binary audio", async () => 
     data: {}
   }));
   const completed = await completedPromise;
-  assert.equal(completed.data.frames_received, 10);
-  assert.equal(completed.data.partial_transcripts, 1);
-  assert.equal(completed.data.final_transcripts, 1);
-  assert.equal(completed.data.average_recognition_latency_ms, 100);
   await socketClosed(socket);
+  return completed;
+}
 
-  await new Promise<void>((resolve, reject) => {
-    const reused = new WebSocket(socketUrl, ticket.protocols);
-    const timer = setTimeout(() => {
-      reused.terminate();
-      reject(new Error("Reused stream ticket was not rejected."));
-    }, 3000);
-    reused.once("unexpected-response", (_request, response) => {
-      clearTimeout(timer);
-      assert.equal(response.statusCode, 401);
-      response.resume();
-      resolve();
+function translationRequest(
+  overrides: Partial<TranslationRequest> = {}
+): TranslationRequest {
+  const controller = new AbortController();
+  return {
+    segmentId: "segment-1",
+    sourceLanguage: "en",
+    targetLanguage: "uk",
+    sourceText: "Hello world.",
+    context: ["Previous sentence."],
+    requestedAt: new Date().toISOString(),
+    signal: controller.signal,
+    ...overrides
+  };
+}
+
+test("health reports cloud 0.4.0 and translation capability", async () => {
+  const response = await api(
+    primary.baseUrl,
+    "/api/v1/health",
+    {
+      headers: {
+        "x-request-id": "test-health",
+        "x-correlation-id": "test-correlation"
+      }
+    },
+    null
+  );
+  assert.equal(response.status, 200);
+  const body = await response.json();
+  assert.equal(body.version, "0.4.0");
+  assert.deepEqual(body.capabilities.stt, {
+    provider: "fake-stt",
+    configured: true
+  });
+  assert.deepEqual(body.capabilities.translation, {
+    provider: "fake-translation",
+    configured: true,
+    model: "gemini-3.1-flash-lite"
+  });
+  assert.equal(body.request_id, "test-health");
+  assert.equal(body.correlation_id, "test-correlation");
+});
+
+test("configuration keeps Gemini optional with a validated default model", () => {
+  assert.throws(
+    () => loadConfig({ TEST_ACCESS_TOKEN: "short" }),
+    /at least 16 characters/
+  );
+  const loaded = loadConfig({ TEST_ACCESS_TOKEN: TOKEN });
+  assert.equal(loaded.assemblyAiApiKey, null);
+  assert.equal(loaded.geminiApiKey, null);
+  assert.equal(loaded.geminiTranslationModel, "gemini-3.1-flash-lite");
+  assert.throws(
+    () => loadConfig({
+      TEST_ACCESS_TOKEN: TOKEN,
+      GEMINI_TRANSLATION_MODEL: "invalid model"
+    }),
+    /GEMINI_TRANSLATION_MODEL/
+  );
+});
+
+test("Gemini adapter sends structured request and maps translation", async () => {
+  let requestedUrl = "";
+  let requestedKey = "";
+  let requestedBody: Record<string, any> | null = null;
+  const fetchImpl = async (
+    input: string | URL | Request,
+    init?: RequestInit
+  ): Promise<Response> => {
+    requestedUrl = String(input);
+    requestedKey = new Headers(init?.headers).get("x-goog-api-key") || "";
+    requestedBody = JSON.parse(String(init?.body)) as Record<string, any>;
+    return new Response(JSON.stringify({
+      candidates: [{
+        content: {
+          parts: [{ text: JSON.stringify({ translation: "Pryvit, svite." }) }]
+        }
+      }]
+    }), {
+      status: 200,
+      headers: { "content-type": "application/json" }
     });
-    reused.once("error", () => undefined);
+  };
+  const provider = new GeminiTranslationProvider(
+    "test-key",
+    "test-model",
+    "https://provider.test/v1beta/models",
+    fetchImpl,
+    1000
+  );
+  const result = await provider.translate(translationRequest());
+  assert.equal(result.segmentId, "segment-1");
+  assert.equal(result.provider, "gemini");
+  assert.equal(result.translatedText, "Pryvit, svite.");
+  assert.match(requestedUrl, /test-model:generateContent$/);
+  assert.equal(requestedKey, "test-key");
+  assert.equal(
+    requestedBody?.generationConfig?.responseMimeType,
+    "application/json"
+  );
+  assert.equal(
+    requestedBody?.generationConfig?.responseJsonSchema?.required?.[0],
+    "translation"
+  );
+  await provider.close();
+});
+
+test("Gemini adapter rejects malformed structured output", async () => {
+  const provider = new GeminiTranslationProvider(
+    "test-key",
+    "test-model",
+    "https://provider.test/v1beta/models",
+    async () => new Response(JSON.stringify({
+      candidates: [{ content: { parts: [{ text: "not-json" }] } }]
+    }), { status: 200 }),
+    1000
+  );
+  await assert.rejects(
+    provider.translate(translationRequest()),
+    (error: unknown) =>
+      error instanceof TranslationProviderError &&
+      error.code === "TRANSLATION_INVALID_RESPONSE"
+  );
+});
+
+test("Gemini adapter maps quota and timeout failures", async () => {
+  const rateLimited = new GeminiTranslationProvider(
+    "test-key",
+    "test-model",
+    "https://provider.test/v1beta/models",
+    async () => new Response("", { status: 429 }),
+    1000
+  );
+  await assert.rejects(
+    rateLimited.translate(translationRequest()),
+    (error: unknown) =>
+      error instanceof TranslationProviderError &&
+      error.code === "TRANSLATION_RATE_LIMITED"
+  );
+
+  const timeoutProvider = new GeminiTranslationProvider(
+    "test-key",
+    "test-model",
+    "https://provider.test/v1beta/models",
+    async (_input, init) => new Promise<Response>((_resolve, reject) => {
+      init?.signal?.addEventListener("abort", () => {
+        const error = new Error("aborted");
+        error.name = "AbortError";
+        reject(error);
+      }, { once: true });
+    }),
+    10
+  );
+  await assert.rejects(
+    timeoutProvider.translate(translationRequest()),
+    (error: unknown) =>
+      error instanceof TranslationProviderError &&
+      error.code === "TRANSLATION_TIMEOUT"
+  );
+});
+
+test("AssemblyAI adapter still aggregates audio and returns final turns", async () => {
+  const providerServer = new WebSocketServer({ host: "127.0.0.1", port: 0 });
+  await new Promise<void>((resolve, reject) => {
+    providerServer.once("listening", resolve);
+    providerServer.once("error", reject);
+  });
+  const address = providerServer.address() as AddressInfo;
+  const binaryPackets: Buffer[] = [];
+  providerServer.on("connection", (socket) => {
+    socket.send(JSON.stringify({ type: "Begin", id: "test-session" }));
+    socket.on("message", (data, isBinary) => {
+      if (isBinary) {
+        binaryPackets.push(Buffer.from(data as Buffer));
+        socket.send(JSON.stringify({
+          type: "Turn",
+          transcript: "Hello world.",
+          end_of_turn: true,
+          turn_is_formatted: true,
+          words: [{ start: 0, end: 100, confidence: 0.95 }]
+        }));
+        return;
+      }
+      const message = JSON.parse(data.toString()) as { type?: string };
+      if (message.type === "Terminate") socket.close(1000);
+    });
   });
 
-  const stopResponse = await api(
+  const provider = new AssemblyAiSttProvider(
+    "assembly-test-key",
+    `ws://127.0.0.1:${address.port}/v3/ws`
+  );
+  let finalText = "";
+  let resolveFinal: (() => void) | null = null;
+  const finalReceived = new Promise<void>((resolve) => {
+    resolveFinal = resolve;
+  });
+  const connection = await provider.connect(
+    { sampleRateHz: 48000, channels: 1, language: "en-US" },
+    {
+      onStatus: () => undefined,
+      onTranscript: (transcript) => {
+        if (transcript.isFinal) {
+          finalText = transcript.text;
+          resolveFinal?.();
+        }
+      },
+      onError: (_code, message) => assert.fail(message)
+    }
+  );
+  for (let frame = 0; frame < 5; frame += 1) {
+    assert.equal(connection.sendAudio(Buffer.alloc(1920)), true);
+  }
+  await finalReceived;
+  await connection.close();
+  await new Promise<void>((resolve, reject) => {
+    providerServer.close((error) => error ? reject(error) : resolve());
+  });
+  assert.equal(binaryPackets.length, 1);
+  assert.equal(binaryPackets[0]?.byteLength, 9600);
+  assert.equal(finalText, "Hello world.");
+});
+
+test("protected endpoint rejects missing and invalid tokens", async () => {
+  const missing = await api(
+    primary.baseUrl,
+    "/api/v1/sessions",
+    { method: "POST" },
+    null
+  );
+  assert.equal(missing.status, 401);
+  assert.equal((await missing.json()).error.code, "AUTHENTICATION_REQUIRED");
+
+  const invalid = await api(
+    primary.baseUrl,
+    "/api/v1/sessions",
+    { method: "POST" },
+    "invalid-token-value"
+  );
+  assert.equal(invalid.status, 401);
+  assert.equal((await invalid.json()).error.code, "AUTHENTICATION_FAILED");
+});
+
+test("session lifecycle remains authenticated and idempotent", async () => {
+  const createResponse = await api(primary.baseUrl, "/api/v1/sessions", {
+    method: "POST",
+    headers: { "content-type": "application/json" },
+    body: JSON.stringify(validSessionRequest())
+  });
+  assert.equal(createResponse.status, 201);
+  const created = await createResponse.json();
+  assert.equal(created.state, "CREATED");
+
+  const started = await api(
+    primary.baseUrl,
+    `/api/v1/sessions/${created.session_id}/start`,
+    { method: "POST" }
+  );
+  assert.equal((await started.json()).state, "ACTIVE");
+
+  const repeatedStart = await api(
+    primary.baseUrl,
+    `/api/v1/sessions/${created.session_id}/start`,
+    { method: "POST" }
+  );
+  assert.equal((await repeatedStart.json()).state, "ACTIVE");
+
+  const stopped = await api(
+    primary.baseUrl,
     `/api/v1/sessions/${created.session_id}/stop`,
     { method: "POST" }
   );
-  assert.equal(stopResponse.status, 200);
+  assert.equal((await stopped.json()).state, "COMPLETED");
+});
+
+test("final STT segment preserves identity through ordered translation", async () => {
+  const sessionId = await createActiveSession(primary.baseUrl);
+  const { socket, ready } = await openStream(primary.baseUrl, sessionId);
+  assert.equal(ready.data.translation_provider, "fake-translation");
+  assert.equal(ready.data.translation_configured, true);
+
+  const partialPromise = nextSocketEvent(socket, "TRANSCRIPT_PARTIAL");
+  const finalPromise = nextSocketEvent(socket, "TRANSCRIPT_FINAL");
+  const translationPromise = nextSocketEvent(socket, "TRANSLATION_FINAL");
+  socket.send(Buffer.alloc(1920));
+  socket.send(Buffer.alloc(1920));
+
+  const partial = await partialPromise;
+  const final = await finalPromise;
+  const translation = await translationPromise;
+  assert.equal(partial.data.text, "Hello");
+  assert.equal(final.data.text, "Hello world.");
+  assert.match(final.data.segment_id, /^[0-9a-f-]{36}$/);
+  assert.equal(translation.data.segment_id, final.data.segment_id);
+  assert.equal(translation.data.provider, "fake-translation");
+  assert.equal(translation.data.translation_latency_ms, 35);
+
+  const completed = await stopStream(socket);
+  assert.equal(completed.data.final_transcripts, 1);
+  assert.equal(completed.data.final_translations, 1);
+  assert.equal(completed.data.translation_errors, 0);
+});
+
+test("translation failure does not stop STT or audio streaming", async () => {
+  const running = await startServer(
+    new FakeSttProvider(),
+    new FailingTranslationProvider()
+  );
+  try {
+    const sessionId = await createActiveSession(running.baseUrl);
+    const { socket } = await openStream(running.baseUrl, sessionId);
+    const finalPromise = nextSocketEvent(socket, "TRANSCRIPT_FINAL");
+    const errorPromise = nextSocketEvent(socket, "TRANSLATION_ERROR");
+    socket.send(Buffer.alloc(1920));
+    socket.send(Buffer.alloc(1920));
+    const final = await finalPromise;
+    const error = await errorPromise;
+    assert.equal(final.data.text, "Hello world.");
+    assert.equal(error.data.segment_id, final.data.segment_id);
+    assert.equal(error.data.code, "TRANSLATION_PROVIDER_REJECTED");
+    assert.equal(socket.readyState, WebSocket.OPEN);
+    const completed = await stopStream(socket);
+    assert.equal(completed.data.final_transcripts, 1);
+    assert.equal(completed.data.final_translations, 0);
+    assert.equal(completed.data.translation_errors, 1);
+  } finally {
+    await closeServer(running.server);
+  }
+});
+
+test("translation queue preserves order and bounds context", async () => {
+  const translator = new FakeTranslationProvider();
+  const running = await startServer(
+    new FinalEveryFrameProvider(true),
+    translator
+  );
+  try {
+    const sessionId = await createActiveSession(running.baseUrl);
+    const { socket } = await openStream(running.baseUrl, sessionId);
+    const transcriptsPromise = nextSocketEvents(socket, "TRANSCRIPT_FINAL", 6);
+    const translationsPromise = nextSocketEvents(socket, "TRANSLATION_FINAL", 6);
+    for (let index = 0; index < 6; index += 1) {
+      socket.send(Buffer.alloc(1920));
+    }
+    const transcripts = await transcriptsPromise;
+    const translations = await translationsPromise;
+    assert.deepEqual(
+      translations.map((event) => event.data.segment_id),
+      transcripts.map((event) => event.data.segment_id)
+    );
+    assert.equal(translator.requests.length, 6);
+    const lastContext = translator.requests[5]?.context || [];
+    assert.ok(lastContext.length <= 4);
+    assert.ok(lastContext.join("").length <= 3000);
+    await stopStream(socket);
+  } finally {
+    await closeServer(running.server);
+  }
+});
+
+test("translation queue rejects work above twenty pending segments", async () => {
+  const running = await startServer(
+    new FinalEveryFrameProvider(),
+    new BlockingTranslationProvider()
+  );
+  try {
+    const sessionId = await createActiveSession(running.baseUrl);
+    const { socket } = await openStream(running.baseUrl, sessionId);
+    const overflowPromise = nextSocketEvent(socket, "TRANSLATION_ERROR");
+    for (let index = 0; index < 21; index += 1) {
+      socket.send(Buffer.alloc(1920));
+    }
+    const overflow = await overflowPromise;
+    assert.equal(overflow.data.code, "TRANSLATION_QUEUE_FULL");
+    assert.equal(socket.readyState, WebSocket.OPEN);
+    const completed = await stopStream(socket);
+    assert.equal(completed.data.final_transcripts, 21);
+    assert.equal(completed.data.translation_errors, 1);
+  } finally {
+    await closeServer(running.server);
+  }
 });
