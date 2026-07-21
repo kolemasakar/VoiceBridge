@@ -339,7 +339,7 @@ test("Gemini TTS adapter requests audio and validates PCM", async () => {
   assert.equal(result.channels, 1);
   assert.equal(result.audio.byteLength, 48000);
   assert.equal(result.audioDurationMs, 1000);
-  const sentBody = requestBody as Record<string, any>;
+  const sentBody = requestBody as unknown as Record<string, any>;
   assert.equal(sentBody.generationConfig.responseModalities[0], "AUDIO");
   assert.equal(
     sentBody.generationConfig.speechConfig.voiceConfig
