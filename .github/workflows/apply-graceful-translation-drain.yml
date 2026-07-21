@@ -1,16 +1,16 @@
 name: Apply graceful translation drain
 
 on:
-  push:
+  pull_request:
     branches:
-      - agent/graceful-translation-drain
+      - main
 
 permissions:
   contents: write
 
 jobs:
   patch:
-    if: github.actor != 'github-actions[bot]'
+    if: github.event.pull_request.head.ref == 'agent/graceful-translation-drain'
     runs-on: ubuntu-latest
     steps:
       - name: Checkout branch
