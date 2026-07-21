@@ -1,0 +1,361 @@
+name: Apply graceful translation drain
+
+on:
+  push:
+    branches:
+      - agent/graceful-translation-drain
+
+permissions:
+  contents: write
+
+jobs:
+  patch:
+    if: github.actor != 'github-actions[bot]'
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout branch
+        uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803
+        with:
+          ref: agent/graceful-translation-drain
+      - name: Apply graceful drain patch
+        run: |
+          python3 - <<'PY'
+          from pathlib import Path
+
+          def replace_once(path: str, old: str, new: str) -> None:
+              file_path = Path(path)
+              text = file_path.read_text(encoding="utf-8")
+              if old not in text:
+                  raise SystemExit(f"Pattern not found in {path}: {old[:80]!r}")
+              file_path.write_text(text.replace(old, new, 1), encoding="utf-8")
+
+          stream = "src/cloud/src/stream_transport.ts"
+          replace_once(
+              stream,
+              'const MAX_TRANSLATION_SOURCE_CHARACTERS = 2000;\n',
+              'const MAX_TRANSLATION_SOURCE_CHARACTERS = 2000;\n'
+              'const TRANSLATION_DRAIN_TIMEOUT_MS = 3000;\n'
+          )
+          replace_once(
+              stream,
+              '  translationPending: number;\n'
+              '  translationAccepting: boolean;\n'
+              '  translationAbortController: AbortController;\n',
+              '  translationPending: number;\n'
+              '  translationAccepting: boolean;\n'
+              '  translationDelivering: boolean;\n'
+              '  translationAbortController: AbortController;\n'
+              '  translationsPendingAtStop: number;\n'
+              '  translationDrainTimedOut: boolean;\n'
+          )
+          replace_once(
+              stream,
+              '    final_translations: context.finalTranslations,\n'
+              '    translation_errors: context.translationErrors,\n',
+              '    final_translations: context.finalTranslations,\n'
+              '    translation_errors: context.translationErrors,\n'
+              '    translation_pending_at_stop: context.translationsPendingAtStop,\n'
+              '    translation_drain_timed_out: context.translationDrainTimedOut,\n'
+          )
+          replace_once(
+              stream,
+              '      translationPending: 0,\n'
+              '      translationAccepting: true,\n'
+              '      translationAbortController: new AbortController(),\n',
+              '      translationPending: 0,\n'
+              '      translationAccepting: true,\n'
+              '      translationDelivering: true,\n'
+              '      translationAbortController: new AbortController(),\n'
+              '      translationsPendingAtStop: 0,\n'
+              '      translationDrainTimedOut: false,\n'
+          )
+          replace_once(
+              stream,
+              '      segmentId: string,\n'
+              '      code: string,\n',
+              '      segmentId: string | null,\n'
+              '      code: string,\n'
+          )
+          replace_once(
+              stream,
+              '          if (!context.translationAccepting) {\n'
+              '            return;\n'
+              '          }\n'
+              '          context.finalTranslations += 1;\n',
+              '          if (!context.translationDelivering) {\n'
+              '            return;\n'
+              '          }\n'
+              '          context.finalTranslations += 1;\n'
+          )
+          replace_once(
+              stream,
+              '        } catch (error) {\n'
+              '          if (!context.translationAccepting) {\n'
+              '            return;\n'
+              '          }\n',
+              '        } catch (error) {\n'
+              '          if (!context.translationDelivering) {\n'
+              '            return;\n'
+              '          }\n'
+          )
+          replace_once(
+              stream,
+              '      context.translationChain = context.translationChain\n'
+              '        .then(operation)\n'
+              '        .catch(() => undefined);\n'
+              '    };\n\n'
+              '    sendEvent("STREAM_READY", {\n',
+              '      context.translationChain = context.translationChain\n'
+              '        .then(operation)\n'
+              '        .catch(() => undefined);\n'
+              '    };\n\n'
+              '    const drainTranslations = async (): Promise<void> => {\n'
+              '      context.translationsPendingAtStop = context.translationPending;\n'
+              '      if (context.translationPending === 0) {\n'
+              '        return;\n'
+              '      }\n\n'
+              '      sendEvent("TRANSLATION_STATUS", {\n'
+              '        provider: translationProvider.name,\n'
+              '        status: "DRAINING",\n'
+              '        pending: context.translationPending\n'
+              '      });\n\n'
+              '      let timeout: NodeJS.Timeout | null = null;\n'
+              '      const drained = await Promise.race([\n'
+              '        context.translationChain.then(() => true),\n'
+              '        new Promise<boolean>((resolve) => {\n'
+              '          timeout = setTimeout(\n'
+              '            () => resolve(false),\n'
+              '            TRANSLATION_DRAIN_TIMEOUT_MS\n'
+              '          );\n'
+              '        })\n'
+              '      ]);\n\n'
+              '      if (timeout) {\n'
+              '        clearTimeout(timeout);\n'
+              '      }\n'
+              '      if (drained) {\n'
+              '        return;\n'
+              '      }\n\n'
+              '      context.translationDrainTimedOut = true;\n'
+              '      context.translationDelivering = false;\n'
+              '      context.translationAbortController.abort();\n'
+              '      await context.translationChain;\n'
+              '      sendTranslationError(\n'
+              '        null,\n'
+              '        "TRANSLATION_DRAIN_TIMEOUT",\n'
+              '        "Translation queue did not drain before shutdown.",\n'
+              '        false\n'
+              '      );\n'
+              '    };\n\n'
+              '    sendEvent("STREAM_READY", {\n'
+          )
+          replace_once(
+              stream,
+              '      translation_configured: translationProvider.configured,\n'
+              '      max_translation_queue: MAX_TRANSLATION_QUEUE\n',
+              '      translation_configured: translationProvider.configured,\n'
+              '      max_translation_queue: MAX_TRANSLATION_QUEUE,\n'
+              '      translation_drain_timeout_ms: TRANSLATION_DRAIN_TIMEOUT_MS\n'
+          )
+          replace_once(
+              stream,
+              '    webSocket.on("message", async (data, isBinary) => {\n'
+              '      if (isBinary) {\n'
+              '        const frameBytes = rawDataLength(data);\n',
+              '    webSocket.on("message", async (data, isBinary) => {\n'
+              '      if (isBinary) {\n'
+              '        if (context.stopping) {\n'
+              '          return;\n'
+              '        }\n'
+              '        const frameBytes = rawDataLength(data);\n'
+          )
+          replace_once(
+              stream,
+              '        context.stopping = true;\n'
+              '        context.translationAccepting = false;\n'
+              '        context.translationAbortController.abort();\n'
+              '        await context.sttConnection?.close();\n'
+              '        await context.translationChain;\n'
+              '        sendEvent("TRANSLATION_STATUS", {\n'
+              '          provider: translationProvider.name,\n'
+              '          status: "CLOSED",\n'
+              '          pending: context.translationPending\n'
+              '        });\n',
+              '        context.stopping = true;\n'
+              '        context.started = false;\n'
+              '        await context.sttConnection?.close();\n'
+              '        context.translationAccepting = false;\n'
+              '        await drainTranslations();\n'
+              '        context.translationDelivering = false;\n'
+              '        sendEvent("TRANSLATION_STATUS", {\n'
+              '          provider: translationProvider.name,\n'
+              '          status: "CLOSED",\n'
+              '          pending: context.translationPending,\n'
+              '          drain_timed_out: context.translationDrainTimedOut\n'
+              '        });\n'
+          )
+          replace_once(
+              stream,
+              '      context.translationAccepting = false;\n'
+              '      context.translationAbortController.abort();\n',
+              '      context.translationAccepting = false;\n'
+              '      context.translationDelivering = false;\n'
+              '      context.translationAbortController.abort();\n'
+          )
+
+          tests = "src/cloud/tests/cloud.test.ts"
+          replace_once(
+              tests,
+              'class BlockingTranslationProvider implements TranslationProvider {\n',
+              'class DelayedTranslationProvider implements TranslationProvider {\n'
+              '  readonly name = "delayed-translation";\n'
+              '  readonly configured = true;\n\n'
+              '  constructor(private readonly delayMs = 100) {}\n\n'
+              '  async translate(request: TranslationRequest): Promise<TranslationResult> {\n'
+              '    await new Promise<void>((resolve, reject) => {\n'
+              '      const onAbort = () => {\n'
+              '        clearTimeout(timer);\n'
+              '        reject(new TranslationProviderError(\n'
+              '          "TRANSLATION_PROVIDER_FAILED",\n'
+              '          "Translation request was cancelled."\n'
+              '        ));\n'
+              '      };\n'
+              '      const timer = setTimeout(() => {\n'
+              '        request.signal.removeEventListener("abort", onAbort);\n'
+              '        resolve();\n'
+              '      }, this.delayMs);\n'
+              '      request.signal.addEventListener("abort", onAbort, { once: true });\n'
+              '    });\n\n'
+              '    return {\n'
+              '      segmentId: request.segmentId,\n'
+              '      provider: this.name,\n'
+              '      translatedText: "Pereklad: " + request.sourceText.slice(0, 80),\n'
+              '      translationLatencyMs: this.delayMs,\n'
+              '      completedAt: new Date().toISOString()\n'
+              '    };\n'
+              '  }\n\n'
+              '  async close(): Promise<void> {\n'
+              '    return Promise.resolve();\n'
+              '  }\n'
+              '}\n\n'
+              'class BlockingTranslationProvider implements TranslationProvider {\n'
+          )
+          replace_once(
+              tests,
+              'test("translation queue rejects work above twenty pending segments", async () => {\n',
+              'test("stream stop drains accepted translations before completion", async () => {\n'
+              '  const running = await startServer(\n'
+              '    new ScriptedSttProvider("drain-stt", true),\n'
+              '    new DelayedTranslationProvider(100)\n'
+              '  );\n\n'
+              '  try {\n'
+              '    const sessionId = await createActiveSession(running.baseUrl);\n'
+              '    const { socket } = await openStream(running.baseUrl, sessionId);\n'
+              '    const transcriptsPromise = nextSocketEvents(\n'
+              '      socket,\n'
+              '      "TRANSCRIPT_FINAL",\n'
+              '      2\n'
+              '    );\n'
+              '    const translationsPromise = nextSocketEvents(\n'
+              '      socket,\n'
+              '      "TRANSLATION_FINAL",\n'
+              '      2\n'
+              '    );\n\n'
+              '    socket.send(Buffer.alloc(1920));\n'
+              '    socket.send(Buffer.alloc(1920));\n'
+              '    const transcripts = await transcriptsPromise;\n'
+              '    const completedPromise = stopStream(socket);\n'
+              '    const translations = await translationsPromise;\n'
+              '    const completed = await completedPromise;\n\n'
+              '    assert.deepEqual(\n'
+              '      translations.map((event) => event.data.segment_id),\n'
+              '      transcripts.map((event) => event.data.segment_id)\n'
+              '    );\n'
+              '    assert.equal(completed.data.final_transcripts, 2);\n'
+              '    assert.equal(completed.data.final_translations, 2);\n'
+              '    assert.equal(completed.data.translation_errors, 0);\n'
+              '    assert.ok(completed.data.translation_pending_at_stop >= 1);\n'
+              '    assert.equal(completed.data.translation_drain_timed_out, false);\n'
+              '  } finally {\n'
+              '    await closeServer(running.server);\n'
+              '  }\n'
+              '});\n\n'
+              'test("translation queue rejects work above twenty pending segments", async () => {\n'
+          )
+          replace_once(
+              tests,
+              '    assert.equal(completed.data.final_transcripts, 21);\n'
+              '    assert.equal(completed.data.translation_errors, 1);\n',
+              '    assert.equal(completed.data.final_transcripts, 21);\n'
+              '    assert.equal(completed.data.final_translations, 0);\n'
+              '    assert.equal(completed.data.translation_errors, 2);\n'
+              '    assert.equal(completed.data.translation_pending_at_stop, 20);\n'
+              '    assert.equal(completed.data.translation_drain_timed_out, true);\n'
+          )
+
+          replace_once(
+              "src/cloud/src/server.ts",
+              'const SERVICE_VERSION = "0.4.0";\n',
+              'const SERVICE_VERSION = "0.4.1";\n'
+          )
+          replace_once(
+              "src/cloud/package.json",
+              '  "version": "0.4.0",\n',
+              '  "version": "0.4.1",\n'
+          )
+          lock = Path("src/cloud/package-lock.json")
+          lock_text = lock.read_text(encoding="utf-8")
+          if lock_text.count('"version": "0.3.1"') < 2:
+              raise SystemExit("Unexpected package-lock version state")
+          lock.write_text(
+              lock_text.replace('"version": "0.3.1"', '"version": "0.4.1"', 2),
+              encoding="utf-8"
+          )
+
+          replace_once(
+              "src/cloud/README.md",
+              'Version:\n0.4.0\n',
+              'Version:\n0.4.1\n'
+          )
+          replace_once(
+              "src/cloud/README.md",
+              '- cancellation on Stop and disconnect;\n',
+              '- graceful drain of already accepted translations for up to 3000 milliseconds on Stop;\n'
+              '- cancellation after drain timeout or unexpected disconnect;\n'
+          )
+          replace_once(
+              "docs/phases/PHASE_1_MILESTONE_5_TRANSLATION_INTEGRATION.md",
+              'Status: IMPLEMENTATION COMPLETE; LIVE VALIDATION PENDING\n',
+              'Status: LIVE TRANSLATION PASSED; GRACEFUL DRAIN CONTROL TEST PENDING\n'
+          )
+          replace_once(
+              "docs/phases/PHASE_1_MILESTONE_5_TRANSLATION_INTEGRATION.md",
+              '- cloud service: `0.4.0`;\n',
+              '- cloud service: `0.4.1`;\n'
+          )
+          replace_once(
+              "docs/phases/PHASE_1_MILESTONE_5_TRANSLATION_INTEGRATION.md",
+              '## Pending Live Validation\n',
+              '## Live Validation Result\n\n'
+              'The controlled Gemini test passed on 2026-07-21:\n\n'
+              '- active session duration: `08:01`;\n'
+              '- final English segments: `92`;\n'
+              '- final Ukrainian segments delivered before Stop: `90`;\n'
+              '- dropped audio frames: `0`;\n'
+              '- average recognition latency after Stop: `614 ms`;\n'
+              '- average translation latency after Stop: `600 ms`;\n'
+              '- readable ordered Ukrainian text;\n'
+              '- clean `IDLE`, `COMPLETED`, and `CLOSED` states.\n\n'
+              'The two-segment shutdown gap identified the need for graceful queue drain. Cloud service `0.4.1` waits up to 3000 milliseconds for already accepted translations before cancellation.\n\n'
+              '## Pending Control Validation\n'
+          )
+
+          workflow = Path(".github/workflows/apply-graceful-translation-drain.yml")
+          workflow.unlink()
+          PY
+      - name: Commit patch
+        run: |
+          git config user.name "VoiceBridge Automation"
+          git config user.email "actions@users.noreply.github.com"
+          git add -A
+          git commit -m "Add graceful translation drain on stream stop"
+          git push origin HEAD:agent/graceful-translation-drain
