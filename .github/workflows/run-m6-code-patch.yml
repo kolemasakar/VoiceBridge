@@ -20,12 +20,20 @@ jobs:
 
       - name: Apply and commit patch
         run: |
+          changed=0
           if [ -f tools/apply_m6_queue_fix.py ]; then
             python3 tools/apply_m6_queue_fix.py
+            changed=1
+          fi
+          if [ -f tools/fix_m6_batch_separator.py ]; then
+            python3 tools/fix_m6_batch_separator.py
+            changed=1
+          fi
+          if [ "$changed" -eq 1 ]; then
             git config user.name github-actions[bot]
             git config user.email 41898282+github-actions[bot]@users.noreply.github.com
             git add src docs tools
-            git commit -m "Stabilize translation and TTS queues under rate limits"
+            git commit -m "Fix Milestone 6 queue stabilization implementation"
             git push origin HEAD:agent/milestone-6-queue-and-rate-limit-fix
           else
             echo "Patch already applied."
