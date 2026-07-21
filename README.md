@@ -36,9 +36,9 @@ Completed:
 Active:
 
 - Milestone 6 Ukrainian TTS and browser playback;
-- cloud service `0.5.0` automated validation and deployment;
-- browser extension `0.6.0` packaging and controlled live validation;
-- Ukrainian voice quality, playback ordering, volume control, and automatic ducking validation.
+- Azure Speech Ukrainian TTS integration and controlled live validation;
+- browser extension `0.6.1` playback, volume control, and automatic ducking validation;
+- sustained Ukrainian voice quality and queue stability testing.
 
 Active Phase 1 cloud endpoint:
 
@@ -52,7 +52,7 @@ YouTube tab audio
     -> VoiceBridge Cloud
     -> AssemblyAI English STT
     -> Gemini Ukrainian translation
-    -> Gemini Ukrainian TTS
+    -> Azure Speech Ukrainian TTS
     -> browser PCM playback
     -> automatic original-audio ducking
 ```
@@ -75,7 +75,8 @@ A production identity model must replace the shared token before public multi-us
 - [Cloud First ADR](docs/adr/ADR-001_CLOUD_FIRST_ARCHITECTURE.md)
 - [Streaming STT Provider ADR](docs/adr/ADR-005_PHASE_1_STREAMING_STT_PROVIDER.md)
 - [Translation Provider ADR](docs/adr/ADR-006_PHASE_1_TRANSLATION_PROVIDER.md)
-- [TTS Provider ADR](docs/adr/ADR-007_PHASE_1_TTS_PROVIDER.md)
+- [Initial TTS Provider ADR](docs/adr/ADR-007_PHASE_1_TTS_PROVIDER.md)
+- [Azure TTS Provider ADR](docs/adr/ADR-008_AZURE_TTS_PROVIDER.md)
 - [Functional Requirements](docs/requirements/09_FUNCTIONAL_REQUIREMENTS.md)
 - [System Design](docs/design/10_SYSTEM_DESIGN.md)
 - [Non-Functional Requirements](docs/requirements/11_NON_FUNCTIONAL_REQUIREMENTS.md)
