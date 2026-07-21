@@ -2,7 +2,7 @@
 
 Date: 2026-07-21
 
-Status: IMPLEMENTED; CONTROLLED LIVE TEST PENDING
+Status: IMPLEMENTED; AUTOMATED AND CONTROLLED LIVE VALIDATION PENDING
 
 ## Trigger
 
@@ -24,7 +24,7 @@ Cloud service `0.4.1` introduces a bounded graceful drain policy:
 
 ## Automated Validation
 
-Added coverage verifies:
+The 11-test cloud suite includes coverage that verifies:
 
 - accepted translations are delivered before `STREAM_COMPLETED`;
 - source segment identity and order remain unchanged;
@@ -40,4 +40,4 @@ Added coverage verifies:
 
 ## Next Step
 
-Deploy cloud service `0.4.1` and run a controlled one-to-two-minute live test. The expected result is equality between final English and Ukrainian segment counts after Stop when the queue drains within the bounded timeout.
+Complete automated validation, deploy cloud service `0.4.1`, and run a controlled one-to-two-minute live test. The expected result is equality between final English and Ukrainian segment counts after Stop when the queue drains within the bounded timeout.
