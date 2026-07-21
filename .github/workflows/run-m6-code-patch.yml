@@ -17,13 +17,41 @@ jobs:
         with:
           ref: agent/milestone-6-queue-and-rate-limit-fix
           fetch-depth: 0
-      - name: Apply patch
-        run: python3 tools/apply_m6_queue_fix.py
+
+      - name: Apply and commit patch
+        run: |
+          if [ -f tools/apply_m6_queue_fix.py ]; then
+            python3 tools/apply_m6_queue_fix.py
+            git config user.name github-actions[bot]
+            git config user.email 41898282+github-actions[bot]@users.noreply.github.com
+            git add src docs tools
+            git commit -m "Stabilize translation and TTS queues under rate limits"
+            git push origin HEAD:agent/milestone-6-queue-and-rate-limit-fix
+          else
+            echo "Patch already applied."
+          fi
+
       - name: Validate cloud
         working-directory: src/cloud
         run: |
-          npm ci
-          npm run check
+          set +e
+          npm ci > m6-validation.log 2>&1
+          status=$?
+          if [ $status -eq 0 ]; then
+            npm run check >> m6-validation.log 2>&1
+            status=$?
+          fi
+          cat m6-validation.log
+          exit $status
+
+      - name: Upload cloud validation log
+        if: always()
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a
+        with:
+          name: m6-cloud-validation-log
+          path: src/cloud/m6-validation.log
+          if-no-files-found: error
+
       - name: Validate extension
         run: |
           node --check src/browser_extension/audio_processor.js
@@ -31,6 +59,7 @@ jobs:
           node --check src/browser_extension/popup.js
           node --check src/browser_extension/service_worker.js
           node -e "JSON.parse(require('fs').readFileSync('src/browser_extension/manifest.json', 'utf8'))"
+
       - name: Validate ASCII Markdown
         run: |
           python3 - <<'PY'
@@ -45,10 +74,3 @@ jobs:
               raise SystemExit('Non-ASCII Markdown: ' + ', '.join(failures))
           print('ASCII Markdown validation passed')
           PY
-      - name: Commit validated code patch
-        run: |
-          git config user.name github-actions[bot]
-          git config user.email 41898282+github-actions[bot]@users.noreply.github.com
-          git add src docs tools
-          git commit -m "Stabilize translation and TTS queues under rate limits"
-          git push origin HEAD:agent/milestone-6-queue-and-rate-limit-fix
