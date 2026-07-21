@@ -502,9 +502,7 @@ export function attachStreamTransport(
       }
       const sourceSegmentIds = items.map((item) => item.segmentId);
       const batchSegmentId = sourceSegmentIds[0]!;
-      const combinedText = items.map((item) => item.text).join("
-
-");
+      const combinedText = items.map((item) => item.text).join("\n\n");
 
       const operation = async (): Promise<void> => {
         try {
