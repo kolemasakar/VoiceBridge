@@ -41,7 +41,9 @@ export interface TranslationProvider {
 export class TranslationProviderError extends Error {
   constructor(
     public readonly code: TranslationErrorCode,
-    message: string
+    message: string,
+    public readonly retryable = false,
+    public readonly retryAfterMs: number | null = null
   ) {
     super(message);
     this.name = "TranslationProviderError";
@@ -173,6 +175,22 @@ function parsedTranslation(value: string): string {
   return translation.trim().slice(0, MAX_TRANSLATION_CHARACTERS);
 }
 
+function retryAfterMilliseconds(response: Response): number | null {
+  const value = response.headers.get("retry-after")?.trim();
+  if (!value) {
+    return null;
+  }
+  const seconds = Number(value);
+  if (Number.isFinite(seconds) && seconds >= 0) {
+    return Math.min(120000, Math.round(seconds * 1000));
+  }
+  const timestamp = Date.parse(value);
+  if (!Number.isNaN(timestamp)) {
+    return Math.min(120000, Math.max(0, timestamp - Date.now()));
+  }
+  return null;
+}
+
 export class GeminiTranslationProvider implements TranslationProvider {
   readonly name = "gemini";
   readonly configured = true;
@@ -242,7 +260,17 @@ export class GeminiTranslationProvider implements TranslationProvider {
         if (response.status === 429) {
           throw new TranslationProviderError(
             "TRANSLATION_RATE_LIMITED",
-            "Translation provider quota or rate limit was reached."
+            "Translation provider quota or rate limit was reached.",
+            true,
+            retryAfterMilliseconds(response)
+          );
+        }
+        if ([500, 502, 503, 504].includes(response.status)) {
+          throw new TranslationProviderError(
+            "TRANSLATION_PROVIDER_FAILED",
+            `Translation provider is temporarily unavailable with HTTP ${response.status}.`,
+            true,
+            retryAfterMilliseconds(response)
           );
         }
         throw new TranslationProviderError(
@@ -278,12 +306,14 @@ export class GeminiTranslationProvider implements TranslationProvider {
           timedOut ? "TRANSLATION_TIMEOUT" : "TRANSLATION_PROVIDER_FAILED",
           timedOut
             ? "Translation provider request timed out."
-            : "Translation provider request was cancelled."
+            : "Translation provider request was cancelled.",
+          timedOut
         );
       }
       throw new TranslationProviderError(
         "TRANSLATION_PROVIDER_FAILED",
-        "Translation provider request failed."
+        "Translation provider request failed.",
+        true
       );
     } finally {
       clearTimeout(timeout);

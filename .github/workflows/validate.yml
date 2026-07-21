@@ -60,7 +60,7 @@ jobs:
           node --check src/browser_extension/service_worker.js
       - name: Validate browser manifest
         run: node -e "JSON.parse(require('fs').readFileSync('src/browser_extension/manifest.json', 'utf8'))"
-      - name: Package browser extension 0.6.0
+      - name: Package browser extension 0.6.1
         run: |
           rm -rf dist
           mkdir -p dist/extension
@@ -74,15 +74,15 @@ jobs:
           cp src/browser_extension/service_worker.js dist/extension/
           cp src/browser_extension/README.md dist/extension/
           cd dist
-          zip -r VoiceBridge_Extension_0.6.0.zip extension
-          sha256sum VoiceBridge_Extension_0.6.0.zip > VoiceBridge_Extension_0.6.0_SHA256.txt
-      - name: Upload browser extension 0.6.0
+          zip -r VoiceBridge_Extension_0.6.1.zip extension
+          sha256sum VoiceBridge_Extension_0.6.1.zip > VoiceBridge_Extension_0.6.1_SHA256.txt
+      - name: Upload browser extension 0.6.1
         uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a
         with:
-          name: VoiceBridge_Extension_0.6.0
+          name: VoiceBridge_Extension_0.6.1
           path: |
-            dist/VoiceBridge_Extension_0.6.0.zip
-            dist/VoiceBridge_Extension_0.6.0_SHA256.txt
+            dist/VoiceBridge_Extension_0.6.1.zip
+            dist/VoiceBridge_Extension_0.6.1_SHA256.txt
           if-no-files-found: error
 
   repository-docs:

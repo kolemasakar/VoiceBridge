@@ -22,21 +22,34 @@ const MAX_CONTROL_FRAME_BYTES = 8192;
 const MAX_UNACKED_FRAMES = 50;
 const ACK_EVERY_FRAMES = 10;
 const MAX_SERVER_BUFFERED_BYTES = 262144;
-const MAX_TRANSLATION_QUEUE = 20;
+const MAX_TRANSLATION_QUEUE = 60;
 const MAX_TRANSLATION_CONTEXT_SEGMENTS = 4;
 const MAX_TRANSLATION_CONTEXT_CHARACTERS = 3000;
 const MAX_TRANSLATION_SOURCE_CHARACTERS = 2000;
-const TRANSLATION_DRAIN_TIMEOUT_MS = 10000;
-const MAX_TTS_QUEUE = 20;
+const TRANSLATION_DRAIN_TIMEOUT_MS = 45000;
+const MAX_TTS_QUEUE = 60;
 const MAX_TTS_SOURCE_CHARACTERS = 4000;
 const TTS_AUDIO_CHUNK_BYTES = 12288;
-const TTS_DRAIN_TIMEOUT_MS = 30000;
+const TTS_DRAIN_TIMEOUT_MS = 60000;
+const TTS_BATCH_MAX_SEGMENTS = 3;
+const TTS_BATCH_MAX_CHARACTERS = 1200;
+const TTS_BATCH_WINDOW_MS = 2500;
+const TTS_MIN_REQUEST_INTERVAL_MS = 6000;
+const TRANSLATION_MAX_ATTEMPTS = 4;
+const TRANSLATION_RETRY_DELAYS_MS = [2000, 5000, 15000];
+const TTS_MAX_ATTEMPTS = 3;
+const TTS_RETRY_DELAYS_MS = [10000, 30000];
 
 interface ClientEvent {
   event_type: string;
   sequence?: number;
   occurred_at?: string;
   data?: Record<string, unknown>;
+}
+
+interface TtsQueueItem {
+  segmentId: string;
+  text: string;
 }
 
 interface StreamContext {
@@ -65,6 +78,8 @@ interface StreamContext {
   translationErrors: number;
   translationLatencyTotalMs: number;
   translationLatencyMaximumMs: number;
+  translationRetryCount: number;
+  translationBackoffUntil: number;
   ttsChain: Promise<void>;
   ttsPending: number;
   ttsAccepting: boolean;
@@ -78,6 +93,12 @@ interface StreamContext {
   ttsLatencyMaximumMs: number;
   ttsAudioBytes: number;
   ttsAudioDurationMs: number;
+  ttsBuffer: TtsQueueItem[];
+  ttsBatchTimer: NodeJS.Timeout | null;
+  ttsLastRequestAt: number;
+  ttsBackoffUntil: number;
+  ttsRetryCount: number;
+  ttsBatchCount: number;
 }
 
 function rejectUpgrade(socket: Duplex, statusCode: number, message: string): void {
@@ -164,6 +185,26 @@ function boundedTranslationContext(values: string[]): string[] {
   return result;
 }
 
+function delayWithAbort(milliseconds: number, signal: AbortSignal): Promise<void> {
+  if (milliseconds <= 0) {
+    return Promise.resolve();
+  }
+  if (signal.aborted) {
+    return Promise.reject(new Error("QUEUE_ABORTED"));
+  }
+  return new Promise<void>((resolve, reject) => {
+    const onAbort = () => {
+      clearTimeout(timer);
+      reject(new Error("QUEUE_ABORTED"));
+    };
+    const timer = setTimeout(() => {
+      signal.removeEventListener("abort", onAbort);
+      resolve();
+    }, milliseconds);
+    signal.addEventListener("abort", onAbort, { once: true });
+  });
+}
+
 function summary(context: StreamContext): Record<string, unknown> {
   const transcriptCount = context.partialTranscripts + context.finalTranscripts;
   return {
@@ -190,6 +231,7 @@ function summary(context: StreamContext): Record<string, unknown> {
     maximum_translation_latency_ms: context.finalTranslations > 0
       ? context.translationLatencyMaximumMs
       : null,
+    translation_retries: context.translationRetryCount,
     final_tts_segments: context.finalTtsSegments,
     tts_errors: context.ttsErrors,
     tts_pending_at_stop: context.ttsPendingAtStop,
@@ -201,7 +243,9 @@ function summary(context: StreamContext): Record<string, unknown> {
       : null,
     maximum_tts_latency_ms: context.finalTtsSegments > 0
       ? context.ttsLatencyMaximumMs
-      : null
+      : null,
+    tts_retries: context.ttsRetryCount,
+    tts_batches: context.ttsBatchCount
   };
 }
 
@@ -299,6 +343,8 @@ export function attachStreamTransport(
       translationErrors: 0,
       translationLatencyTotalMs: 0,
       translationLatencyMaximumMs: 0,
+      translationRetryCount: 0,
+      translationBackoffUntil: 0,
       ttsChain: Promise.resolve(),
       ttsPending: 0,
       ttsAccepting: true,
@@ -311,7 +357,13 @@ export function attachStreamTransport(
       ttsLatencyTotalMs: 0,
       ttsLatencyMaximumMs: 0,
       ttsAudioBytes: 0,
-      ttsAudioDurationMs: 0
+      ttsAudioDurationMs: 0,
+      ttsBuffer: [],
+      ttsBatchTimer: null,
+      ttsLastRequestAt: 0,
+      ttsBackoffUntil: 0,
+      ttsRetryCount: 0,
+      ttsBatchCount: 0
     };
     const correlationId = randomUUID();
 
@@ -409,42 +461,117 @@ export function attachStreamTransport(
       });
     };
 
-    const enqueueTts = (
-      segmentId: string,
-      translatedText: string
-    ): void => {
-      if (!ttsProvider.configured || !context.ttsAccepting) {
+    const scheduleTtsFlush = (): void => {
+      if (
+        context.ttsBatchTimer ||
+        context.ttsBuffer.length === 0 ||
+        !context.ttsAccepting
+      ) {
         return;
       }
-      if (context.ttsPending >= MAX_TTS_QUEUE) {
-        sendTtsError(
-          segmentId,
-          "TTS_QUEUE_FULL",
-          "TTS queue is full.",
-          true
-        );
-        return;
-      }
+      context.ttsBatchTimer = setTimeout(() => {
+        context.ttsBatchTimer = null;
+        flushTtsBuffer(true);
+      }, TTS_BATCH_WINDOW_MS);
+    };
 
-      context.ttsPending += 1;
-      sendEvent("TTS_STATUS", {
-        provider: ttsProvider.name,
-        voice: ttsVoice,
-        status: "ACTIVE",
-        pending: context.ttsPending
-      });
+    const takeTtsBatch = (): TtsQueueItem[] => {
+      const items: TtsQueueItem[] = [];
+      let characters = 0;
+      while (
+        context.ttsBuffer.length > 0 &&
+        items.length < TTS_BATCH_MAX_SEGMENTS
+      ) {
+        const next = context.ttsBuffer[0]!;
+        if (
+          items.length > 0 &&
+          characters + next.text.length > TTS_BATCH_MAX_CHARACTERS
+        ) {
+          break;
+        }
+        context.ttsBuffer.shift();
+        items.push(next);
+        characters += next.text.length;
+      }
+      return items;
+    };
+
+    const queueTtsBatch = (items: TtsQueueItem[]): void => {
+      if (items.length === 0) {
+        return;
+      }
+      const sourceSegmentIds = items.map((item) => item.segmentId);
+      const batchSegmentId = sourceSegmentIds[0]!;
+      const combinedText = items.map((item) => item.text).join("\n\n");
 
       const operation = async (): Promise<void> => {
         try {
-          const result = await ttsProvider.synthesize({
-            segmentId,
-            language: "uk",
-            text: translatedText.slice(0, MAX_TTS_SOURCE_CHARACTERS),
-            voice: ttsVoice,
-            requestedAt: new Date().toISOString(),
-            signal: context.ttsAbortController.signal
-          });
-          if (!context.ttsDelivering) {
+          let result: Awaited<ReturnType<TtsProvider["synthesize"]>> | null = null;
+          for (let attempt = 1; attempt <= TTS_MAX_ATTEMPTS; attempt += 1) {
+            const rateDelay = Math.max(
+              0,
+              context.ttsLastRequestAt + TTS_MIN_REQUEST_INTERVAL_MS - Date.now(),
+              context.ttsBackoffUntil - Date.now()
+            );
+            if (rateDelay > 0) {
+              sendEvent("TTS_STATUS", {
+                provider: ttsProvider.name,
+                voice: ttsVoice,
+                status: "BACKOFF",
+                pending: context.ttsPending,
+                buffered: context.ttsBuffer.length,
+                retry_in_ms: rateDelay,
+                retries: context.ttsRetryCount
+              });
+              await delayWithAbort(rateDelay, context.ttsAbortController.signal);
+            }
+            context.ttsLastRequestAt = Date.now();
+            try {
+              result = await ttsProvider.synthesize({
+                segmentId: batchSegmentId,
+                language: "uk",
+                text: combinedText.slice(0, MAX_TTS_SOURCE_CHARACTERS),
+                voice: ttsVoice,
+                requestedAt: new Date().toISOString(),
+                signal: context.ttsAbortController.signal
+              });
+              break;
+            } catch (error) {
+              const providerError = error instanceof TtsProviderError
+                ? error
+                : new TtsProviderError(
+                  "TTS_PROVIDER_FAILED",
+                  "TTS provider request failed.",
+                  true
+                );
+              if (!providerError.retryable || attempt >= TTS_MAX_ATTEMPTS) {
+                throw providerError;
+              }
+              context.ttsRetryCount += 1;
+              const fallback = TTS_RETRY_DELAYS_MS[
+                Math.min(attempt - 1, TTS_RETRY_DELAYS_MS.length - 1)
+              ]!;
+              const retryDelay = Math.max(
+                fallback,
+                providerError.retryAfterMs || 0
+              );
+              context.ttsBackoffUntil = Date.now() + retryDelay;
+              sendEvent("TTS_STATUS", {
+                provider: ttsProvider.name,
+                voice: ttsVoice,
+                status: providerError.code === "TTS_RATE_LIMITED"
+                  ? "RATE_LIMITED"
+                  : "BACKOFF",
+                pending: context.ttsPending,
+                buffered: context.ttsBuffer.length,
+                retry_in_ms: retryDelay,
+                attempt,
+                retries: context.ttsRetryCount
+              });
+            }
+          }
+
+          if (!result || !context.ttsDelivering) {
             return;
           }
 
@@ -453,6 +580,8 @@ export function attachStreamTransport(
           );
           await sendEventAsync("TTS_AUDIO_START", {
             segment_id: result.segmentId,
+            source_segment_ids: sourceSegmentIds,
+            source_segment_count: items.length,
             provider: result.provider,
             voice: result.voice,
             audio_format: result.audioFormat,
@@ -484,6 +613,8 @@ export function attachStreamTransport(
 
           await sendEventAsync("TTS_AUDIO_END", {
             segment_id: result.segmentId,
+            source_segment_ids: sourceSegmentIds,
+            source_segment_count: items.length,
             provider: result.provider,
             voice: result.voice,
             audio_duration_ms: result.audioDurationMs,
@@ -491,7 +622,8 @@ export function attachStreamTransport(
             tts_latency_ms: result.ttsLatencyMs
           });
 
-          context.finalTtsSegments += 1;
+          context.finalTtsSegments += items.length;
+          context.ttsBatchCount += 1;
           context.ttsLatencyTotalMs += result.ttsLatencyMs;
           context.ttsLatencyMaximumMs = Math.max(
             context.ttsLatencyMaximumMs,
@@ -510,20 +642,21 @@ export function attachStreamTransport(
               "TTS provider request failed."
             );
           sendTtsError(
-            segmentId,
+            batchSegmentId,
             providerError.code,
             providerError.message,
-            providerError.code === "TTS_TIMEOUT" ||
-              providerError.code === "TTS_RATE_LIMITED"
+            providerError.retryable
           );
         } finally {
-          context.ttsPending = Math.max(0, context.ttsPending - 1);
+          context.ttsPending = Math.max(0, context.ttsPending - items.length);
           if (context.ttsPending === 0 && context.ttsAccepting) {
             sendEvent("TTS_STATUS", {
               provider: ttsProvider.name,
               voice: ttsVoice,
               status: "READY",
-              pending: 0
+              pending: 0,
+              buffered: 0,
+              retries: context.ttsRetryCount
             });
           }
         }
@@ -532,6 +665,65 @@ export function attachStreamTransport(
       context.ttsChain = context.ttsChain
         .then(operation)
         .catch(() => undefined);
+    };
+
+    const flushTtsBuffer = (forceAll = false): void => {
+      if (context.ttsBatchTimer) {
+        clearTimeout(context.ttsBatchTimer);
+        context.ttsBatchTimer = null;
+      }
+      while (context.ttsBuffer.length > 0) {
+        if (!forceAll && context.ttsBuffer.length < TTS_BATCH_MAX_SEGMENTS) {
+          scheduleTtsFlush();
+          return;
+        }
+        const items = takeTtsBatch();
+        queueTtsBatch(items);
+        if (!forceAll) {
+          break;
+        }
+      }
+      if (context.ttsBuffer.length > 0) {
+        scheduleTtsFlush();
+      }
+    };
+
+    const enqueueTts = (
+      segmentId: string,
+      translatedText: string
+    ): void => {
+      if (!ttsProvider.configured || !context.ttsAccepting) {
+        return;
+      }
+      if (context.ttsPending >= MAX_TTS_QUEUE) {
+        sendTtsError(
+          segmentId,
+          "TTS_QUEUE_FULL",
+          "TTS queue is full.",
+          true
+        );
+        return;
+      }
+
+      context.ttsPending += 1;
+      context.ttsBuffer.push({
+        segmentId,
+        text: translatedText.slice(0, TTS_BATCH_MAX_CHARACTERS)
+      });
+      sendEvent("TTS_STATUS", {
+        provider: ttsProvider.name,
+        voice: ttsVoice,
+        status: "QUEUED",
+        pending: context.ttsPending,
+        buffered: context.ttsBuffer.length,
+        retries: context.ttsRetryCount
+      });
+
+      if (context.ttsBuffer.length >= TTS_BATCH_MAX_SEGMENTS) {
+        flushTtsBuffer(false);
+      } else {
+        scheduleTtsFlush();
+      }
     };
 
     const enqueueTranslation = (
@@ -561,16 +753,80 @@ export function attachStreamTransport(
 
       const operation = async (): Promise<void> => {
         try {
-          const result = await translationProvider.translate({
-            segmentId,
-            sourceLanguage: "en",
-            targetLanguage: "uk",
-            sourceText: sourceText.slice(0, MAX_TRANSLATION_SOURCE_CHARACTERS),
-            context: boundedTranslationContext(previousContext),
-            requestedAt: new Date().toISOString(),
-            signal: context.translationAbortController.signal
-          });
-          if (!context.translationDelivering) {
+          let result: Awaited<ReturnType<TranslationProvider["translate"]>> | null = null;
+          for (
+            let attempt = 1;
+            attempt <= TRANSLATION_MAX_ATTEMPTS;
+            attempt += 1
+          ) {
+            const rateDelay = Math.max(
+              0,
+              context.translationBackoffUntil - Date.now()
+            );
+            if (rateDelay > 0) {
+              sendEvent("TRANSLATION_STATUS", {
+                provider: translationProvider.name,
+                status: "BACKOFF",
+                pending: context.translationPending,
+                retry_in_ms: rateDelay,
+                retries: context.translationRetryCount
+              });
+              await delayWithAbort(
+                rateDelay,
+                context.translationAbortController.signal
+              );
+            }
+            try {
+              result = await translationProvider.translate({
+                segmentId,
+                sourceLanguage: "en",
+                targetLanguage: "uk",
+                sourceText: sourceText.slice(0, MAX_TRANSLATION_SOURCE_CHARACTERS),
+                context: boundedTranslationContext(previousContext),
+                requestedAt: new Date().toISOString(),
+                signal: context.translationAbortController.signal
+              });
+              break;
+            } catch (error) {
+              const providerError = error instanceof TranslationProviderError
+                ? error
+                : new TranslationProviderError(
+                  "TRANSLATION_PROVIDER_FAILED",
+                  "Translation provider request failed.",
+                  true
+                );
+              if (
+                !providerError.retryable ||
+                attempt >= TRANSLATION_MAX_ATTEMPTS
+              ) {
+                throw providerError;
+              }
+              context.translationRetryCount += 1;
+              const fallback = TRANSLATION_RETRY_DELAYS_MS[
+                Math.min(
+                  attempt - 1,
+                  TRANSLATION_RETRY_DELAYS_MS.length - 1
+                )
+              ]!;
+              const retryDelay = Math.max(
+                fallback,
+                providerError.retryAfterMs || 0
+              );
+              context.translationBackoffUntil = Date.now() + retryDelay;
+              sendEvent("TRANSLATION_STATUS", {
+                provider: translationProvider.name,
+                status: providerError.code === "TRANSLATION_RATE_LIMITED"
+                  ? "RATE_LIMITED"
+                  : "BACKOFF",
+                pending: context.translationPending,
+                retry_in_ms: retryDelay,
+                attempt,
+                retries: context.translationRetryCount
+              });
+            }
+          }
+
+          if (!result || !context.translationDelivering) {
             return;
           }
           context.finalTranslations += 1;
@@ -601,8 +857,7 @@ export function attachStreamTransport(
             segmentId,
             providerError.code,
             providerError.message,
-            providerError.code === "TRANSLATION_TIMEOUT" ||
-              providerError.code === "TRANSLATION_RATE_LIMITED"
+            providerError.retryable
           );
         } finally {
           context.translationPending = Math.max(
@@ -667,6 +922,11 @@ export function attachStreamTransport(
     };
 
     const drainTts = async (): Promise<void> => {
+      if (context.ttsBatchTimer) {
+        clearTimeout(context.ttsBatchTimer);
+        context.ttsBatchTimer = null;
+      }
+      flushTtsBuffer(true);
       context.ttsPendingAtStop = context.ttsPending;
       if (context.ttsPending === 0) {
         return;
@@ -716,6 +976,7 @@ export function attachStreamTransport(
       translation_provider: translationProvider.name,
       translation_configured: translationProvider.configured,
       max_translation_queue: MAX_TRANSLATION_QUEUE,
+      translation_max_attempts: TRANSLATION_MAX_ATTEMPTS,
       translation_drain_timeout_ms: TRANSLATION_DRAIN_TIMEOUT_MS,
       tts_provider: ttsProvider.name,
       tts_configured: ttsProvider.configured,
@@ -724,6 +985,10 @@ export function attachStreamTransport(
       tts_sample_rate_hz: 24000,
       tts_channels: 1,
       max_tts_queue: MAX_TTS_QUEUE,
+      tts_batch_max_segments: TTS_BATCH_MAX_SEGMENTS,
+      tts_batch_window_ms: TTS_BATCH_WINDOW_MS,
+      tts_min_request_interval_ms: TTS_MIN_REQUEST_INTERVAL_MS,
+      tts_max_attempts: TTS_MAX_ATTEMPTS,
       tts_audio_chunk_bytes: TTS_AUDIO_CHUNK_BYTES,
       tts_drain_timeout_ms: TTS_DRAIN_TIMEOUT_MS
     });
@@ -950,6 +1215,10 @@ export function attachStreamTransport(
       context.translationAbortController.abort();
       context.ttsAccepting = false;
       context.ttsDelivering = false;
+      if (context.ttsBatchTimer) {
+        clearTimeout(context.ttsBatchTimer);
+        context.ttsBatchTimer = null;
+      }
       context.ttsAbortController.abort();
       if (!context.stopping) {
         context.stopping = true;

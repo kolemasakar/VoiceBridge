@@ -46,7 +46,9 @@ export interface TtsProvider {
 export class TtsProviderError extends Error {
   constructor(
     public readonly code: TtsErrorCode,
-    message: string
+    message: string,
+    public readonly retryable = false,
+    public readonly retryAfterMs: number | null = null
   ) {
     super(message);
     this.name = "TtsProviderError";
@@ -108,6 +110,7 @@ function synthesisPrompt(text: string): string {
   return [
     "Generate natural Ukrainian speech for the exact transcript below.",
     "Speak clearly at a conversational pace.",
+    "Keep the supplied paragraph order and use short natural pauses between paragraphs.",
     "Do not translate, explain, summarize, add words, or read these instructions.",
     "Transcript:",
     text
@@ -156,6 +159,22 @@ function audioDurationMs(audio: Buffer): number {
       (SAMPLE_RATE_HZ * CHANNELS * BYTES_PER_SAMPLE) *
       1000
   );
+}
+
+function retryAfterMilliseconds(response: Response): number | null {
+  const value = response.headers.get("retry-after")?.trim();
+  if (!value) {
+    return null;
+  }
+  const seconds = Number(value);
+  if (Number.isFinite(seconds) && seconds >= 0) {
+    return Math.min(180000, Math.round(seconds * 1000));
+  }
+  const timestamp = Date.parse(value);
+  if (!Number.isNaN(timestamp)) {
+    return Math.min(180000, Math.max(0, timestamp - Date.now()));
+  }
+  return null;
 }
 
 export class GeminiTtsProvider implements TtsProvider {
@@ -231,7 +250,17 @@ export class GeminiTtsProvider implements TtsProvider {
         if (response.status === 429) {
           throw new TtsProviderError(
             "TTS_RATE_LIMITED",
-            "TTS provider quota or rate limit was reached."
+            "TTS provider quota or rate limit was reached.",
+            true,
+            retryAfterMilliseconds(response)
+          );
+        }
+        if ([500, 502, 503, 504].includes(response.status)) {
+          throw new TtsProviderError(
+            "TTS_PROVIDER_FAILED",
+            `TTS provider is temporarily unavailable with HTTP ${response.status}.`,
+            true,
+            retryAfterMilliseconds(response)
           );
         }
         throw new TtsProviderError(
@@ -272,12 +301,14 @@ export class GeminiTtsProvider implements TtsProvider {
           timedOut ? "TTS_TIMEOUT" : "TTS_PROVIDER_FAILED",
           timedOut
             ? "TTS provider request timed out."
-            : "TTS provider request was cancelled."
+            : "TTS provider request was cancelled.",
+          timedOut
         );
       }
       throw new TtsProviderError(
         "TTS_PROVIDER_FAILED",
-        "TTS provider request failed."
+        "TTS provider request failed.",
+        true
       );
     } finally {
       clearTimeout(timeout);
