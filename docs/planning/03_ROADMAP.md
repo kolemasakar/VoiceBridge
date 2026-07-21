@@ -18,10 +18,10 @@ Status:
 Approved
 
 Version:
-1.2.0
+1.3.0
 
 Last Updated:
-2026-07-18
+2026-07-21
 
 ## Table of Contents
 
@@ -120,6 +120,38 @@ Validation criteria:
 - acceptable delay;
 - stable playback experience.
 
+Current milestone state:
+
+| Milestone | Capability | Status |
+|-----------|------------|--------|
+|1|Browser Capture Feasibility|Passed|
+|2|Cloud Skeleton|Passed|
+|3|Streaming Transport|Passed|
+|4|Streaming STT Integration|Passed|
+|5|English-to-Ukrainian Translation Integration|Active|
+|6|Ukrainian TTS and Browser Playback|Planned|
+|7|End-to-End Hardening and Demo Validation|Planned|
+
+Milestone 4 validated:
+
+- browser extension `0.4.1`;
+- cloud service `0.3.1`;
+- AssemblyAI Universal-Streaming English;
+- continuous live session longer than ten minutes;
+- readable ordered English partial and final transcripts;
+- bounded acknowledgement state;
+- zero dropped frames;
+- clean `IDLE`, `COMPLETED`, and `CLOSED` shutdown states.
+
+Milestone 5 entry objective:
+
+- select and approve the Phase 1 translation provider;
+- implement a provider-neutral English-to-Ukrainian translation adapter;
+- preserve final-segment identity and ordering;
+- define translation context and timeout policy;
+- expose translation latency, status, and sanitized errors;
+- validate understandable Ukrainian text before TTS integration.
+
 ## 5. Phase 2 Universal Cloud Audio Translation
 
 Goal:
@@ -186,11 +218,13 @@ A phase is completed only when:
 - 02_REPOSITORY_STRUCTURE.md
 - ../governance/15_REPOSITORY_RULES.md
 - ../governance/16_AI_DEVELOPMENT_RULES.md
+- ../phases/PHASE_1_MILESTONE_4_STT_INTEGRATION_VALIDATION.md
 
 ## 11. Version History
 
 | Version | Date | Description |
 |---------|------|-------------|
+|1.3.0|2026-07-21|Completed Milestone 4 live STT validation and activated Milestone 5 Translation Integration|
 |1.2.0|2026-07-18|Activated Phase 1 Cloud YouTube MVP planning and execution|
 |1.1.0|2026-07-18|Aligned roadmap with Cloud First architecture and simplified test authentication|
 |1.0.0|2026-07-18|Initial roadmap definition|

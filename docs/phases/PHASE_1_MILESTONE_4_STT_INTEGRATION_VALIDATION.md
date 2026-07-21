@@ -1,8 +1,8 @@
 # Phase 1 Milestone 4 STT Integration Validation
 
-Status: LIVE SMOKE VALIDATION PASSED; TEN-MINUTE ENDURANCE VALIDATION PENDING
+Status: PASSED
 
-Date: 2026-07-19
+Date: 2026-07-21
 
 ## Objective
 
@@ -64,9 +64,9 @@ Secret values MUST NOT be added to GitHub, the extension, screenshots, documenta
 
 No payment method is required for the Phase 1 AssemblyAI test environment. If free credit is exhausted, STT is expected to stop with a provider error. Phase 1 MUST NOT enable paid usage or automatic top-up.
 
-## Live Browser Smoke Validation
+## Initial Live Browser Smoke Validation
 
-Validated on 2026-07-19 against the Virginia deployment.
+The first live AssemblyAI browser test validated the complete streaming path before the endurance run.
 
 Observed evidence:
 
@@ -74,46 +74,84 @@ Observed evidence:
 - `Save and test` returned cloud state `READY`;
 - capture, audio stream, and STT reached `ACTIVE`;
 - STT provider displayed `assemblyai`;
-- partial English text appeared during speech;
-- final English text remained ordered and readable;
-- at least two final segments were recorded;
+- partial and final English text appeared;
 - observed recognition latency was 618 milliseconds;
 - sample rate was 48000 Hz;
-- channel metadata reported two source channels before mono STT processing;
-- final observed stream counters were 3661 frames and 7029120 bytes;
 - dropped frames remained zero;
-- final unacknowledged count was one;
-- no STT error was visible during the normal test;
-- Stop returned capture to `IDLE`;
-- cloud session and audio stream returned to `COMPLETED`;
-- STT returned to `CLOSED`;
-- no secret value was exposed in the recorded evidence.
+- Stop returned capture to `IDLE`, the cloud session and audio stream to `COMPLETED`, and STT to `CLOSED`.
 
 Result:
 
 LIVE SMOKE VALIDATION PASSED.
 
-## Remaining Exit Validation
+## Ten-Minute Live Endurance Validation
 
-The recorded 3661 nominal 20 millisecond frames represent approximately 73 seconds of audio. The existing Milestone 4 exit criterion requires at least ten minutes.
+A second continuous AssemblyAI transcription session was executed for more than ten minutes.
 
-Remaining checks:
+Active-state evidence recorded at 10 minutes 23 seconds:
 
-- run one continuous AssemblyAI transcription session for at least ten minutes;
-- confirm dropped frames remain zero or document any controlled loss;
-- confirm buffering remains bounded;
-- record transcript quality across the approved test set;
-- record AssemblyAI free-credit usage;
-- confirm clean Stop and zero secret exposure after the endurance run;
-- rotate the shared test token after the active test period.
+- capture state: `ACTIVE`;
+- cloud connection: `ACTIVE`;
+- audio stream: `ACTIVE`;
+- English transcript: `ACTIVE`;
+- STT provider: `assemblyai`;
+- frames sent: `31150`;
+- bytes sent: `59808000`;
+- dropped frames: `0`;
+- unacknowledged frames: `10`;
+- final transcript segments: `93`;
+- recognition latency: `857` milliseconds;
+- final English text remained ordered and readable;
+- no visible STT error occurred.
 
-## Exit Criterion
+Final evidence after Stop:
+
+- capture state: `IDLE`;
+- cloud connection: `COMPLETED`;
+- audio stream: `COMPLETED`;
+- English transcript: `CLOSED`;
+- provider remained `assemblyai`;
+- final frames sent: `32857`;
+- final bytes sent: `63085440`;
+- dropped frames: `0`;
+- final unacknowledged frames: `7`;
+- audio metadata was released;
+- Stop control became disabled;
+- no secret value was exposed in the recorded evidence.
+
+Result:
+
+TEN-MINUTE LIVE ENDURANCE VALIDATION PASSED.
+
+## Exit Criterion Assessment
+
+Exit criterion:
 
 Live English speech from a YouTube tab produces readable partial and final transcripts for at least ten minutes without unbounded buffering, payment configuration, or secret exposure.
 
+Assessment:
+
+- continuous runtime exceeded ten minutes;
+- English partial and final transcription remained active;
+- final text remained ordered and readable;
+- client acknowledgement count remained bounded;
+- dropped frames remained zero;
+- cloud, stream, STT, and browser resources closed cleanly;
+- provider secrets remained cloud-side;
+- no payment configuration or automatic top-up was enabled.
+
 Current result:
 
-SMOKE TEST PASSED. FULL MILESTONE EXIT PENDING TEN-MINUTE ENDURANCE VALIDATION.
+MILESTONE 4 PASSED.
+
+## Follow-Up Actions
+
+- activate Milestone 5 - English-to-Ukrainian Translation Integration;
+- evaluate and approve a translation provider;
+- preserve the provider-neutral cloud adapter boundary;
+- define segment ordering and translation-context policy;
+- rotate the shared test token before the next shared test period;
+- continue monitoring AssemblyAI free-credit usage.
 
 ## References
 
@@ -122,11 +160,13 @@ SMOKE TEST PASSED. FULL MILESTONE EXIT PENDING TEN-MINUTE ENDURANCE VALIDATION.
 - [PHASE_1_CLOUD_YOUTUBE_MVP](PHASE_1_CLOUD_YOUTUBE_MVP.md)
 - [Browser Extension README](../../src/browser_extension/README.md)
 - [Cloud README](../../src/cloud/README.md)
+- [Live Endurance History Record](../history/PHASE_1_MILESTONE_4_ENDURANCE_VALIDATION_2026-07-21.md)
 
 ## Version History
 
 | Version | Date | Description |
 |---------|------|-------------|
+| 0.4.0 | 2026-07-21 | Completed the ten-minute AssemblyAI endurance validation and passed Milestone 4 |
 | 0.3.0 | 2026-07-19 | Recorded the first live AssemblyAI browser smoke validation and retained the ten-minute endurance requirement |
 | 0.2.0 | 2026-07-19 | Replaced the initial STT adapter with AssemblyAI Free and preserved pending live validation |
 | 0.1.0 | 2026-07-19 | Recorded the provider-neutral STT implementation and pending live validation |
