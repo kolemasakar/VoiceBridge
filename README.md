@@ -31,13 +31,14 @@ Completed:
 - Milestone 1 browser capture feasibility validation;
 - Milestone 2 cloud skeleton deployment on Render;
 - Milestone 3 bounded browser-to-cloud audio streaming validation;
-- Milestone 4 AssemblyAI streaming STT implementation and live endurance validation.
+- Milestone 4 AssemblyAI streaming STT implementation and live endurance validation;
+- Milestone 5 provider selection and translation implementation.
 
 Active:
 
-- Milestone 5 English-to-Ukrainian Translation Integration;
-- translation-provider evaluation and approval;
-- provider-neutral translation adapter and context policy;
+- automated validation of cloud service `0.4.0` and browser extension `0.5.0`;
+- Render deployment of cloud service `0.4.0`;
+- controlled Gemini live validation after `GEMINI_API_KEY` is added;
 - test-token rotation before the next shared test period.
 
 Active Phase 1 cloud endpoint:
@@ -61,6 +62,7 @@ A production identity model must replace the shared test token before public mul
 - [Technology Stack](docs/architecture/05_TECHNOLOGY_STACK.md)
 - [Cloud First ADR](docs/adr/ADR-001_CLOUD_FIRST_ARCHITECTURE.md)
 - [Streaming STT Provider ADR](docs/adr/ADR-005_PHASE_1_STREAMING_STT_PROVIDER.md)
+- [Translation Provider ADR](docs/adr/ADR-006_PHASE_1_TRANSLATION_PROVIDER.md)
 - [Functional Requirements](docs/requirements/09_FUNCTIONAL_REQUIREMENTS.md)
 - [System Design](docs/design/10_SYSTEM_DESIGN.md)
 - [Non-Functional Requirements](docs/requirements/11_NON_FUNCTIONAL_REQUIREMENTS.md)
@@ -68,6 +70,7 @@ A production identity model must replace the shared test token before public mul
 - [API Design](docs/api/13_API_DESIGN.md)
 - [Phase 1 Cloud YouTube MVP Plan](docs/phases/PHASE_1_CLOUD_YOUTUBE_MVP.md)
 - [Milestone 4 STT Validation](docs/phases/PHASE_1_MILESTONE_4_STT_INTEGRATION_VALIDATION.md)
+- [Milestone 5 Translation Integration](docs/phases/PHASE_1_MILESTONE_5_TRANSLATION_INTEGRATION.md)
 - [Development Standard](docs/governance/06_DEVELOPMENT_STANDARD.md)
 - [Repository Rules](docs/governance/15_REPOSITORY_RULES.md)
 - [AI Development Rules](docs/governance/16_AI_DEVELOPMENT_RULES.md)
@@ -76,6 +79,8 @@ A production identity model must replace the shared test token before public mul
 ## Repository Structure
 
 ```text
+.github/
+    workflows/
 docs/
     adr/
     api/
