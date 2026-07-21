@@ -5,8 +5,8 @@ export interface AppConfig {
   assemblyAiApiKey: string | null;
   geminiApiKey: string | null;
   geminiTranslationModel: string;
-  geminiTtsModel: string;
-  geminiTtsVoice: string;
+  geminiTtsModel?: string;
+  geminiTtsVoice?: string;
   corsAllowedOrigin: string;
   maxRequestBodyBytes: number;
   rateLimitRequestsPerMinute: number;
