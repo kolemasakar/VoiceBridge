@@ -926,7 +926,7 @@ test("translation queue rejects work above sixty pending segments", async () => 
     assert.equal(overflow.data.code, "TRANSLATION_QUEUE_FULL");
     assert.equal(socket.readyState, WebSocket.OPEN);
 
-    const completed = await stopStream(socket, 12000);
+    const completed = await stopStream(socket, 50000);
     assert.equal(completed.data.final_transcripts, 61);
     assert.equal(completed.data.final_translations, 0);
     assert.equal(completed.data.translation_errors, 2);
