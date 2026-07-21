@@ -37,7 +37,7 @@ jobs:
           exit $status
       - name: Upload cloud validation log
         if: always()
-        uses: actions/upload-artifact@v7
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a
         with:
           name: cloud-validation-log
           path: src/cloud/validation.log
@@ -60,6 +60,30 @@ jobs:
           node --check src/browser_extension/service_worker.js
       - name: Validate browser manifest
         run: node -e "JSON.parse(require('fs').readFileSync('src/browser_extension/manifest.json', 'utf8'))"
+      - name: Package browser extension 0.5.0
+        run: |
+          rm -rf dist
+          mkdir -p dist/extension
+          cp src/browser_extension/audio_processor.js dist/extension/
+          cp src/browser_extension/manifest.json dist/extension/
+          cp src/browser_extension/offscreen.html dist/extension/
+          cp src/browser_extension/offscreen.js dist/extension/
+          cp src/browser_extension/popup.css dist/extension/
+          cp src/browser_extension/popup.html dist/extension/
+          cp src/browser_extension/popup.js dist/extension/
+          cp src/browser_extension/service_worker.js dist/extension/
+          cp src/browser_extension/README.md dist/extension/
+          cd dist
+          zip -r VoiceBridge_Extension_0.5.0.zip extension
+          sha256sum VoiceBridge_Extension_0.5.0.zip > VoiceBridge_Extension_0.5.0_SHA256.txt
+      - name: Upload browser extension 0.5.0
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a
+        with:
+          name: VoiceBridge_Extension_0.5.0
+          path: |
+            dist/VoiceBridge_Extension_0.5.0.zip
+            dist/VoiceBridge_Extension_0.5.0_SHA256.txt
+          if-no-files-found: error
 
   repository-docs:
     runs-on: ubuntu-latest
