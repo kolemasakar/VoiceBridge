@@ -133,16 +133,7 @@ function audioData(response: GeminiResponse): Buffer {
     );
   }
 
-  let audio: Buffer;
-  try {
-    audio = Buffer.from(inline.data, "base64");
-  } catch {
-    throw new TtsProviderError(
-      "TTS_INVALID_RESPONSE",
-      "TTS provider returned malformed audio data."
-    );
-  }
-
+  const audio = Buffer.from(inline.data, "base64");
   if (audio.byteLength === 0 || audio.byteLength > MAX_AUDIO_BYTES) {
     throw new TtsProviderError(
       "TTS_INVALID_RESPONSE",
@@ -306,8 +297,8 @@ export class GeminiTtsProvider implements TtsProvider {
 
 export function createTtsProvider(
   apiKey: string | null,
-  model: string,
-  voice: string
+  model = "gemini-2.5-flash-preview-tts",
+  voice = "Iapetus"
 ): TtsProvider {
   return apiKey
     ? new GeminiTtsProvider(apiKey, model, voice)
