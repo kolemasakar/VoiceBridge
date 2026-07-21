@@ -10,7 +10,7 @@ function sessionRequestBody() {
     runtime_mode: "YOUTUBE_MVP",
     input_type: "BROWSER_AUDIO",
     output_type: "BROWSER_PLAYBACK",
-    provider_preferences: { recognition: "assemblyai", translation: null, synthesis: null },
+    provider_preferences: { recognition: "assemblyai", translation: "gemini", synthesis: null },
     voice: { voice_id: null, speaking_rate: null }
   };
 }
