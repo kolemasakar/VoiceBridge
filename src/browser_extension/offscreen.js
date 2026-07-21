@@ -3,16 +3,25 @@ let audioContext = null;
 let sourceNode = null;
 let analyserNode = null;
 let originalGainNode = null;
+let ukrainianGainNode = null;
 let audioProcessorNode = null;
 let streamSinkGainNode = null;
 let metricsTimer = null;
-let duckingTimer = null;
+let manualDuckingTimer = null;
+let playbackReleaseTimer = null;
 let startedAt = null;
-let duckingActive = false;
+let manualDuckingActive = false;
+let playbackDuckingActive = false;
 let streamSocket = null;
 let streamCloseExpected = false;
+let playbackEndTime = 0;
+let currentTtsSegment = null;
+const activePlaybackSources = new Set();
 
 const MAX_CLIENT_BUFFERED_BYTES = 262144;
+const MAX_PLAYBACK_QUEUE_SECONDS = 45;
+const PLAYBACK_DRAIN_TIMEOUT_MS = 35000;
+const STREAM_STOP_TIMEOUT_MS = 45000;
 
 let currentConfig = {
   original_pause_volume: 0.5,
@@ -45,7 +54,18 @@ function initialStreamState() {
     translationError: null,
     translationFinalSegments: [],
     translationFinalCount: 0,
-    translationLatencyMs: null
+    translationLatencyMs: null,
+    ttsStatus: "OFFLINE",
+    ttsProvider: null,
+    ttsVoice: null,
+    ttsError: null,
+    ttsFinalCount: 0,
+    ttsLatencyMs: null,
+    ttsAudioBytes: 0,
+    ttsAudioDurationMs: 0,
+    playbackStatus: "IDLE",
+    playbackQueuedMs: 0,
+    playbackPlayedCount: 0
   };
 }
 
@@ -57,7 +77,17 @@ function finalTranslationText() {
   return streamState.translationFinalSegments.join(" ").slice(-12000);
 }
 
+function isDuckingActive() {
+  return manualDuckingActive || playbackDuckingActive;
+}
+
+function queuedPlaybackMs() {
+  if (!audioContext) return 0;
+  return Math.max(0, Math.round((playbackEndTime - audioContext.currentTime) * 1000));
+}
+
 function streamSnapshot() {
+  streamState.playbackQueuedMs = queuedPlaybackMs();
   return {
     stream_status: streamState.status,
     stream_frames_sent: streamState.framesSent,
@@ -79,7 +109,18 @@ function streamSnapshot() {
     translation_error: streamState.translationError,
     translation_final: finalTranslationText(),
     translation_final_count: streamState.translationFinalCount,
-    translation_latency_ms: streamState.translationLatencyMs
+    translation_latency_ms: streamState.translationLatencyMs,
+    tts_status: streamState.ttsStatus,
+    tts_provider: streamState.ttsProvider,
+    tts_voice: streamState.ttsVoice,
+    tts_error: streamState.ttsError,
+    tts_final_count: streamState.ttsFinalCount,
+    tts_latency_ms: streamState.ttsLatencyMs,
+    tts_audio_bytes: streamState.ttsAudioBytes,
+    tts_audio_duration_ms: streamState.ttsAudioDurationMs,
+    playback_status: streamState.playbackStatus,
+    playback_queued_ms: streamState.playbackQueuedMs,
+    playback_played_count: streamState.playbackPlayedCount
   };
 }
 
@@ -91,7 +132,7 @@ async function publishState(state) {
   });
 }
 
-function smoothGain(value) {
+function smoothOriginalGain(value) {
   if (!originalGainNode || !audioContext) return;
   const safeValue = Math.max(0, Math.min(1, Number(value)));
   originalGainNode.gain.cancelScheduledValues(audioContext.currentTime);
@@ -102,14 +143,37 @@ function smoothGain(value) {
   );
 }
 
+function smoothUkrainianGain(value) {
+  if (!ukrainianGainNode || !audioContext) return;
+  const safeValue = Math.max(0, Math.min(1, Number(value)));
+  ukrainianGainNode.gain.cancelScheduledValues(audioContext.currentTime);
+  ukrainianGainNode.gain.setTargetAtTime(
+    safeValue,
+    audioContext.currentTime,
+    0.05
+  );
+}
+
+function applyOriginalGain() {
+  smoothOriginalGain(
+    isDuckingActive()
+      ? currentConfig.original_duck_volume
+      : currentConfig.original_pause_volume
+  );
+}
+
 function stopMetrics() {
   if (metricsTimer) {
     clearInterval(metricsTimer);
     metricsTimer = null;
   }
-  if (duckingTimer) {
-    clearTimeout(duckingTimer);
-    duckingTimer = null;
+  if (manualDuckingTimer) {
+    clearTimeout(manualDuckingTimer);
+    manualDuckingTimer = null;
+  }
+  if (playbackReleaseTimer) {
+    clearTimeout(playbackReleaseTimer);
+    playbackReleaseTimer = null;
   }
 }
 
@@ -129,6 +193,128 @@ function requestMetricsPublish() {
   if (track) publishMetrics(track).catch(() => undefined);
 }
 
+function base64Bytes(value) {
+  const binary = atob(String(value || ""));
+  const bytes = new Uint8Array(binary.length);
+  for (let index = 0; index < binary.length; index += 1) {
+    bytes[index] = binary.charCodeAt(index);
+  }
+  return bytes;
+}
+
+function pcm16AudioBuffer(bytes, sampleRate) {
+  if (!audioContext || bytes.byteLength === 0 || bytes.byteLength % 2 !== 0) {
+    throw new Error("Invalid TTS PCM audio chunk.");
+  }
+  const sampleCount = bytes.byteLength / 2;
+  const buffer = audioContext.createBuffer(1, sampleCount, sampleRate);
+  const channel = buffer.getChannelData(0);
+  const view = new DataView(bytes.buffer, bytes.byteOffset, bytes.byteLength);
+  for (let index = 0; index < sampleCount; index += 1) {
+    channel[index] = view.getInt16(index * 2, true) / 32768;
+  }
+  return buffer;
+}
+
+function schedulePlaybackRelease() {
+  if (!audioContext) return;
+  if (playbackReleaseTimer) clearTimeout(playbackReleaseTimer);
+  const delayMs = Math.max(
+    50,
+    Math.ceil((playbackEndTime - audioContext.currentTime) * 1000) + 80
+  );
+  playbackReleaseTimer = setTimeout(() => {
+    playbackReleaseTimer = null;
+    if (!audioContext || playbackEndTime > audioContext.currentTime + 0.03) {
+      schedulePlaybackRelease();
+      return;
+    }
+    playbackDuckingActive = false;
+    streamState.playbackStatus = streamState.ttsStatus === "CLOSED"
+      ? "COMPLETED"
+      : "IDLE";
+    applyOriginalGain();
+    requestMetricsPublish();
+  }, delayMs);
+}
+
+function schedulePcmChunk(bytes, sampleRate) {
+  if (!audioContext || !ukrainianGainNode) {
+    throw new Error("Ukrainian playback is not initialized.");
+  }
+
+  const queuedSeconds = Math.max(0, playbackEndTime - audioContext.currentTime);
+  if (queuedSeconds > MAX_PLAYBACK_QUEUE_SECONDS) {
+    throw new Error("Ukrainian playback queue is full.");
+  }
+
+  const buffer = pcm16AudioBuffer(bytes, sampleRate);
+  const source = audioContext.createBufferSource();
+  source.buffer = buffer;
+  source.connect(ukrainianGainNode);
+  const startTime = Math.max(audioContext.currentTime + 0.03, playbackEndTime);
+  source.start(startTime);
+  playbackEndTime = startTime + buffer.duration;
+  activePlaybackSources.add(source);
+  source.onended = () => {
+    activePlaybackSources.delete(source);
+    if (
+      currentTtsSegment?.ended &&
+      activePlaybackSources.size === 0 &&
+      audioContext &&
+      playbackEndTime <= audioContext.currentTime + 0.05
+    ) {
+      streamState.playbackPlayedCount = Math.max(
+        streamState.playbackPlayedCount,
+        streamState.ttsFinalCount
+      );
+    }
+    requestMetricsPublish();
+  };
+
+  playbackDuckingActive = true;
+  streamState.playbackStatus = "PLAYING";
+  applyOriginalGain();
+  schedulePlaybackRelease();
+}
+
+function cancelPlayback() {
+  for (const source of activePlaybackSources) {
+    try {
+      source.stop();
+    } catch {
+      // The source may already be stopped.
+    }
+    source.disconnect();
+  }
+  activePlaybackSources.clear();
+  playbackEndTime = audioContext?.currentTime || 0;
+  currentTtsSegment = null;
+  playbackDuckingActive = false;
+  streamState.playbackStatus = "IDLE";
+  applyOriginalGain();
+}
+
+async function waitForPlaybackDrain(timeoutMs = PLAYBACK_DRAIN_TIMEOUT_MS) {
+  const deadline = Date.now() + timeoutMs;
+  while (
+    audioContext &&
+    (activePlaybackSources.size > 0 ||
+      playbackEndTime > audioContext.currentTime + 0.05)
+  ) {
+    if (Date.now() >= deadline) {
+      streamState.ttsError = "Ukrainian playback drain timed out.";
+      cancelPlayback();
+      return false;
+    }
+    await new Promise((resolve) => setTimeout(resolve, 50));
+  }
+  playbackDuckingActive = false;
+  streamState.playbackStatus = "COMPLETED";
+  applyOriginalGain();
+  return true;
+}
+
 function handleStreamEvent(event) {
   if (event.event_type === "STREAM_READY") {
     streamState.maxUnacknowledged =
@@ -140,6 +326,11 @@ function handleStreamEvent(event) {
     streamState.translationProvider =
       event.data?.translation_provider || null;
     streamState.translationStatus = event.data?.translation_configured
+      ? "READY"
+      : "NOT_CONFIGURED";
+    streamState.ttsProvider = event.data?.tts_provider || null;
+    streamState.ttsVoice = event.data?.tts_voice || null;
+    streamState.ttsStatus = event.data?.tts_configured
       ? "READY"
       : "NOT_CONFIGURED";
     return;
@@ -213,6 +404,74 @@ function handleStreamEvent(event) {
       event.data?.translation_latency_ms ?? streamState.translationLatencyMs;
   }
 
+  if (event.event_type === "TTS_STATUS") {
+    streamState.ttsProvider = event.data?.provider || streamState.ttsProvider;
+    streamState.ttsVoice = event.data?.voice || streamState.ttsVoice;
+    streamState.ttsStatus = event.data?.status || "UNKNOWN";
+    if (streamState.ttsStatus !== "ERROR") {
+      streamState.ttsError = null;
+    }
+  }
+
+  if (event.event_type === "TTS_ERROR") {
+    streamState.ttsProvider = event.data?.provider || streamState.ttsProvider;
+    streamState.ttsStatus = "ERROR";
+    streamState.ttsError = event.data?.message || "TTS failed.";
+  }
+
+  if (event.event_type === "TTS_AUDIO_START") {
+    currentTtsSegment = {
+      segmentId: event.data?.segment_id || null,
+      sampleRate: Number(event.data?.sample_rate_hz || 24000),
+      chunkCount: Number(event.data?.chunk_count || 0),
+      chunksReceived: 0,
+      ended: false
+    };
+    streamState.ttsProvider = event.data?.provider || streamState.ttsProvider;
+    streamState.ttsVoice = event.data?.voice || streamState.ttsVoice;
+    streamState.ttsStatus = "ACTIVE";
+    streamState.ttsLatencyMs =
+      event.data?.tts_latency_ms ?? streamState.ttsLatencyMs;
+    streamState.playbackStatus = "BUFFERING";
+  }
+
+  if (event.event_type === "TTS_AUDIO_CHUNK") {
+    if (
+      !currentTtsSegment ||
+      currentTtsSegment.segmentId !== event.data?.segment_id
+    ) {
+      streamState.ttsStatus = "ERROR";
+      streamState.ttsError = "TTS audio segment order is invalid.";
+    } else {
+      try {
+        const bytes = base64Bytes(event.data?.audio_base64);
+        schedulePcmChunk(bytes, currentTtsSegment.sampleRate);
+        currentTtsSegment.chunksReceived += 1;
+        streamState.ttsAudioBytes += bytes.byteLength;
+      } catch (error) {
+        streamState.ttsStatus = "ERROR";
+        streamState.ttsError = error.message;
+      }
+    }
+  }
+
+  if (event.event_type === "TTS_AUDIO_END") {
+    if (
+      currentTtsSegment &&
+      currentTtsSegment.segmentId === event.data?.segment_id
+    ) {
+      currentTtsSegment.ended = true;
+      streamState.ttsFinalCount += 1;
+      streamState.ttsAudioDurationMs += Number(
+        event.data?.audio_duration_ms || 0
+      );
+      streamState.ttsLatencyMs =
+        event.data?.tts_latency_ms ?? streamState.ttsLatencyMs;
+      streamState.ttsStatus = "ACTIVE";
+      streamState.playbackStatus = "PLAYING";
+    }
+  }
+
   if (event.event_type === "AUDIO_ACK") {
     streamState.framesAcknowledged = Math.max(
       streamState.framesAcknowledged,
@@ -243,13 +502,18 @@ function handleStreamEvent(event) {
         event.data?.average_translation_latency_ms ??
         streamState.translationLatencyMs;
     }
+    if (event.data?.average_tts_latency_ms !== null) {
+      streamState.ttsLatencyMs =
+        event.data?.average_tts_latency_ms ?? streamState.ttsLatencyMs;
+    }
   }
 
   if (
     typeof event.event_type === "string" &&
     (event.event_type.startsWith("STT_") ||
       event.event_type.startsWith("TRANSCRIPT_") ||
-      event.event_type.startsWith("TRANSLATION_"))
+      event.event_type.startsWith("TRANSLATION_") ||
+      event.event_type.startsWith("TTS_"))
   ) {
     requestMetricsPublish();
   }
@@ -341,6 +605,7 @@ function connectCloudStream(stream, sampleRate) {
       if (streamState.status === "ERROR" && !startedAt) return;
       streamState.status = "ERROR";
       streamState.error = "Audio stream disconnected: " + event.code + ".";
+      cancelPlayback();
       if (mediaStream) {
         const errorMessage = streamState.error;
         stopCapture("STREAM_DISCONNECTED")
@@ -405,7 +670,7 @@ async function closeCloudStream() {
       new Promise((resolve) => socket.addEventListener("close", resolve, {
         once: true
       })),
-      new Promise((resolve) => setTimeout(resolve, 5000))
+      new Promise((resolve) => setTimeout(resolve, STREAM_STOP_TIMEOUT_MS))
     ]);
   }
   if (
@@ -426,6 +691,7 @@ async function stopCapture(reason = "USER_STOP") {
   }
   streamSinkGainNode?.disconnect();
   await closeCloudStream();
+  await waitForPlaybackDrain();
 
   if (mediaStream) {
     for (const track of mediaStream.getTracks()) {
@@ -436,6 +702,7 @@ async function stopCapture(reason = "USER_STOP") {
   sourceNode?.disconnect();
   analyserNode?.disconnect();
   originalGainNode?.disconnect();
+  ukrainianGainNode?.disconnect();
   if (audioContext && audioContext.state !== "closed") {
     await audioContext.close();
   }
@@ -445,10 +712,15 @@ async function stopCapture(reason = "USER_STOP") {
   sourceNode = null;
   analyserNode = null;
   originalGainNode = null;
+  ukrainianGainNode = null;
   audioProcessorNode = null;
   streamSinkGainNode = null;
   startedAt = null;
-  duckingActive = false;
+  manualDuckingActive = false;
+  playbackDuckingActive = false;
+  playbackEndTime = 0;
+  currentTtsSegment = null;
+  activePlaybackSources.clear();
 
   await publishState({
     status: "IDLE",
@@ -487,10 +759,10 @@ async function publishMetrics(track) {
     rms: Number(level.rms.toFixed(4)),
     peak: Number(level.peak.toFixed(4)),
     original_volume: currentConfig.original_pause_volume,
-    effective_original_volume: duckingActive
+    effective_original_volume: isDuckingActive()
       ? currentConfig.original_duck_volume
       : currentConfig.original_pause_volume,
-    ducking_active: duckingActive,
+    ducking_active: isDuckingActive(),
     ukrainian_volume: currentConfig.ukrainian_volume,
     error: streamState.error,
     ...streamSnapshot()
@@ -522,6 +794,9 @@ async function startCapture(streamId, config, streamConfig) {
     analyserNode.fftSize = 2048;
     originalGainNode = audioContext.createGain();
     originalGainNode.gain.value = currentConfig.original_pause_volume;
+    ukrainianGainNode = audioContext.createGain();
+    ukrainianGainNode.gain.value = currentConfig.ukrainian_volume;
+    ukrainianGainNode.connect(audioContext.destination);
     audioProcessorNode = new AudioWorkletNode(
       audioContext,
       "voicebridge-capture-processor",
@@ -549,6 +824,7 @@ async function startCapture(streamId, config, streamConfig) {
       stopCapture("TRACK_ENDED").catch(() => undefined);
     };
 
+    playbackEndTime = audioContext.currentTime;
     await connectCloudStream(streamConfig, audioContext.sampleRate);
     startedAt = new Date().toISOString();
     await publishMetrics(audioTrack);
@@ -569,20 +845,21 @@ async function startCapture(streamId, config, streamConfig) {
 
 async function updateVolumes(data) {
   currentConfig = { ...currentConfig, ...data };
-  smoothGain(currentConfig.original_pause_volume);
+  applyOriginalGain();
+  smoothUkrainianGain(currentConfig.ukrainian_volume);
 }
 
 async function testDucking() {
   if (!originalGainNode) throw new Error("Capture is not active.");
-  if (duckingTimer) clearTimeout(duckingTimer);
-  duckingActive = true;
-  smoothGain(currentConfig.original_duck_volume);
+  if (manualDuckingTimer) clearTimeout(manualDuckingTimer);
+  manualDuckingActive = true;
+  applyOriginalGain();
   await publishMetrics(mediaStream.getAudioTracks()[0]);
-  duckingTimer = setTimeout(() => {
-    duckingActive = false;
-    smoothGain(currentConfig.original_pause_volume);
+  manualDuckingTimer = setTimeout(() => {
+    manualDuckingActive = false;
+    applyOriginalGain();
     publishMetrics(mediaStream.getAudioTracks()[0]).catch(() => undefined);
-    duckingTimer = null;
+    manualDuckingTimer = null;
   }, 3000);
 }
 
