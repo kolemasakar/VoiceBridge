@@ -24,7 +24,7 @@ import {
 } from "../src/translation_provider.js";
 
 const TOKEN = "voicebridge-test-token-123456789";
-const config: AppConfig = {
+const BASE_CONFIG: AppConfig = {
   host: "127.0.0.1",
   port: 0,
   testAccessToken: TOKEN,
@@ -47,13 +47,32 @@ interface RecordedTranslationRequest {
   context: string[];
 }
 
-class FakeSttConnection implements SttConnection {
+class ScriptedSttConnection implements SttConnection {
   private frames = 0;
 
-  constructor(private readonly observer: SttObserver) {}
+  constructor(
+    private readonly observer: SttObserver,
+    private readonly finalEveryFrame: boolean,
+    private readonly longText: boolean
+  ) {}
 
   sendAudio(_frame: Buffer): boolean {
     this.frames += 1;
+
+    if (this.finalEveryFrame) {
+      const suffix = this.longText ? " " + "x".repeat(900) : "";
+      this.observer.onTranscript({
+        text: `Segment ${this.frames}.${suffix}`,
+        isFinal: true,
+        speechFinal: true,
+        confidence: 0.95,
+        audioStartMs: (this.frames - 1) * 20,
+        audioDurationMs: 20,
+        recognitionLatencyMs: 50
+      });
+      return true;
+    }
+
     if (this.frames === 1) {
       this.observer.onTranscript({
         text: "Hello",
@@ -65,6 +84,7 @@ class FakeSttConnection implements SttConnection {
         recognitionLatencyMs: 80
       });
     }
+
     if (this.frames === 2) {
       this.observer.onTranscript({
         text: "Hello world.",
@@ -76,6 +96,7 @@ class FakeSttConnection implements SttConnection {
         recognitionLatencyMs: 120
       });
     }
+
     return true;
   }
 
@@ -84,59 +105,28 @@ class FakeSttConnection implements SttConnection {
   }
 }
 
-class FakeSttProvider implements SttProvider {
-  readonly name = "fake-stt";
+class ScriptedSttProvider implements SttProvider {
+  readonly name: string;
   readonly configured = true;
-
-  async connect(
-    _options: SttStreamOptions,
-    observer: SttObserver
-  ): Promise<SttConnection> {
-    observer.onStatus("READY");
-    return new FakeSttConnection(observer);
-  }
-}
-
-class FinalEveryFrameConnection implements SttConnection {
-  private frames = 0;
 
   constructor(
-    private readonly observer: SttObserver,
-    private readonly longText: boolean
-  ) {}
-
-  sendAudio(_frame: Buffer): boolean {
-    this.frames += 1;
-    const suffix = this.longText ? " " + "x".repeat(900) : "";
-    this.observer.onTranscript({
-      text: `Segment ${this.frames}.${suffix}`,
-      isFinal: true,
-      speechFinal: true,
-      confidence: 0.95,
-      audioStartMs: (this.frames - 1) * 20,
-      audioDurationMs: 20,
-      recognitionLatencyMs: 50
-    });
-    return true;
+    name = "fake-stt",
+    private readonly finalEveryFrame = false,
+    private readonly longText = false
+  ) {
+    this.name = name;
   }
-
-  async close(): Promise<void> {
-    this.observer.onStatus("CLOSED");
-  }
-}
-
-class FinalEveryFrameProvider implements SttProvider {
-  readonly name = "sequence-stt";
-  readonly configured = true;
-
-  constructor(private readonly longText = false) {}
 
   async connect(
     _options: SttStreamOptions,
     observer: SttObserver
   ): Promise<SttConnection> {
     observer.onStatus("READY");
-    return new FinalEveryFrameConnection(observer, this.longText);
+    return new ScriptedSttConnection(
+      observer,
+      this.finalEveryFrame,
+      this.longText
+    );
   }
 }
 
@@ -151,12 +141,14 @@ class FakeTranslationProvider implements TranslationProvider {
       sourceText: request.sourceText,
       context: [...request.context]
     });
+
     if (request.signal.aborted) {
       throw new TranslationProviderError(
         "TRANSLATION_PROVIDER_FAILED",
         "Translation request was cancelled."
       );
     }
+
     return {
       segmentId: request.segmentId,
       provider: this.name,
@@ -198,6 +190,7 @@ class BlockingTranslationProvider implements TranslationProvider {
         "Translation request was cancelled."
       );
     }
+
     return new Promise<TranslationResult>((_resolve, reject) => {
       request.signal.addEventListener("abort", () => {
         reject(new TranslationProviderError(
@@ -218,7 +211,10 @@ let primaryTranslation: FakeTranslationProvider;
 
 before(async () => {
   primaryTranslation = new FakeTranslationProvider();
-  primary = await startServer(new FakeSttProvider(), primaryTranslation);
+  primary = await startServer(
+    new ScriptedSttProvider(),
+    primaryTranslation
+  );
 });
 
 after(async () => {
@@ -230,15 +226,17 @@ async function startServer(
   translationProvider: TranslationProvider
 ): Promise<RunningServer> {
   const server = createVoiceBridgeServer(
-    config,
+    BASE_CONFIG,
     undefined,
     sttProvider,
     translationProvider
   );
+
   await new Promise<void>((resolve, reject) => {
     server.once("error", reject);
     server.listen(0, "127.0.0.1", () => resolve());
   });
+
   const address = server.address() as AddressInfo;
   return {
     server,
@@ -259,7 +257,9 @@ async function api(
   token: string | null = TOKEN
 ): Promise<Response> {
   const headers = new Headers(init.headers);
-  if (token) headers.set("authorization", `Bearer ${token}`);
+  if (token) {
+    headers.set("authorization", `Bearer ${token}`);
+  }
   return fetch(baseUrl + path, { ...init, headers });
 }
 
@@ -293,25 +293,33 @@ function nextSocketEvents(
       cleanup();
       reject(new Error(`Timed out waiting for ${expectedType}.`));
     }, 5000);
+
     const onMessage = (data: RawData, isBinary: boolean) => {
-      if (isBinary) return;
+      if (isBinary) {
+        return;
+      }
       const event = JSON.parse(data.toString()) as Record<string, any>;
-      if (event.event_type !== expectedType) return;
+      if (event.event_type !== expectedType) {
+        return;
+      }
       events.push(event);
       if (events.length >= count) {
         cleanup();
         resolve(events);
       }
     };
+
     const onError = (error: Error) => {
       cleanup();
       reject(error);
     };
+
     const cleanup = () => {
       clearTimeout(timer);
       socket.off("message", onMessage);
       socket.off("error", onError);
     };
+
     socket.on("message", onMessage);
     socket.on("error", onError);
   });
@@ -321,7 +329,7 @@ async function nextSocketEvent(
   socket: WebSocket,
   expectedType: string
 ): Promise<Record<string, any>> {
-  return (await nextSocketEvents(socket, expectedType, 1))[0] as Record<string, any>;
+  return (await nextSocketEvents(socket, expectedType, 1))[0]!;
 }
 
 function socketOpened(socket: WebSocket): Promise<void> {
@@ -349,6 +357,7 @@ async function createActiveSession(baseUrl: string): Promise<string> {
   });
   assert.equal(createdResponse.status, 201);
   const created = await createdResponse.json();
+
   const startedResponse = await api(
     baseUrl,
     `/api/v1/sessions/${created.session_id}/start`,
@@ -369,11 +378,13 @@ async function openStream(
   );
   assert.equal(ticketResponse.status, 201);
   const ticket = await ticketResponse.json();
+
   const socketUrl = baseUrl.replace(/^http/, "ws") + ticket.stream_path;
   const socket = new WebSocket(socketUrl, ticket.protocols);
   const readyPromise = nextSocketEvent(socket, "STREAM_READY");
   await socketOpened(socket);
   const ready = await readyPromise;
+
   const startedPromise = nextSocketEvent(socket, "STREAM_STARTED");
   socket.send(JSON.stringify({
     event_type: "STREAM_START",
@@ -387,6 +398,7 @@ async function openStream(
     }
   }));
   await startedPromise;
+
   return { socket, ready };
 }
 
@@ -447,15 +459,17 @@ test("health reports cloud 0.4.0 and translation capability", async () => {
   assert.equal(body.correlation_id, "test-correlation");
 });
 
-test("configuration keeps Gemini optional with a validated default model", () => {
+test("configuration keeps Gemini optional with a validated model", () => {
   assert.throws(
     () => loadConfig({ TEST_ACCESS_TOKEN: "short" }),
     /at least 16 characters/
   );
+
   const loaded = loadConfig({ TEST_ACCESS_TOKEN: TOKEN });
   assert.equal(loaded.assemblyAiApiKey, null);
   assert.equal(loaded.geminiApiKey, null);
   assert.equal(loaded.geminiTranslationModel, "gemini-3.1-flash-lite");
+
   assert.throws(
     () => loadConfig({
       TEST_ACCESS_TOKEN: TOKEN,
@@ -465,21 +479,29 @@ test("configuration keeps Gemini optional with a validated default model", () =>
   );
 });
 
-test("Gemini adapter sends structured request and maps translation", async () => {
-  let requestedUrl = "";
-  let requestedKey = "";
-  let requestedBody: Record<string, any> | null = null;
+test("Gemini adapter sends structured output request", async () => {
+  const requestedUrls: string[] = [];
+  const requestedKeys: string[] = [];
+  const requestedBodies: Array<Record<string, any>> = [];
+
   const fetchImpl = async (
     input: string | URL | Request,
     init?: RequestInit
   ): Promise<Response> => {
-    requestedUrl = String(input);
-    requestedKey = new Headers(init?.headers).get("x-goog-api-key") || "";
-    requestedBody = JSON.parse(String(init?.body)) as Record<string, any>;
+    requestedUrls.push(String(input));
+    requestedKeys.push(
+      new Headers(init?.headers).get("x-goog-api-key") || ""
+    );
+    requestedBodies.push(
+      JSON.parse(String(init?.body)) as Record<string, any>
+    );
+
     return new Response(JSON.stringify({
       candidates: [{
         content: {
-          parts: [{ text: JSON.stringify({ translation: "Pryvit, svite." }) }]
+          parts: [{
+            text: JSON.stringify({ translation: "Pryvit, svite." })
+          }]
         }
       }]
     }), {
@@ -487,6 +509,7 @@ test("Gemini adapter sends structured request and maps translation", async () =>
       headers: { "content-type": "application/json" }
     });
   };
+
   const provider = new GeminiTranslationProvider(
     "test-key",
     "test-model",
@@ -494,25 +517,29 @@ test("Gemini adapter sends structured request and maps translation", async () =>
     fetchImpl,
     1000
   );
+
   const result = await provider.translate(translationRequest());
   assert.equal(result.segmentId, "segment-1");
   assert.equal(result.provider, "gemini");
   assert.equal(result.translatedText, "Pryvit, svite.");
-  assert.match(requestedUrl, /test-model:generateContent$/);
-  assert.equal(requestedKey, "test-key");
+  assert.match(requestedUrls[0]!, /test-model:generateContent$/);
+  assert.equal(requestedKeys[0], "test-key");
+
+  const requestBody = requestedBodies[0]!;
   assert.equal(
-    requestedBody?.generationConfig?.responseMimeType,
+    requestBody.generationConfig.responseMimeType,
     "application/json"
   );
   assert.equal(
-    requestedBody?.generationConfig?.responseJsonSchema?.required?.[0],
+    requestBody.generationConfig.responseJsonSchema.required[0],
     "translation"
   );
+
   await provider.close();
 });
 
-test("Gemini adapter rejects malformed structured output", async () => {
-  const provider = new GeminiTranslationProvider(
+test("Gemini adapter maps malformed output, quota, and timeout", async () => {
+  const malformed = new GeminiTranslationProvider(
     "test-key",
     "test-model",
     "https://provider.test/v1beta/models",
@@ -521,15 +548,14 @@ test("Gemini adapter rejects malformed structured output", async () => {
     }), { status: 200 }),
     1000
   );
+
   await assert.rejects(
-    provider.translate(translationRequest()),
+    malformed.translate(translationRequest()),
     (error: unknown) =>
       error instanceof TranslationProviderError &&
       error.code === "TRANSLATION_INVALID_RESPONSE"
   );
-});
 
-test("Gemini adapter maps quota and timeout failures", async () => {
   const rateLimited = new GeminiTranslationProvider(
     "test-key",
     "test-model",
@@ -537,6 +563,7 @@ test("Gemini adapter maps quota and timeout failures", async () => {
     async () => new Response("", { status: 429 }),
     1000
   );
+
   await assert.rejects(
     rateLimited.translate(translationRequest()),
     (error: unknown) =>
@@ -557,6 +584,7 @@ test("Gemini adapter maps quota and timeout failures", async () => {
     }),
     10
   );
+
   await assert.rejects(
     timeoutProvider.translate(translationRequest()),
     (error: unknown) =>
@@ -565,14 +593,16 @@ test("Gemini adapter maps quota and timeout failures", async () => {
   );
 });
 
-test("AssemblyAI adapter still aggregates audio and returns final turns", async () => {
+test("AssemblyAI adapter still aggregates audio and finalizes turns", async () => {
   const providerServer = new WebSocketServer({ host: "127.0.0.1", port: 0 });
   await new Promise<void>((resolve, reject) => {
     providerServer.once("listening", resolve);
     providerServer.once("error", reject);
   });
+
   const address = providerServer.address() as AddressInfo;
   const binaryPackets: Buffer[] = [];
+
   providerServer.on("connection", (socket) => {
     socket.send(JSON.stringify({ type: "Begin", id: "test-session" }));
     socket.on("message", (data, isBinary) => {
@@ -587,8 +617,11 @@ test("AssemblyAI adapter still aggregates audio and returns final turns", async 
         }));
         return;
       }
+
       const message = JSON.parse(data.toString()) as { type?: string };
-      if (message.type === "Terminate") socket.close(1000);
+      if (message.type === "Terminate") {
+        socket.close(1000);
+      }
     });
   });
 
@@ -596,11 +629,13 @@ test("AssemblyAI adapter still aggregates audio and returns final turns", async 
     "assembly-test-key",
     `ws://127.0.0.1:${address.port}/v3/ws`
   );
+
   let finalText = "";
-  let resolveFinal: (() => void) | null = null;
+  let resolveFinal: (() => void) | undefined;
   const finalReceived = new Promise<void>((resolve) => {
     resolveFinal = resolve;
   });
+
   const connection = await provider.connect(
     { sampleRateHz: 48000, channels: 1, language: "en-US" },
     {
@@ -614,20 +649,23 @@ test("AssemblyAI adapter still aggregates audio and returns final turns", async 
       onError: (_code, message) => assert.fail(message)
     }
   );
+
   for (let frame = 0; frame < 5; frame += 1) {
     assert.equal(connection.sendAudio(Buffer.alloc(1920)), true);
   }
+
   await finalReceived;
   await connection.close();
   await new Promise<void>((resolve, reject) => {
     providerServer.close((error) => error ? reject(error) : resolve());
   });
+
   assert.equal(binaryPackets.length, 1);
   assert.equal(binaryPackets[0]?.byteLength, 9600);
   assert.equal(finalText, "Hello world.");
 });
 
-test("protected endpoint rejects missing and invalid tokens", async () => {
+test("authentication and session lifecycle remain stable", async () => {
   const missing = await api(
     primary.baseUrl,
     "/api/v1/sessions",
@@ -645,9 +683,7 @@ test("protected endpoint rejects missing and invalid tokens", async () => {
   );
   assert.equal(invalid.status, 401);
   assert.equal((await invalid.json()).error.code, "AUTHENTICATION_FAILED");
-});
 
-test("session lifecycle remains authenticated and idempotent", async () => {
   const createResponse = await api(primary.baseUrl, "/api/v1/sessions", {
     method: "POST",
     headers: { "content-type": "application/json" },
@@ -679,7 +715,7 @@ test("session lifecycle remains authenticated and idempotent", async () => {
   assert.equal((await stopped.json()).state, "COMPLETED");
 });
 
-test("final STT segment preserves identity through ordered translation", async () => {
+test("final STT identity is preserved through ordered translation", async () => {
   const sessionId = await createActiveSession(primary.baseUrl);
   const { socket, ready } = await openStream(primary.baseUrl, sessionId);
   assert.equal(ready.data.translation_provider, "fake-translation");
@@ -688,12 +724,14 @@ test("final STT segment preserves identity through ordered translation", async (
   const partialPromise = nextSocketEvent(socket, "TRANSCRIPT_PARTIAL");
   const finalPromise = nextSocketEvent(socket, "TRANSCRIPT_FINAL");
   const translationPromise = nextSocketEvent(socket, "TRANSLATION_FINAL");
+
   socket.send(Buffer.alloc(1920));
   socket.send(Buffer.alloc(1920));
 
   const partial = await partialPromise;
   const final = await finalPromise;
   const translation = await translationPromise;
+
   assert.equal(partial.data.text, "Hello");
   assert.equal(final.data.text, "Hello world.");
   assert.match(final.data.segment_id, /^[0-9a-f-]{36}$/);
@@ -707,24 +745,28 @@ test("final STT segment preserves identity through ordered translation", async (
   assert.equal(completed.data.translation_errors, 0);
 });
 
-test("translation failure does not stop STT or audio streaming", async () => {
+test("translation failure does not stop STT or streaming", async () => {
   const running = await startServer(
-    new FakeSttProvider(),
+    new ScriptedSttProvider(),
     new FailingTranslationProvider()
   );
+
   try {
     const sessionId = await createActiveSession(running.baseUrl);
     const { socket } = await openStream(running.baseUrl, sessionId);
     const finalPromise = nextSocketEvent(socket, "TRANSCRIPT_FINAL");
     const errorPromise = nextSocketEvent(socket, "TRANSLATION_ERROR");
+
     socket.send(Buffer.alloc(1920));
     socket.send(Buffer.alloc(1920));
+
     const final = await finalPromise;
     const error = await errorPromise;
     assert.equal(final.data.text, "Hello world.");
     assert.equal(error.data.segment_id, final.data.segment_id);
     assert.equal(error.data.code, "TRANSLATION_PROVIDER_REJECTED");
     assert.equal(socket.readyState, WebSocket.OPEN);
+
     const completed = await stopStream(socket);
     assert.equal(completed.data.final_transcripts, 1);
     assert.equal(completed.data.final_translations, 0);
@@ -737,17 +779,28 @@ test("translation failure does not stop STT or audio streaming", async () => {
 test("translation queue preserves order and bounds context", async () => {
   const translator = new FakeTranslationProvider();
   const running = await startServer(
-    new FinalEveryFrameProvider(true),
+    new ScriptedSttProvider("sequence-stt", true, true),
     translator
   );
+
   try {
     const sessionId = await createActiveSession(running.baseUrl);
     const { socket } = await openStream(running.baseUrl, sessionId);
-    const transcriptsPromise = nextSocketEvents(socket, "TRANSCRIPT_FINAL", 6);
-    const translationsPromise = nextSocketEvents(socket, "TRANSLATION_FINAL", 6);
+    const transcriptsPromise = nextSocketEvents(
+      socket,
+      "TRANSCRIPT_FINAL",
+      6
+    );
+    const translationsPromise = nextSocketEvents(
+      socket,
+      "TRANSLATION_FINAL",
+      6
+    );
+
     for (let index = 0; index < 6; index += 1) {
       socket.send(Buffer.alloc(1920));
     }
+
     const transcripts = await transcriptsPromise;
     const translations = await translationsPromise;
     assert.deepEqual(
@@ -755,9 +808,11 @@ test("translation queue preserves order and bounds context", async () => {
       transcripts.map((event) => event.data.segment_id)
     );
     assert.equal(translator.requests.length, 6);
+
     const lastContext = translator.requests[5]?.context || [];
     assert.ok(lastContext.length <= 4);
     assert.ok(lastContext.join("").length <= 3000);
+
     await stopStream(socket);
   } finally {
     await closeServer(running.server);
@@ -766,19 +821,23 @@ test("translation queue preserves order and bounds context", async () => {
 
 test("translation queue rejects work above twenty pending segments", async () => {
   const running = await startServer(
-    new FinalEveryFrameProvider(),
+    new ScriptedSttProvider("queue-stt", true),
     new BlockingTranslationProvider()
   );
+
   try {
     const sessionId = await createActiveSession(running.baseUrl);
     const { socket } = await openStream(running.baseUrl, sessionId);
     const overflowPromise = nextSocketEvent(socket, "TRANSLATION_ERROR");
+
     for (let index = 0; index < 21; index += 1) {
       socket.send(Buffer.alloc(1920));
     }
+
     const overflow = await overflowPromise;
     assert.equal(overflow.data.code, "TRANSLATION_QUEUE_FULL");
     assert.equal(socket.readyState, WebSocket.OPEN);
+
     const completed = await stopStream(socket);
     assert.equal(completed.data.final_transcripts, 21);
     assert.equal(completed.data.translation_errors, 1);
