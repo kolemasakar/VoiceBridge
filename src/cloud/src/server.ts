@@ -20,9 +20,13 @@ import {
   createTranslationProvider,
   type TranslationProvider
 } from "./translation_provider.js";
+import {
+  createTtsProvider,
+  type TtsProvider
+} from "./tts_provider.js";
 
 const SERVICE_NAME = "voicebridge-cloud";
-const SERVICE_VERSION = "0.4.2";
+const SERVICE_VERSION = "0.5.0";
 const SESSION_PATH = /^\/api\/v1\/sessions\/([A-Za-z0-9-]+)$/;
 const COMMAND_PATH =
   /^\/api\/v1\/sessions\/([A-Za-z0-9-]+)\/(start|pause|resume|stop)$/;
@@ -195,6 +199,11 @@ export function createVoiceBridgeServer(
   translationProvider: TranslationProvider = createTranslationProvider(
     config.geminiApiKey,
     config.geminiTranslationModel
+  ),
+  ttsProvider: TtsProvider = createTtsProvider(
+    config.geminiApiKey,
+    config.geminiTtsModel,
+    config.geminiTtsVoice
   )
 ) {
   const rateLimiter = new FixedWindowRateLimiter(
@@ -246,6 +255,15 @@ export function createVoiceBridgeServer(
               provider: translationProvider.name,
               configured: translationProvider.configured,
               model: config.geminiTranslationModel
+            },
+            tts: {
+              provider: ttsProvider.name,
+              configured: ttsProvider.configured,
+              model: config.geminiTtsModel,
+              voice: config.geminiTtsVoice,
+              audio_format: "pcm_s16le",
+              sample_rate_hz: 24000,
+              channels: 1
             }
           },
           request_id: context.requestId,
@@ -460,7 +478,9 @@ export function createVoiceBridgeServer(
     streamTickets,
     config.corsAllowedOrigin,
     sttProvider,
-    translationProvider
+    translationProvider,
+    ttsProvider,
+    config.geminiTtsVoice
   );
   return server;
 }
