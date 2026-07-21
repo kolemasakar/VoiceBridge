@@ -31,13 +31,14 @@ Completed:
 - Milestone 1 browser capture feasibility validation;
 - Milestone 2 cloud skeleton deployment on Render;
 - Milestone 3 bounded browser-to-cloud audio streaming validation;
-- Milestone 4 AssemblyAI implementation and first live browser smoke validation.
+- Milestone 4 AssemblyAI streaming STT implementation and live endurance validation.
 
 Active:
 
-- Milestone 4 ten-minute AssemblyAI endurance validation;
-- transcript quality and free-credit evidence recording;
-- test-token rotation after successful validation.
+- Milestone 5 English-to-Ukrainian Translation Integration;
+- translation-provider evaluation and approval;
+- provider-neutral translation adapter and context policy;
+- test-token rotation before the next shared test period.
 
 Active Phase 1 cloud endpoint:
 
