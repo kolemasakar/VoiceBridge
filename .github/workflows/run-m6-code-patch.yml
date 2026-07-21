@@ -1,0 +1,54 @@
+name: Run Milestone 6 code patch
+
+on:
+  push:
+    branches:
+      - agent/milestone-6-queue-and-rate-limit-fix
+
+permissions:
+  contents: write
+
+jobs:
+  patch:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout patch branch
+        uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803
+        with:
+          ref: agent/milestone-6-queue-and-rate-limit-fix
+          fetch-depth: 0
+      - name: Apply patch
+        run: python3 tools/apply_m6_queue_fix.py
+      - name: Validate cloud
+        working-directory: src/cloud
+        run: |
+          npm ci
+          npm run check
+      - name: Validate extension
+        run: |
+          node --check src/browser_extension/audio_processor.js
+          node --check src/browser_extension/offscreen.js
+          node --check src/browser_extension/popup.js
+          node --check src/browser_extension/service_worker.js
+          node -e "JSON.parse(require('fs').readFileSync('src/browser_extension/manifest.json', 'utf8'))"
+      - name: Validate ASCII Markdown
+        run: |
+          python3 - <<'PY'
+          from pathlib import Path
+          failures = []
+          for path in Path('.').rglob('*.md'):
+              try:
+                  path.read_text(encoding='ascii')
+              except UnicodeDecodeError:
+                  failures.append(str(path))
+          if failures:
+              raise SystemExit('Non-ASCII Markdown: ' + ', '.join(failures))
+          print('ASCII Markdown validation passed')
+          PY
+      - name: Commit validated code patch
+        run: |
+          git config user.name github-actions[bot]
+          git config user.email 41898282+github-actions[bot]@users.noreply.github.com
+          git add src docs tools
+          git commit -m "Stabilize translation and TTS queues under rate limits"
+          git push origin HEAD:agent/milestone-6-queue-and-rate-limit-fix
