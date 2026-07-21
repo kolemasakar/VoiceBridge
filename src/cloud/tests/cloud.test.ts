@@ -321,14 +321,15 @@ function validSessionRequest() {
 function nextSocketEvents(
   socket: WebSocket,
   expectedType: string,
-  count = 1
+  count = 1,
+  timeoutMs = 5000
 ): Promise<Array<Record<string, any>>> {
   return new Promise((resolve, reject) => {
     const events: Array<Record<string, any>> = [];
     const timer = setTimeout(() => {
       cleanup();
       reject(new Error(`Timed out waiting for ${expectedType}.`));
-    }, 5000);
+    }, timeoutMs);
 
     const onMessage = (data: RawData, isBinary: boolean) => {
       if (isBinary) {
@@ -363,9 +364,10 @@ function nextSocketEvents(
 
 async function nextSocketEvent(
   socket: WebSocket,
-  expectedType: string
+  expectedType: string,
+  timeoutMs = 5000
 ): Promise<Record<string, any>> {
-  return (await nextSocketEvents(socket, expectedType, 1))[0]!;
+  return (await nextSocketEvents(socket, expectedType, 1, timeoutMs))[0]!;
 }
 
 function socketOpened(socket: WebSocket): Promise<void> {
@@ -438,8 +440,15 @@ async function openStream(
   return { socket, ready };
 }
 
-async function stopStream(socket: WebSocket): Promise<Record<string, any>> {
-  const completedPromise = nextSocketEvent(socket, "STREAM_COMPLETED");
+async function stopStream(
+  socket: WebSocket,
+  timeoutMs = 5000
+): Promise<Record<string, any>> {
+  const completedPromise = nextSocketEvent(
+    socket,
+    "STREAM_COMPLETED",
+    timeoutMs
+  );
   socket.send(JSON.stringify({
     event_type: "STREAM_STOP",
     sequence: 2,
@@ -467,7 +476,7 @@ function translationRequest(
   };
 }
 
-test("health reports cloud 0.4.1 and translation capability", async () => {
+test("health reports cloud 0.4.2 and translation capability", async () => {
   const response = await api(
     primary.baseUrl,
     "/api/v1/health",
@@ -481,7 +490,7 @@ test("health reports cloud 0.4.1 and translation capability", async () => {
   );
   assert.equal(response.status, 200);
   const body = await response.json();
-  assert.equal(body.version, "0.4.1");
+  assert.equal(body.version, "0.4.2");
   assert.deepEqual(body.capabilities.stt, {
     provider: "fake-stt",
     configured: true
@@ -855,10 +864,10 @@ test("translation queue preserves order and bounds context", async () => {
   }
 });
 
-test("stream stop drains accepted translations before completion", async () => {
+test("stream stop drains a queue longer than three seconds", async () => {
   const running = await startServer(
     new ScriptedSttProvider("drain-stt", true),
-    new DelayedTranslationProvider(100)
+    new DelayedTranslationProvider(600)
   );
 
   try {
@@ -867,18 +876,20 @@ test("stream stop drains accepted translations before completion", async () => {
     const transcriptsPromise = nextSocketEvents(
       socket,
       "TRANSCRIPT_FINAL",
-      2
+      6
     );
     const translationsPromise = nextSocketEvents(
       socket,
       "TRANSLATION_FINAL",
-      2
+      6,
+      7000
     );
 
-    socket.send(Buffer.alloc(1920));
-    socket.send(Buffer.alloc(1920));
+    for (let index = 0; index < 6; index += 1) {
+      socket.send(Buffer.alloc(1920));
+    }
     const transcripts = await transcriptsPromise;
-    const completedPromise = stopStream(socket);
+    const completedPromise = stopStream(socket, 7000);
     const translations = await translationsPromise;
     const completed = await completedPromise;
 
@@ -886,8 +897,8 @@ test("stream stop drains accepted translations before completion", async () => {
       translations.map((event) => event.data.segment_id),
       transcripts.map((event) => event.data.segment_id)
     );
-    assert.equal(completed.data.final_transcripts, 2);
-    assert.equal(completed.data.final_translations, 2);
+    assert.equal(completed.data.final_transcripts, 6);
+    assert.equal(completed.data.final_translations, 6);
     assert.equal(completed.data.translation_errors, 0);
     assert.ok(completed.data.translation_pending_at_stop >= 1);
     assert.equal(completed.data.translation_drain_timed_out, false);
@@ -915,7 +926,7 @@ test("translation queue rejects work above twenty pending segments", async () =>
     assert.equal(overflow.data.code, "TRANSLATION_QUEUE_FULL");
     assert.equal(socket.readyState, WebSocket.OPEN);
 
-    const completed = await stopStream(socket);
+    const completed = await stopStream(socket, 12000);
     assert.equal(completed.data.final_transcripts, 21);
     assert.equal(completed.data.final_translations, 0);
     assert.equal(completed.data.translation_errors, 2);
