@@ -49,6 +49,7 @@ interface StreamContext {
   translationChain: Promise<void>;
   translationPending: number;
   translationAccepting: boolean;
+  translationAbortController: AbortController;
   recentFinalEnglish: string[];
   finalTranslations: number;
   translationErrors: number;
@@ -250,6 +251,7 @@ export function attachStreamTransport(
       translationChain: Promise.resolve(),
       translationPending: 0,
       translationAccepting: true,
+      translationAbortController: new AbortController(),
       recentFinalEnglish: [],
       finalTranslations: 0,
       translationErrors: 0,
@@ -331,8 +333,12 @@ export function attachStreamTransport(
             targetLanguage: "uk",
             sourceText: sourceText.slice(0, MAX_TRANSLATION_SOURCE_CHARACTERS),
             context: boundedTranslationContext(previousContext),
-            requestedAt: new Date().toISOString()
+            requestedAt: new Date().toISOString(),
+            signal: context.translationAbortController.signal
           });
+          if (!context.translationAccepting) {
+            return;
+          }
           context.finalTranslations += 1;
           context.translationLatencyTotalMs += result.translationLatencyMs;
           context.translationLatencyMaximumMs = Math.max(
@@ -347,6 +353,9 @@ export function attachStreamTransport(
             completed_at: result.completedAt
           });
         } catch (error) {
+          if (!context.translationAccepting) {
+            return;
+          }
           const providerError = error instanceof TranslationProviderError
             ? error
             : new TranslationProviderError(
@@ -365,10 +374,10 @@ export function attachStreamTransport(
             0,
             context.translationPending - 1
           );
-          if (context.translationPending === 0) {
+          if (context.translationPending === 0 && context.translationAccepting) {
             sendEvent("TRANSLATION_STATUS", {
               provider: translationProvider.name,
-              status: context.translationAccepting ? "READY" : "CLOSED",
+              status: "READY",
               pending: 0
             });
           }
@@ -560,6 +569,7 @@ export function attachStreamTransport(
         }
         context.stopping = true;
         context.translationAccepting = false;
+        context.translationAbortController.abort();
         await context.sttConnection?.close();
         await context.translationChain;
         sendEvent("TRANSLATION_STATUS", {
@@ -585,6 +595,7 @@ export function attachStreamTransport(
         activeSessions.delete(sessionId);
       }
       context.translationAccepting = false;
+      context.translationAbortController.abort();
       if (!context.stopping) {
         context.stopping = true;
         context.sttConnection?.close().catch(() => undefined);
