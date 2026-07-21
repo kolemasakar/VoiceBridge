@@ -20,6 +20,7 @@ export interface TranslationRequest {
   sourceText: string;
   context: string[];
   requestedAt: string;
+  signal: AbortSignal;
 }
 
 export interface TranslationResult {
@@ -137,7 +138,6 @@ function responseText(body: GeminiResponse): string {
   if (!Array.isArray(parts)) {
     return "";
   }
-
   return parts
     .map((part) => typeof part.text === "string" ? part.text : "")
     .join("")
@@ -177,6 +177,7 @@ export class GeminiTranslationProvider implements TranslationProvider {
   readonly name = "gemini";
   readonly configured = true;
   private closed = false;
+  private readonly activeControllers = new Set<AbortController>();
 
   constructor(
     private readonly apiKey: string,
@@ -196,7 +197,17 @@ export class GeminiTranslationProvider implements TranslationProvider {
 
     const startedAt = Date.now();
     const controller = new AbortController();
-    const timeout = setTimeout(() => controller.abort(), this.timeoutMs);
+    this.activeControllers.add(controller);
+    let timedOut = false;
+    const abortFromSession = () => controller.abort();
+    request.signal.addEventListener("abort", abortFromSession, { once: true });
+    if (request.signal.aborted) {
+      controller.abort();
+    }
+    const timeout = setTimeout(() => {
+      timedOut = true;
+      controller.abort();
+    }, this.timeoutMs);
     const endpoint = `${this.endpoint}/${encodeURIComponent(this.model)}:generateContent`;
 
     try {
@@ -264,8 +275,10 @@ export class GeminiTranslationProvider implements TranslationProvider {
       }
       if (error instanceof Error && error.name === "AbortError") {
         throw new TranslationProviderError(
-          "TRANSLATION_TIMEOUT",
-          "Translation provider request timed out."
+          timedOut ? "TRANSLATION_TIMEOUT" : "TRANSLATION_PROVIDER_FAILED",
+          timedOut
+            ? "Translation provider request timed out."
+            : "Translation provider request was cancelled."
         );
       }
       throw new TranslationProviderError(
@@ -274,11 +287,17 @@ export class GeminiTranslationProvider implements TranslationProvider {
       );
     } finally {
       clearTimeout(timeout);
+      request.signal.removeEventListener("abort", abortFromSession);
+      this.activeControllers.delete(controller);
     }
   }
 
   async close(): Promise<void> {
     this.closed = true;
+    for (const controller of this.activeControllers) {
+      controller.abort();
+    }
+    this.activeControllers.clear();
   }
 }
 
