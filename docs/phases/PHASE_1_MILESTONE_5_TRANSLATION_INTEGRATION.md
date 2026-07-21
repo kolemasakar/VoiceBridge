@@ -1,6 +1,6 @@
 # Phase 1 Milestone 5 Translation Integration
 
-Status: LIVE TRANSLATION PASSED; GRACEFUL DRAIN CONTROL TEST PENDING
+Status: LIVE TRANSLATION PASSED; FINAL DRAIN CONTROL TEST PENDING
 
 Date: 2026-07-21
 
@@ -96,7 +96,7 @@ Implemented cloud-to-browser events:
 - `TRANSLATION_FINAL`;
 - `TRANSLATION_ERROR`.
 
-`TRANSCRIPT_FINAL` now includes a cloud-generated `segment_id`.
+`TRANSCRIPT_FINAL` includes a cloud-generated `segment_id`.
 
 `TRANSLATION_FINAL` preserves that identifier and queue order.
 
@@ -115,13 +115,21 @@ Implemented policy:
 - limit one displayed translation to 4000 characters;
 - do not retry automatically during Phase 1;
 - translation failure does not stop audio streaming or STT;
-- cancel pending translation work during stream shutdown or disconnect.
+- close STT before draining the translation queue on Stop;
+- stop accepting new translation work after STT closes;
+- allow already accepted work up to 10000 milliseconds to complete;
+- cancel remaining work after the bounded drain timeout;
+- cancel immediately after an unexpected stream disconnect.
 
 ## Timeout and Error Policy
 
 Provider timeout:
 
 `15000` milliseconds.
+
+Graceful shutdown drain timeout:
+
+`10000` milliseconds.
 
 Implemented sanitized error categories:
 
@@ -131,11 +139,12 @@ Implemented sanitized error categories:
 - `TRANSLATION_INVALID_RESPONSE`;
 - `TRANSLATION_PROVIDER_REJECTED`;
 - `TRANSLATION_PROVIDER_FAILED`;
-- `TRANSLATION_QUEUE_FULL`.
+- `TRANSLATION_QUEUE_FULL`;
+- `TRANSLATION_DRAIN_TIMEOUT`.
 
 Errors do not include API keys, provider request bodies, raw provider responses, or transcript content.
 
-## Cloud Service 0.4.0
+## Cloud Service 0.4.2
 
 Implemented:
 
@@ -147,12 +156,14 @@ Implemented:
 - structured JSON response schema;
 - structured-output validation;
 - bounded source text and context;
-- 15-second timeout;
+- 15-second provider timeout;
 - rate-limit and rejection mapping;
 - per-session ordered translation queue;
 - segment identity preservation;
 - translation counts and latency summary metrics;
-- cancellation on Stop and disconnect;
+- ten-second graceful drain for accepted translations on Stop;
+- immediate cancellation on unexpected disconnect;
+- drain metrics in `STREAM_COMPLETED`;
 - health capability report for translation provider, configuration, and model;
 - no content persistence.
 
@@ -199,73 +210,71 @@ Implemented automated checks cover:
 - bounded four-segment and 3000-character context;
 - queue overflow above 20 pending operations;
 - translation failure without STT termination;
-- cancellation of pending work during shutdown.
+- graceful completion of a six-segment queue requiring more than three seconds;
+- bounded cancellation of a blocked queue after ten seconds.
 
 Default automated tests use fake providers and do not call the live Gemini API.
 
 ## Implementation Versions
 
-- cloud service: `0.4.1`;
+- cloud service: `0.4.2`;
 - browser extension: `0.5.0`.
 
 ## Deployment Configuration
 
-Current Render configuration may remain unchanged until live translation testing.
-
-Existing variables:
+Configured in Render:
 
 - `TEST_ACCESS_TOKEN`;
-- `ASSEMBLYAI_API_KEY`.
-
-Required later for live translation:
-
-- `GEMINI_API_KEY`.
-
-Optional:
-
+- `ASSEMBLYAI_API_KEY`;
+- `GEMINI_API_KEY`;
 - `GEMINI_TRANSLATION_MODEL=gemini-3.1-flash-lite`.
 
 The Gemini key must remain only in Render and must not be committed, sent to the browser, displayed in screenshots, or placed in logs.
 
-## Live Validation Result
+## Live Validation Results
 
-The controlled Gemini test passed on 2026-07-21:
+First controlled Gemini test:
 
 - active session duration: `08:01`;
 - final English segments: `92`;
-- final Ukrainian segments delivered before Stop: `90`;
+- final Ukrainian segments delivered: `90`;
 - dropped audio frames: `0`;
 - average recognition latency after Stop: `614 ms`;
 - average translation latency after Stop: `600 ms`;
 - readable ordered Ukrainian text;
 - clean `IDLE`, `COMPLETED`, and `CLOSED` states.
 
-The two-segment shutdown gap identified the need for graceful queue drain. Cloud service `0.4.1` waits up to 3000 milliseconds for already accepted translations before cancellation.
+This identified immediate cancellation of already accepted translations during shutdown.
+
+Second controlled test with cloud service `0.4.1`:
+
+- active counters reached English `15` and Ukrainian `15`;
+- final counters after Stop were English `32` and Ukrainian `26`;
+- dropped audio frames: `0`;
+- average translation latency: `627 ms`.
+
+The six-segment backlog required approximately 3.8 seconds at the observed latency, exceeding the 3000-millisecond drain bound. Cloud service `0.4.2` increases the bounded drain to 10000 milliseconds.
 
 ## Pending Control Validation
 
-Live validation requires:
+The final controlled test requires:
 
-- cloud service `0.4.0` deployed successfully;
-- extension `0.5.0` confirmed in Chrome;
-- `GEMINI_API_KEY` configured only in Render;
-- no billing account linked to the Phase 1 test project;
-- health reports Gemini translation as configured;
-- final English segments produce readable Ukrainian text;
-- segment order and identity are preserved;
-- translation latency remains visible;
-- provider errors remain empty during normal operation;
-- translation failure testing does not terminate STT;
-- Stop closes translation, STT, stream, and session cleanly;
-- no secret or persistent content is exposed.
+- cloud service `0.4.2` deployed successfully;
+- browser extension `0.5.0` unchanged;
+- a one-to-two-minute public YouTube session;
+- zero dropped audio frames;
+- readable ordered Ukrainian text;
+- equal final English and Ukrainian segment counts after Stop when the accepted queue drains within ten seconds;
+- clean `IDLE`, `COMPLETED`, and `CLOSED` states;
+- no secret or persistent content exposure.
 
 ## Exit Criterion
 
-Milestone 5 passes when controlled English YouTube speech produces understandable ordered Ukrainian text through the complete browser-to-cloud pipeline with bounded buffering, visible latency, clean shutdown, no payment configuration, and no secret or content persistence.
+Milestone 5 passes when controlled English YouTube speech produces understandable ordered Ukrainian text through the complete browser-to-cloud pipeline with bounded buffering, visible latency, complete accepted-queue shutdown, no payment configuration, and no secret or content persistence.
 
 Current result:
 
-IMPLEMENTATION COMPLETE. LIVE VALIDATION PENDING.
+LIVE TRANSLATION PASSED. FINAL DRAIN CONTROL TEST PENDING.
 
 ## References
 
@@ -280,5 +289,7 @@ IMPLEMENTATION COMPLETE. LIVE VALIDATION PENDING.
 
 | Version | Date | Description |
 |---------|------|-------------|
-| 0.2.0 | 2026-07-21 | Completed cloud 0.4.0 and extension 0.5.0 implementation; retained live Gemini validation gate |
-| 0.1.0 | 2026-07-21 | Approved the Phase 1 translation provider and defined implementation and validation contracts |
+| 0.4.0 | 2026-07-21 | Increased graceful drain to ten seconds after the second controlled validation |
+| 0.3.0 | 2026-07-21 | Added three-second graceful drain after the first controlled validation |
+| 0.2.0 | 2026-07-21 | Completed cloud 0.4.0 and extension 0.5.0 implementation |
+| 0.1.0 | 2026-07-21 | Approved the Phase 1 translation provider and defined implementation contracts |
