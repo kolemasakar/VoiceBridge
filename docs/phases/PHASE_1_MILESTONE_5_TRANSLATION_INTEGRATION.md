@@ -1,6 +1,6 @@
 # Phase 1 Milestone 5 Translation Integration
 
-Status: IMPLEMENTATION COMPLETE; LIVE VALIDATION PENDING
+Status: LIVE TRANSLATION PASSED; GRACEFUL DRAIN CONTROL TEST PENDING
 
 Date: 2026-07-21
 
@@ -205,7 +205,7 @@ Default automated tests use fake providers and do not call the live Gemini API.
 
 ## Implementation Versions
 
-- cloud service: `0.4.0`;
+- cloud service: `0.4.1`;
 - browser extension: `0.5.0`.
 
 ## Deployment Configuration
@@ -227,7 +227,22 @@ Optional:
 
 The Gemini key must remain only in Render and must not be committed, sent to the browser, displayed in screenshots, or placed in logs.
 
-## Pending Live Validation
+## Live Validation Result
+
+The controlled Gemini test passed on 2026-07-21:
+
+- active session duration: `08:01`;
+- final English segments: `92`;
+- final Ukrainian segments delivered before Stop: `90`;
+- dropped audio frames: `0`;
+- average recognition latency after Stop: `614 ms`;
+- average translation latency after Stop: `600 ms`;
+- readable ordered Ukrainian text;
+- clean `IDLE`, `COMPLETED`, and `CLOSED` states.
+
+The two-segment shutdown gap identified the need for graceful queue drain. Cloud service `0.4.1` waits up to 3000 milliseconds for already accepted translations before cancellation.
+
+## Pending Control Validation
 
 Live validation requires:
 
