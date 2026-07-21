@@ -19,9 +19,9 @@ jobs:
         working-directory: src/cloud
     steps:
       - name: Checkout
-        uses: actions/checkout@v6
+        uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803
       - name: Set up Node.js
-        uses: actions/setup-node@v6
+        uses: actions/setup-node@249970729cb0ef3589644e2896645e5dc5ba9c38
         with:
           node-version: "24"
           cache: npm
@@ -29,15 +29,27 @@ jobs:
       - name: Install cloud dependencies
         run: npm ci
       - name: Build and test cloud service
-        run: npm run check
+        run: |
+          set +e
+          npm run check > validation.log 2>&1
+          status=$?
+          cat validation.log
+          exit $status
+      - name: Upload cloud validation log
+        if: always()
+        uses: actions/upload-artifact@v7
+        with:
+          name: cloud-validation-log
+          path: src/cloud/validation.log
+          if-no-files-found: error
 
   browser-extension:
     runs-on: ubuntu-latest
     steps:
       - name: Checkout
-        uses: actions/checkout@v6
+        uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803
       - name: Set up Node.js
-        uses: actions/setup-node@v6
+        uses: actions/setup-node@249970729cb0ef3589644e2896645e5dc5ba9c38
         with:
           node-version: "24"
       - name: Validate browser JavaScript
@@ -53,7 +65,7 @@ jobs:
     runs-on: ubuntu-latest
     steps:
       - name: Checkout
-        uses: actions/checkout@v6
+        uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803
       - name: Validate Markdown ASCII
         run: |
           python3 - <<'PY'
