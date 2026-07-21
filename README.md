@@ -32,13 +32,13 @@ Completed:
 - Milestone 2 cloud skeleton deployment on Render;
 - Milestone 3 bounded browser-to-cloud audio streaming validation;
 - Milestone 4 AssemblyAI streaming STT implementation and live endurance validation;
-- Milestone 5 provider selection and translation implementation.
+- Milestone 5 provider selection, translation implementation, and live Gemini translation validation.
 
 Active:
 
-- automated validation of cloud service `0.4.0` and browser extension `0.5.0`;
-- Render deployment of cloud service `0.4.0`;
-- controlled Gemini live validation after `GEMINI_API_KEY` is added;
+- automated validation of cloud service `0.4.2` and browser extension `0.5.0`;
+- Render deployment of cloud service `0.4.2`;
+- final controlled validation of the ten-second graceful translation drain;
 - test-token rotation before the next shared test period.
 
 Active Phase 1 cloud endpoint:
