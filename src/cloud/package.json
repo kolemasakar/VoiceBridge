@@ -1,6 +1,6 @@
 {
   "name": "voicebridge-cloud",
-  "version": "0.5.2",
+  "version": "0.5.1",
   "private": true,
   "type": "module",
   "description": "VoiceBridge Phase 1 Cloud YouTube MVP service",
