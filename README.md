@@ -15,8 +15,8 @@ The initial product target is real-time English-to-Ukrainian AI voice translatio
 VoiceBridge uses a Cloud First architecture:
 
 - the browser is the primary client for Phases 1 through 4;
-- speech recognition, translation, speech synthesis, session orchestration, and authoritative state run in the cloud;
-- the user does not need a local programming environment;
+- speech recognition, translation, speech synthesis, orchestration, and authoritative state run in the cloud;
+- users do not need a local programming environment;
 - a minimal local VoiceBridge Agent may be introduced only later if browser or operating-system security prevents required system-audio capture.
 
 ## Current Status
@@ -25,33 +25,45 @@ Completed:
 
 - repository and documentation foundation;
 - governance, requirements, system design, and security baselines;
-- Cloud First architecture decision;
-- Cloud First API design baseline;
-- simplified test authentication model;
-- Milestone 1 browser capture feasibility validation;
-- Milestone 2 cloud skeleton deployment on Render;
-- Milestone 3 bounded browser-to-cloud audio streaming validation;
-- Milestone 4 AssemblyAI streaming STT implementation and live endurance validation;
-- Milestone 5 provider selection, translation implementation, and live Gemini translation validation.
+- Cloud First architecture and API baselines;
+- simplified test authentication;
+- Milestone 1 browser capture feasibility;
+- Milestone 2 cloud skeleton deployment;
+- Milestone 3 bounded browser-to-cloud audio streaming;
+- Milestone 4 AssemblyAI streaming STT and live endurance validation;
+- Milestone 5 Gemini English-to-Ukrainian translation and complete graceful shutdown validation.
 
 Active:
 
-- automated validation of cloud service `0.4.2` and browser extension `0.5.0`;
-- Render deployment of cloud service `0.4.2`;
-- final controlled validation of the ten-second graceful translation drain;
-- test-token rotation before the next shared test period.
+- Milestone 6 Ukrainian TTS and browser playback;
+- cloud service `0.5.0` automated validation and deployment;
+- browser extension `0.6.0` packaging and controlled live validation;
+- Ukrainian voice quality, playback ordering, volume control, and automatic ducking validation.
 
 Active Phase 1 cloud endpoint:
 
 `https://voicebridge-cloud-us.onrender.com`
 
+## Current Phase 1 Pipeline
+
+```text
+YouTube tab audio
+    -> VoiceBridge browser capture
+    -> VoiceBridge Cloud
+    -> AssemblyAI English STT
+    -> Gemini Ukrainian translation
+    -> Gemini Ukrainian TTS
+    -> browser PCM playback
+    -> automatic original-audio ducking
+```
+
 ## Test Authentication
 
 The test launch uses one shared revocable access token.
 
-The test model does not include user registration, passwords, account recovery, organizations, or persistent user profiles.
+The test model does not include registration, passwords, account recovery, organizations, or persistent user profiles.
 
-A production identity model must replace the shared test token before public multi-user deployment.
+A production identity model must replace the shared token before public multi-user deployment.
 
 ## Documentation
 
@@ -63,6 +75,7 @@ A production identity model must replace the shared test token before public mul
 - [Cloud First ADR](docs/adr/ADR-001_CLOUD_FIRST_ARCHITECTURE.md)
 - [Streaming STT Provider ADR](docs/adr/ADR-005_PHASE_1_STREAMING_STT_PROVIDER.md)
 - [Translation Provider ADR](docs/adr/ADR-006_PHASE_1_TRANSLATION_PROVIDER.md)
+- [TTS Provider ADR](docs/adr/ADR-007_PHASE_1_TTS_PROVIDER.md)
 - [Functional Requirements](docs/requirements/09_FUNCTIONAL_REQUIREMENTS.md)
 - [System Design](docs/design/10_SYSTEM_DESIGN.md)
 - [Non-Functional Requirements](docs/requirements/11_NON_FUNCTIONAL_REQUIREMENTS.md)
@@ -71,6 +84,7 @@ A production identity model must replace the shared test token before public mul
 - [Phase 1 Cloud YouTube MVP Plan](docs/phases/PHASE_1_CLOUD_YOUTUBE_MVP.md)
 - [Milestone 4 STT Validation](docs/phases/PHASE_1_MILESTONE_4_STT_INTEGRATION_VALIDATION.md)
 - [Milestone 5 Translation Integration](docs/phases/PHASE_1_MILESTONE_5_TRANSLATION_INTEGRATION.md)
+- [Milestone 6 TTS and Playback](docs/phases/PHASE_1_MILESTONE_6_TTS_PLAYBACK.md)
 - [Development Standard](docs/governance/06_DEVELOPMENT_STANDARD.md)
 - [Repository Rules](docs/governance/15_REPOSITORY_RULES.md)
 - [AI Development Rules](docs/governance/16_AI_DEVELOPMENT_RULES.md)
@@ -108,7 +122,7 @@ Contributors must follow the approved architecture, repository rules, developmen
 
 Significant architecture changes require an ADR.
 
-Secrets and provider credentials must never be committed to the repository.
+Secrets and provider credentials must never be committed.
 
 ## License
 
