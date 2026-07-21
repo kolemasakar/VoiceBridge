@@ -26,7 +26,7 @@ import {
 } from "./tts_provider.js";
 
 const SERVICE_NAME = "voicebridge-cloud";
-const SERVICE_VERSION = "0.5.1";
+const SERVICE_VERSION = "0.5.2";
 const SESSION_PATH = /^\/api\/v1\/sessions\/([A-Za-z0-9-]+)$/;
 const COMMAND_PATH =
   /^\/api\/v1\/sessions\/([A-Za-z0-9-]+)\/(start|pause|resume|stop)$/;
@@ -200,16 +200,29 @@ export function createVoiceBridgeServer(
     config.geminiApiKey,
     config.geminiTranslationModel
   ),
-  ttsProvider: TtsProvider = createTtsProvider(
-    config.geminiApiKey,
-    config.geminiTtsModel,
-    config.geminiTtsVoice
-  )
+  ttsProvider: TtsProvider = createTtsProvider({
+    provider: config.ttsProvider,
+    geminiApiKey: config.geminiApiKey,
+    geminiModel: config.geminiTtsModel,
+    geminiVoice: config.geminiTtsVoice,
+    azureSpeechKey: config.azureSpeechKey,
+    azureSpeechRegion: config.azureSpeechRegion,
+    azureVoice: config.azureTtsVoice
+  })
 ) {
   const rateLimiter = new FixedWindowRateLimiter(
     config.rateLimitRequestsPerMinute
   );
   const streamTickets = new StreamTicketStore();
+  const selectedTtsVoice = ttsProvider.name === "azure"
+    ? config.azureTtsVoice || "uk-UA-OstapNeural"
+    : config.geminiTtsVoice || "Iapetus";
+  const selectedTtsModel = ttsProvider.name === "azure"
+    ? null
+    : config.geminiTtsModel || "gemini-2.5-flash-preview-tts";
+  const selectedTtsRegion = ttsProvider.name === "azure"
+    ? config.azureSpeechRegion || "eastus"
+    : null;
 
   const server = createServer(async (request, response) => {
     const context = createRequestContext(request);
@@ -259,8 +272,9 @@ export function createVoiceBridgeServer(
             tts: {
               provider: ttsProvider.name,
               configured: ttsProvider.configured,
-              model: config.geminiTtsModel,
-              voice: config.geminiTtsVoice,
+              model: selectedTtsModel,
+              voice: selectedTtsVoice,
+              region: selectedTtsRegion,
               audio_format: "pcm_s16le",
               sample_rate_hz: 24000,
               channels: 1
@@ -480,7 +494,7 @@ export function createVoiceBridgeServer(
     sttProvider,
     translationProvider,
     ttsProvider,
-    config.geminiTtsVoice
+    selectedTtsVoice
   );
   return server;
 }
