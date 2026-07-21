@@ -5,6 +5,8 @@ export interface AppConfig {
   assemblyAiApiKey: string | null;
   geminiApiKey: string | null;
   geminiTranslationModel: string;
+  geminiTtsModel: string;
+  geminiTtsVoice: string;
   corsAllowedOrigin: string;
   maxRequestBodyBytes: number;
   rateLimitRequestsPerMinute: number;
@@ -30,14 +32,18 @@ function parseInteger(
   return parsed;
 }
 
-function parseModel(value: string | undefined): string {
-  const model = value || "gemini-3.1-flash-lite";
-  if (!/^[A-Za-z0-9._-]{1,100}$/.test(model)) {
+function parseIdentifier(
+  value: string | undefined,
+  fallback: string,
+  name: string
+): string {
+  const identifier = value || fallback;
+  if (!/^[A-Za-z0-9._-]{1,100}$/.test(identifier)) {
     throw new Error(
-      "GEMINI_TRANSLATION_MODEL must contain only letters, numbers, dots, underscores, or hyphens."
+      `${name} must contain only letters, numbers, dots, underscores, or hyphens.`
     );
   }
-  return model;
+  return identifier;
 }
 
 export function loadConfig(
@@ -56,7 +62,21 @@ export function loadConfig(
     testAccessToken,
     assemblyAiApiKey: environment.ASSEMBLYAI_API_KEY || null,
     geminiApiKey: environment.GEMINI_API_KEY || null,
-    geminiTranslationModel: parseModel(environment.GEMINI_TRANSLATION_MODEL),
+    geminiTranslationModel: parseIdentifier(
+      environment.GEMINI_TRANSLATION_MODEL,
+      "gemini-3.1-flash-lite",
+      "GEMINI_TRANSLATION_MODEL"
+    ),
+    geminiTtsModel: parseIdentifier(
+      environment.GEMINI_TTS_MODEL,
+      "gemini-2.5-flash-preview-tts",
+      "GEMINI_TTS_MODEL"
+    ),
+    geminiTtsVoice: parseIdentifier(
+      environment.GEMINI_TTS_VOICE,
+      "Iapetus",
+      "GEMINI_TTS_VOICE"
+    ),
     corsAllowedOrigin: environment.CORS_ALLOWED_ORIGIN || "*",
     maxRequestBodyBytes: parseInteger(
       environment.MAX_REQUEST_BODY_BYTES,
