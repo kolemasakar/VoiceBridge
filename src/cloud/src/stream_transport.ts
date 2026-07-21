@@ -24,6 +24,7 @@ const MAX_TRANSLATION_QUEUE = 20;
 const MAX_TRANSLATION_CONTEXT_SEGMENTS = 4;
 const MAX_TRANSLATION_CONTEXT_CHARACTERS = 3000;
 const MAX_TRANSLATION_SOURCE_CHARACTERS = 2000;
+const TRANSLATION_DRAIN_TIMEOUT_MS = 3000;
 
 interface ClientEvent {
   event_type: string;
@@ -49,7 +50,10 @@ interface StreamContext {
   translationChain: Promise<void>;
   translationPending: number;
   translationAccepting: boolean;
+  translationDelivering: boolean;
   translationAbortController: AbortController;
+  translationsPendingAtStop: number;
+  translationDrainTimedOut: boolean;
   recentFinalEnglish: string[];
   finalTranslations: number;
   translationErrors: number;
@@ -157,6 +161,8 @@ function summary(context: StreamContext): Record<string, unknown> {
       : null,
     final_translations: context.finalTranslations,
     translation_errors: context.translationErrors,
+    translation_pending_at_stop: context.translationsPendingAtStop,
+    translation_drain_timed_out: context.translationDrainTimedOut,
     average_translation_latency_ms: context.finalTranslations > 0
       ? Math.round(
         context.translationLatencyTotalMs / context.finalTranslations
@@ -251,7 +257,10 @@ export function attachStreamTransport(
       translationChain: Promise.resolve(),
       translationPending: 0,
       translationAccepting: true,
+      translationDelivering: true,
       translationAbortController: new AbortController(),
+      translationsPendingAtStop: 0,
+      translationDrainTimedOut: false,
       recentFinalEnglish: [],
       finalTranslations: 0,
       translationErrors: 0,
@@ -280,7 +289,7 @@ export function attachStreamTransport(
     };
 
     const sendTranslationError = (
-      segmentId: string,
+      segmentId: string | null,
       code: string,
       message: string,
       retryable: boolean
@@ -336,7 +345,7 @@ export function attachStreamTransport(
             requestedAt: new Date().toISOString(),
             signal: context.translationAbortController.signal
           });
-          if (!context.translationAccepting) {
+          if (!context.translationDelivering) {
             return;
           }
           context.finalTranslations += 1;
@@ -353,7 +362,7 @@ export function attachStreamTransport(
             completed_at: result.completedAt
           });
         } catch (error) {
-          if (!context.translationAccepting) {
+          if (!context.translationDelivering) {
             return;
           }
           const providerError = error instanceof TranslationProviderError
@@ -389,6 +398,48 @@ export function attachStreamTransport(
         .catch(() => undefined);
     };
 
+    const drainTranslations = async (): Promise<void> => {
+      context.translationsPendingAtStop = context.translationPending;
+      if (context.translationPending === 0) {
+        return;
+      }
+
+      sendEvent("TRANSLATION_STATUS", {
+        provider: translationProvider.name,
+        status: "DRAINING",
+        pending: context.translationPending
+      });
+
+      let timeout: NodeJS.Timeout | null = null;
+      const drained = await Promise.race([
+        context.translationChain.then(() => true),
+        new Promise<boolean>((resolve) => {
+          timeout = setTimeout(
+            () => resolve(false),
+            TRANSLATION_DRAIN_TIMEOUT_MS
+          );
+        })
+      ]);
+
+      if (timeout) {
+        clearTimeout(timeout);
+      }
+      if (drained) {
+        return;
+      }
+
+      context.translationDrainTimedOut = true;
+      context.translationDelivering = false;
+      context.translationAbortController.abort();
+      await context.translationChain;
+      sendTranslationError(
+        null,
+        "TRANSLATION_DRAIN_TIMEOUT",
+        "Translation queue did not drain before shutdown.",
+        false
+      );
+    };
+
     sendEvent("STREAM_READY", {
       protocol: BASE_PROTOCOL,
       max_binary_frame_bytes: MAX_BINARY_FRAME_BYTES,
@@ -398,7 +449,8 @@ export function attachStreamTransport(
       stt_configured: sttProvider.configured,
       translation_provider: translationProvider.name,
       translation_configured: translationProvider.configured,
-      max_translation_queue: MAX_TRANSLATION_QUEUE
+      max_translation_queue: MAX_TRANSLATION_QUEUE,
+      translation_drain_timeout_ms: TRANSLATION_DRAIN_TIMEOUT_MS
     });
 
     const handleTranscript = (transcript: SttTranscript): void => {
@@ -441,6 +493,9 @@ export function attachStreamTransport(
 
     webSocket.on("message", async (data, isBinary) => {
       if (isBinary) {
+        if (context.stopping) {
+          return;
+        }
         const frameBytes = rawDataLength(data);
         if (!context.started) {
           webSocket.close(1008, "stream.start is required");
@@ -568,14 +623,16 @@ export function attachStreamTransport(
           return;
         }
         context.stopping = true;
-        context.translationAccepting = false;
-        context.translationAbortController.abort();
+        context.started = false;
         await context.sttConnection?.close();
-        await context.translationChain;
+        context.translationAccepting = false;
+        await drainTranslations();
+        context.translationDelivering = false;
         sendEvent("TRANSLATION_STATUS", {
           provider: translationProvider.name,
           status: "CLOSED",
-          pending: context.translationPending
+          pending: context.translationPending,
+          drain_timed_out: context.translationDrainTimedOut
         });
         sendEvent("STREAM_COMPLETED", summary(context));
         webSocket.close(1000, "Stream completed");
@@ -595,6 +652,7 @@ export function attachStreamTransport(
         activeSessions.delete(sessionId);
       }
       context.translationAccepting = false;
+      context.translationDelivering = false;
       context.translationAbortController.abort();
       if (!context.stopping) {
         context.stopping = true;

@@ -4,7 +4,7 @@ Purpose:
 Provide the Phase 1 cloud API, bounded audio streaming, AssemblyAI STT, and ordered English-to-Ukrainian translation.
 
 Version:
-0.4.0
+0.4.1
 
 Status:
 Implementation complete; live Gemini validation pending.
@@ -27,6 +27,8 @@ Implementation complete; live Gemini validation pending.
 - provider-neutral cloud-side translation boundary;
 - Gemini English-to-Ukrainian translation adapter;
 - ordered bounded per-session translation queue;
+- graceful drain of already accepted translations for up to 3000 milliseconds on Stop;
+- cancellation after drain timeout or unexpected disconnect;
 - STT segment identity preserved in translation events;
 - bounded prior English context;
 - recognition and translation latency measurements;

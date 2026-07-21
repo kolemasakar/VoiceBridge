@@ -179,6 +179,42 @@ class FailingTranslationProvider implements TranslationProvider {
   }
 }
 
+class DelayedTranslationProvider implements TranslationProvider {
+  readonly name = "delayed-translation";
+  readonly configured = true;
+
+  constructor(private readonly delayMs = 100) {}
+
+  async translate(request: TranslationRequest): Promise<TranslationResult> {
+    await new Promise<void>((resolve, reject) => {
+      const onAbort = () => {
+        clearTimeout(timer);
+        reject(new TranslationProviderError(
+          "TRANSLATION_PROVIDER_FAILED",
+          "Translation request was cancelled."
+        ));
+      };
+      const timer = setTimeout(() => {
+        request.signal.removeEventListener("abort", onAbort);
+        resolve();
+      }, this.delayMs);
+      request.signal.addEventListener("abort", onAbort, { once: true });
+    });
+
+    return {
+      segmentId: request.segmentId,
+      provider: this.name,
+      translatedText: "Pereklad: " + request.sourceText.slice(0, 80),
+      translationLatencyMs: this.delayMs,
+      completedAt: new Date().toISOString()
+    };
+  }
+
+  async close(): Promise<void> {
+    return Promise.resolve();
+  }
+}
+
 class BlockingTranslationProvider implements TranslationProvider {
   readonly name = "blocking-translation";
   readonly configured = true;
@@ -431,7 +467,7 @@ function translationRequest(
   };
 }
 
-test("health reports cloud 0.4.0 and translation capability", async () => {
+test("health reports cloud 0.4.1 and translation capability", async () => {
   const response = await api(
     primary.baseUrl,
     "/api/v1/health",
@@ -445,7 +481,7 @@ test("health reports cloud 0.4.0 and translation capability", async () => {
   );
   assert.equal(response.status, 200);
   const body = await response.json();
-  assert.equal(body.version, "0.4.0");
+  assert.equal(body.version, "0.4.1");
   assert.deepEqual(body.capabilities.stt, {
     provider: "fake-stt",
     configured: true
@@ -819,6 +855,47 @@ test("translation queue preserves order and bounds context", async () => {
   }
 });
 
+test("stream stop drains accepted translations before completion", async () => {
+  const running = await startServer(
+    new ScriptedSttProvider("drain-stt", true),
+    new DelayedTranslationProvider(100)
+  );
+
+  try {
+    const sessionId = await createActiveSession(running.baseUrl);
+    const { socket } = await openStream(running.baseUrl, sessionId);
+    const transcriptsPromise = nextSocketEvents(
+      socket,
+      "TRANSCRIPT_FINAL",
+      2
+    );
+    const translationsPromise = nextSocketEvents(
+      socket,
+      "TRANSLATION_FINAL",
+      2
+    );
+
+    socket.send(Buffer.alloc(1920));
+    socket.send(Buffer.alloc(1920));
+    const transcripts = await transcriptsPromise;
+    const completedPromise = stopStream(socket);
+    const translations = await translationsPromise;
+    const completed = await completedPromise;
+
+    assert.deepEqual(
+      translations.map((event) => event.data.segment_id),
+      transcripts.map((event) => event.data.segment_id)
+    );
+    assert.equal(completed.data.final_transcripts, 2);
+    assert.equal(completed.data.final_translations, 2);
+    assert.equal(completed.data.translation_errors, 0);
+    assert.ok(completed.data.translation_pending_at_stop >= 1);
+    assert.equal(completed.data.translation_drain_timed_out, false);
+  } finally {
+    await closeServer(running.server);
+  }
+});
+
 test("translation queue rejects work above twenty pending segments", async () => {
   const running = await startServer(
     new ScriptedSttProvider("queue-stt", true),
@@ -840,7 +917,10 @@ test("translation queue rejects work above twenty pending segments", async () =>
 
     const completed = await stopStream(socket);
     assert.equal(completed.data.final_transcripts, 21);
-    assert.equal(completed.data.translation_errors, 1);
+    assert.equal(completed.data.final_translations, 0);
+    assert.equal(completed.data.translation_errors, 2);
+    assert.equal(completed.data.translation_pending_at_stop, 20);
+    assert.equal(completed.data.translation_drain_timed_out, true);
   } finally {
     await closeServer(running.server);
   }
