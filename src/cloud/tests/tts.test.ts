@@ -236,7 +236,8 @@ function nextEvents(
 }
 
 async function createAndOpenStream(
-  baseUrl: string
+  baseUrl: string,
+  expectedTtsProvider = "fake-tts"
 ): Promise<WebSocket> {
   const createdResponse = await api(baseUrl, "/api/v1/sessions", {
     method: "POST",
@@ -262,8 +263,8 @@ async function createAndOpenStream(
     socket.once("open", resolve);
     socket.once("error", reject);
   });
-  const [ready] = await readyPromise;
-  assert.equal(ready.data.tts_provider, "fake-tts");
+  const ready = (await readyPromise)[0]!;
+  assert.equal(ready.data.tts_provider, expectedTtsProvider);
   assert.equal(ready.data.tts_configured, true);
 
   const startedPromise = nextEvents(socket, "STREAM_STARTED");
@@ -338,10 +339,11 @@ test("Gemini TTS adapter requests audio and validates PCM", async () => {
   assert.equal(result.channels, 1);
   assert.equal(result.audio.byteLength, 48000);
   assert.equal(result.audioDurationMs, 1000);
-  assert.equal(requestBody?.generationConfig?.responseModalities?.[0], "AUDIO");
+  const sentBody = requestBody as Record<string, any>;
+  assert.equal(sentBody.generationConfig.responseModalities[0], "AUDIO");
   assert.equal(
-    requestBody?.generationConfig?.speechConfig?.voiceConfig
-      ?.prebuiltVoiceConfig?.voiceName,
+    sentBody.generationConfig.speechConfig.voiceConfig
+      .prebuiltVoiceConfig.voiceName,
     "Iapetus"
   );
 });
@@ -357,21 +359,21 @@ test("ordered translation produces bounded TTS audio events", async () => {
     const endPromise = nextEvents(socket, "TTS_AUDIO_END");
 
     socket.send(Buffer.alloc(1920));
-    const [translation] = await translationPromise;
-    const [audioStart] = await startPromise;
+    const translation = (await translationPromise)[0]!;
+    const audioStart = (await startPromise)[0]!;
     const chunks = await chunksPromise;
-    const [audioEnd] = await endPromise;
+    const audioEnd = (await endPromise)[0]!;
 
     assert.equal(audioStart.data.segment_id, translation.data.segment_id);
     assert.equal(audioStart.data.chunk_count, 2);
-    assert.equal(chunks[0].data.chunk_index, 0);
-    assert.equal(chunks[1].data.chunk_index, 1);
+    assert.equal(chunks[0]!.data.chunk_index, 0);
+    assert.equal(chunks[1]!.data.chunk_index, 1);
     assert.equal(audioEnd.data.segment_id, translation.data.segment_id);
     assert.equal(tts.requests[0]?.text, "Pryvit, svite.");
 
     const completedPromise = nextEvents(socket, "STREAM_COMPLETED");
     socket.send(JSON.stringify({ event_type: "STREAM_STOP", data: {} }));
-    const [completed] = await completedPromise;
+    const completed = (await completedPromise)[0]!;
     assert.equal(completed.data.final_translations, 1);
     assert.equal(completed.data.final_tts_segments, 1);
     assert.equal(completed.data.tts_errors, 0);
@@ -383,19 +385,22 @@ test("ordered translation produces bounded TTS audio events", async () => {
 test("TTS failure does not terminate STT or translation", async () => {
   const running = await startServer(new FailingTtsProvider());
   try {
-    const socket = await createAndOpenStream(running.baseUrl);
+    const socket = await createAndOpenStream(
+      running.baseUrl,
+      "failing-tts"
+    );
     const translationPromise = nextEvents(socket, "TRANSLATION_FINAL");
     const errorPromise = nextEvents(socket, "TTS_ERROR");
     socket.send(Buffer.alloc(1920));
-    const [translation] = await translationPromise;
-    const [error] = await errorPromise;
+    const translation = (await translationPromise)[0]!;
+    const error = (await errorPromise)[0]!;
     assert.equal(error.data.segment_id, translation.data.segment_id);
     assert.equal(error.data.code, "TTS_PROVIDER_REJECTED");
     assert.equal(socket.readyState, WebSocket.OPEN);
 
     const completedPromise = nextEvents(socket, "STREAM_COMPLETED");
     socket.send(JSON.stringify({ event_type: "STREAM_STOP", data: {} }));
-    const [completed] = await completedPromise;
+    const completed = (await completedPromise)[0]!;
     assert.equal(completed.data.final_translations, 1);
     assert.equal(completed.data.final_tts_segments, 0);
     assert.equal(completed.data.tts_errors, 1);

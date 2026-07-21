@@ -213,7 +213,7 @@ export function attachStreamTransport(
   sttProvider: SttProvider,
   translationProvider: TranslationProvider,
   ttsProvider: TtsProvider,
-  ttsVoice: string
+  ttsVoice = "Iapetus"
 ): void {
   const requestSessions = new WeakMap<IncomingMessage, string>();
   const activeSessions = new Map<string, WebSocket>();
