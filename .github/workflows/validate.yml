@@ -1,0 +1,70 @@
+name: Validate
+
+on:
+  pull_request:
+    branches:
+      - main
+  push:
+    branches:
+      - main
+
+permissions:
+  contents: read
+
+jobs:
+  cloud:
+    runs-on: ubuntu-latest
+    defaults:
+      run:
+        working-directory: src/cloud
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v6
+      - name: Set up Node.js
+        uses: actions/setup-node@v6
+        with:
+          node-version: "24"
+          cache: npm
+          cache-dependency-path: src/cloud/package-lock.json
+      - name: Install cloud dependencies
+        run: npm ci
+      - name: Build and test cloud service
+        run: npm run check
+
+  browser-extension:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v6
+      - name: Set up Node.js
+        uses: actions/setup-node@v6
+        with:
+          node-version: "24"
+      - name: Validate browser JavaScript
+        run: |
+          node --check src/browser_extension/audio_processor.js
+          node --check src/browser_extension/offscreen.js
+          node --check src/browser_extension/popup.js
+          node --check src/browser_extension/service_worker.js
+      - name: Validate browser manifest
+        run: node -e "JSON.parse(require('fs').readFileSync('src/browser_extension/manifest.json', 'utf8'))"
+
+  repository-docs:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v6
+      - name: Validate Markdown ASCII
+        run: |
+          python3 - <<'PY'
+          from pathlib import Path
+          failures = []
+          for path in Path('.').rglob('*.md'):
+              try:
+                  path.read_text(encoding='ascii')
+              except UnicodeDecodeError:
+                  failures.append(str(path))
+          if failures:
+              raise SystemExit('Non-ASCII Markdown: ' + ', '.join(failures))
+          print('ASCII Markdown validation passed')
+          PY
