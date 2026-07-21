@@ -1,0 +1,82 @@
+name: Validate
+
+on:
+  pull_request:
+    branches:
+      - main
+  push:
+    branches:
+      - main
+
+permissions:
+  contents: read
+
+jobs:
+  cloud:
+    runs-on: ubuntu-latest
+    defaults:
+      run:
+        working-directory: src/cloud
+    steps:
+      - name: Checkout
+        uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803
+      - name: Set up Node.js
+        uses: actions/setup-node@249970729cb0ef3589644e2896645e5dc5ba9c38
+        with:
+          node-version: "24"
+          cache: npm
+          cache-dependency-path: src/cloud/package-lock.json
+      - name: Install cloud dependencies
+        run: npm ci
+      - name: Build and test cloud service
+        run: |
+          set +e
+          npm run check > validation.log 2>&1
+          status=$?
+          cat validation.log
+          exit $status
+      - name: Upload cloud validation log
+        if: always()
+        uses: actions/upload-artifact@v7
+        with:
+          name: cloud-validation-log
+          path: src/cloud/validation.log
+          if-no-files-found: error
+
+  browser-extension:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803
+      - name: Set up Node.js
+        uses: actions/setup-node@249970729cb0ef3589644e2896645e5dc5ba9c38
+        with:
+          node-version: "24"
+      - name: Validate browser JavaScript
+        run: |
+          node --check src/browser_extension/audio_processor.js
+          node --check src/browser_extension/offscreen.js
+          node --check src/browser_extension/popup.js
+          node --check src/browser_extension/service_worker.js
+      - name: Validate browser manifest
+        run: node -e "JSON.parse(require('fs').readFileSync('src/browser_extension/manifest.json', 'utf8'))"
+
+  repository-docs:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803
+      - name: Validate Markdown ASCII
+        run: |
+          python3 - <<'PY'
+          from pathlib import Path
+          failures = []
+          for path in Path('.').rglob('*.md'):
+              try:
+                  path.read_text(encoding='ascii')
+              except UnicodeDecodeError:
+                  failures.append(str(path))
+          if failures:
+              raise SystemExit('Non-ASCII Markdown: ' + ', '.join(failures))
+          print('ASCII Markdown validation passed')
+          PY

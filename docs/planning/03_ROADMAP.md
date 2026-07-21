@@ -18,7 +18,7 @@ Status:
 Approved
 
 Version:
-1.3.0
+1.4.0
 
 Last Updated:
 2026-07-21
@@ -128,7 +128,7 @@ Current milestone state:
 |2|Cloud Skeleton|Passed|
 |3|Streaming Transport|Passed|
 |4|Streaming STT Integration|Passed|
-|5|English-to-Ukrainian Translation Integration|Active|
+|5|English-to-Ukrainian Translation Integration|Implementation complete; live validation pending|
 |6|Ukrainian TTS and Browser Playback|Planned|
 |7|End-to-End Hardening and Demo Validation|Planned|
 
@@ -143,14 +143,29 @@ Milestone 4 validated:
 - zero dropped frames;
 - clean `IDLE`, `COMPLETED`, and `CLOSED` shutdown states.
 
-Milestone 5 entry objective:
+Milestone 5 implemented:
 
-- select and approve the Phase 1 translation provider;
-- implement a provider-neutral English-to-Ukrainian translation adapter;
-- preserve final-segment identity and ordering;
-- define translation context and timeout policy;
-- expose translation latency, status, and sanitized errors;
-- validate understandable Ukrainian text before TTS integration.
+- Gemini Developer API selected behind a provider-neutral cloud boundary;
+- cloud service `0.4.0`;
+- browser extension `0.5.0`;
+- translation of final STT segments only;
+- final STT segment identity preserved through translation;
+- bounded sequential queue with a maximum of 20 pending operations;
+- context limited to four prior final segments and 3000 characters;
+- 15-second provider timeout;
+- visible translation status, provider, count, latency, and sanitized errors;
+- translation failure isolated from audio streaming and STT;
+- safe `NOT_CONFIGURED` operation while `GEMINI_API_KEY` is absent;
+- no cloud content persistence.
+
+Milestone 5 remaining validation:
+
+- complete automated cloud and browser checks;
+- deploy cloud service `0.4.0`;
+- load and confirm extension `0.5.0`;
+- configure `GEMINI_API_KEY` only when the controlled live test begins;
+- validate readable ordered Ukrainian text;
+- validate clean shutdown and zero secret exposure.
 
 ## 5. Phase 2 Universal Cloud Audio Translation
 
@@ -219,11 +234,13 @@ A phase is completed only when:
 - ../governance/15_REPOSITORY_RULES.md
 - ../governance/16_AI_DEVELOPMENT_RULES.md
 - ../phases/PHASE_1_MILESTONE_4_STT_INTEGRATION_VALIDATION.md
+- ../phases/PHASE_1_MILESTONE_5_TRANSLATION_INTEGRATION.md
 
 ## 11. Version History
 
 | Version | Date | Description |
 |---------|------|-------------|
+|1.4.0|2026-07-21|Completed Milestone 5 implementation and retained the controlled live validation gate|
 |1.3.0|2026-07-21|Completed Milestone 4 live STT validation and activated Milestone 5 Translation Integration|
 |1.2.0|2026-07-18|Activated Phase 1 Cloud YouTube MVP planning and execution|
 |1.1.0|2026-07-18|Aligned roadmap with Cloud First architecture and simplified test authentication|

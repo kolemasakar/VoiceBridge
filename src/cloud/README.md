@@ -1,13 +1,13 @@
-# VoiceBridge Cloud Skeleton
+# VoiceBridge Cloud Service
 
 Purpose:
-Provide the Phase 1 cloud API, bounded streaming transport, and streaming STT integration.
+Provide the Phase 1 cloud API, bounded audio streaming, AssemblyAI STT, and ordered English-to-Ukrainian translation.
 
 Version:
-0.3.1
+0.4.0
 
 Status:
-Implementation
+Implementation complete; live Gemini validation pending.
 
 ## Capabilities
 
@@ -24,8 +24,14 @@ Implementation
 - provider-neutral cloud-side STT boundary;
 - AssemblyAI Universal-Streaming English STT;
 - ordered partial and final English transcript events;
-- recognition-latency measurements;
-- canonical error envelopes;
+- provider-neutral cloud-side translation boundary;
+- Gemini English-to-Ukrainian translation adapter;
+- ordered bounded per-session translation queue;
+- STT segment identity preserved in translation events;
+- bounded prior English context;
+- recognition and translation latency measurements;
+- sanitized provider errors;
+- canonical API error envelopes;
 - request and correlation identifiers;
 - bounded JSON request bodies;
 - test-environment CORS;
@@ -42,7 +48,7 @@ Implementation
 
 ## Configuration
 
-Copy `.env.example` to an ignored environment file or provide environment variables through the deployment platform.
+Copy `.env.example` to an ignored environment file or provide variables through the deployment platform.
 
 Required:
 
@@ -58,9 +64,23 @@ ASSEMBLYAI_API_KEY
 
 Without `ASSEMBLYAI_API_KEY`, the service remains healthy and reports STT as `NOT_CONFIGURED`.
 
-The Phase 1 account uses the AssemblyAI free tier without a payment method. If free credit is exhausted, STT stops instead of switching to paid usage.
+Required for live translation:
 
-Optional:
+```text
+GEMINI_API_KEY
+```
+
+Optional translation model override:
+
+```text
+GEMINI_TRANSLATION_MODEL=gemini-3.1-flash-lite
+```
+
+Without `GEMINI_API_KEY`, the service remains healthy, AssemblyAI STT continues to work, and translation reports `NOT_CONFIGURED`.
+
+The controlled Gemini free-tier test is limited to public YouTube or synthetic content approved for external provider processing. It MUST NOT be used for private, confidential, regulated, or production traffic.
+
+Other optional settings:
 
 ```text
 HOST
@@ -70,19 +90,13 @@ MAX_REQUEST_BODY_BYTES
 RATE_LIMIT_REQUESTS_PER_MINUTE
 ```
 
-Real tokens MUST NOT be committed.
+Real tokens and API keys MUST NOT be committed.
 
 ## Install and Validate
 
 ```text
 npm ci
 npm run check
-```
-
-## Run
-
-```text
-TEST_ACCESS_TOKEN=replace-with-a-long-random-token npm run dev
 ```
 
 Default endpoint:
@@ -109,8 +123,8 @@ Request:
   "input_type": "BROWSER_AUDIO",
   "output_type": "BROWSER_PLAYBACK",
   "provider_preferences": {
-    "recognition": null,
-    "translation": null,
+    "recognition": "assemblyai",
+    "translation": "gemini",
     "synthesis": null
   },
   "voice": {
@@ -130,7 +144,7 @@ POST /api/v1/sessions/{session_id}/resume
 POST /api/v1/sessions/{session_id}/stop
 ```
 
-## Audio Stream
+## Audio and Text Stream
 
 An `ACTIVE` session can request a one-time stream ticket:
 
@@ -139,8 +153,6 @@ POST /api/v1/sessions/{session_id}/stream-ticket
 Authorization: Bearer TEST_ACCESS_TOKEN
 ```
 
-The response provides a stream path and two WebSocket subprotocol values. The second value contains a one-time ticket that expires after 60 seconds. The shared test token is not placed in the WebSocket URL.
-
 Connect to:
 
 ```text
@@ -148,9 +160,9 @@ WS /api/v1/sessions/{session_id}/stream
 Sec-WebSocket-Protocol: voicebridge.v1, voicebridge.ticket.TICKET
 ```
 
-After `STREAM_READY`, send a JSON `STREAM_START` event describing mono `pcm_s16le` audio. Binary frames are limited to 32768 bytes. The server sends `AUDIO_ACK` every 10 frames. The client MUST keep no more than 50 frames unacknowledged and MUST bound its WebSocket output buffer.
+After `STREAM_READY`, send `STREAM_START` describing mono `pcm_s16le` audio. Binary frames are limited to 32768 bytes. The server sends `AUDIO_ACK` every 10 frames. The client MUST keep no more than 50 frames unacknowledged and MUST bound its WebSocket output buffer.
 
-When AssemblyAI is configured, the stream also emits:
+STT events:
 
 ```text
 STT_STATUS
@@ -159,7 +171,17 @@ TRANSCRIPT_FINAL
 STT_ERROR
 ```
 
-Transcript events include provider name, English text, final-state flags, confidence, audio timing, and measured recognition latency. Transcript text and audio are not persisted by the cloud service.
+Translation events:
+
+```text
+TRANSLATION_STATUS
+TRANSLATION_FINAL
+TRANSLATION_ERROR
+```
+
+Only final English transcript segments are translated. `TRANSLATION_FINAL` preserves the original final STT `segment_id`. The queue accepts at most 20 pending operations and uses at most four previous final English segments, bounded to 3000 context characters.
+
+Translation errors do not terminate audio streaming or STT. Audio, transcripts, provider prompts, provider responses, and translations are not persisted by VoiceBridge Cloud.
 
 ## Docker
 
@@ -168,6 +190,7 @@ docker build -t voicebridge-cloud .
 docker run --rm -p 8080:8080 \
   -e TEST_ACCESS_TOKEN=replace-with-a-long-random-token \
   -e ASSEMBLYAI_API_KEY=replace-with-an-assemblyai-api-key \
+  -e GEMINI_API_KEY=replace-with-a-gemini-api-key \
   voicebridge-cloud
 ```
 
@@ -175,20 +198,21 @@ docker run --rm -p 8080:8080 \
 
 - single process;
 - in-memory sessions;
-- no persistence;
+- no content persistence;
 - AssemblyAI is the only implemented STT provider;
-- no STT reconnect or audio replay;
-- transcript display is bounded to recent text in browser session storage;
-- no translation;
+- Gemini is the only implemented translation provider;
+- no automatic STT reconnect or audio replay;
+- no automatic translation retry or fallback;
+- recent transcript and translation display is bounded to browser session state;
 - no TTS;
 - shared token is not a production identity model.
 
 ## Security
 
 - keep all real secrets outside the repository;
-- rotate and revoke the test token when exposure is suspected;
+- rotate and revoke secrets when exposure is suspected;
 - restrict `CORS_ALLOWED_ORIGIN` outside controlled testing;
 - use HTTPS at the deployment boundary;
-- do not use this skeleton for public multi-user production access.
-- do not log stream tickets or the shared token;
-- treat stream tickets as short-lived bearer secrets.
+- do not log stream tickets, shared tokens, provider keys, prompts, or responses;
+- treat stream tickets as short-lived bearer secrets;
+- do not use the Gemini free tier for private or production content.

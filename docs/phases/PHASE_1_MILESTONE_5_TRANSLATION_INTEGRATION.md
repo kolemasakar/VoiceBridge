@@ -1,6 +1,6 @@
 # Phase 1 Milestone 5 Translation Integration
 
-Status: PROVIDER APPROVED; IMPLEMENTATION PENDING
+Status: IMPLEMENTATION COMPLETE; LIVE VALIDATION PENDING
 
 Date: 2026-07-21
 
@@ -40,15 +40,15 @@ Prohibited input:
 - personal communications;
 - regulated or production user content.
 
-VoiceBridge MUST NOT persist transcripts, provider prompts, provider responses, or translations.
+VoiceBridge does not persist transcripts, provider prompts, provider responses, or translations.
 
-## Target Runtime Flow
+## Implemented Runtime Flow
 
 ```text
 AssemblyAI final English segment
     |
     v
-VoiceBridge Translation Queue
+VoiceBridge bounded sequential translation queue
     |
     v
 TranslationProvider interface
@@ -71,52 +71,51 @@ Browser session-only display
 Translation request:
 
 - `segment_id`;
-- `source_language`;
-- `target_language`;
-- `source_text`;
-- bounded prior English context;
-- `requested_at`.
+- source language `en`;
+- target language `uk`;
+- final English source text;
+- bounded previous final English context;
+- request timestamp;
+- session cancellation signal.
 
 Translation result:
 
-- `segment_id`;
-- `provider`;
-- `translated_text`;
-- `translation_latency_ms`;
-- `completed_at`.
+- original `segment_id`;
+- provider identifier;
+- translated Ukrainian text;
+- translation latency;
+- completion timestamp.
 
-Common provider states:
-
-- `NOT_CONFIGURED`;
-- `READY`;
-- `ACTIVE`;
-- `ERROR`;
-- `CLOSED`.
+Provider-specific response objects never cross the VoiceBridge cloud boundary.
 
 ## Event Contract
 
-Required cloud-to-browser events:
+Implemented cloud-to-browser events:
 
 - `TRANSLATION_STATUS`;
 - `TRANSLATION_FINAL`;
 - `TRANSLATION_ERROR`.
 
-`TRANSLATION_FINAL` MUST preserve the original final STT segment identifier and ordering.
+`TRANSCRIPT_FINAL` now includes a cloud-generated `segment_id`.
 
-Provider-specific raw payloads MUST NOT cross the VoiceBridge cloud boundary.
+`TRANSLATION_FINAL` preserves that identifier and queue order.
 
 ## Ordering and Buffering Policy
 
+Implemented policy:
+
 - translate final STT segments only;
-- use one bounded sequential translation queue per active session;
-- keep at most 20 pending translation operations;
-- reject additional work safely when the queue is full;
-- preserve source segment order even if provider response times vary;
-- keep at most four prior final English segments for context;
+- do not translate partial STT text;
+- use one sequential translation queue per active stream;
+- accept at most 20 pending translation operations;
+- reject additional work with `TRANSLATION_QUEUE_FULL`;
+- keep at most four previous final English segments as context;
 - limit context to 3000 characters;
-- limit one segment to 2000 characters;
+- limit one source segment to 2000 characters;
+- limit one displayed translation to 4000 characters;
 - do not retry automatically during Phase 1;
-- translation failure MUST NOT stop audio streaming or STT.
+- translation failure does not stop audio streaming or STT;
+- cancel pending translation work during stream shutdown or disconnect.
 
 ## Timeout and Error Policy
 
@@ -124,86 +123,126 @@ Provider timeout:
 
 `15000` milliseconds.
 
-Sanitized errors MUST distinguish:
+Implemented sanitized error categories:
 
-- missing provider configuration;
-- provider timeout;
-- provider quota or rate limit;
-- malformed provider response;
-- provider rejection;
-- internal queue overflow;
-- unexpected provider failure.
+- `TRANSLATION_NOT_CONFIGURED`;
+- `TRANSLATION_TIMEOUT`;
+- `TRANSLATION_RATE_LIMITED`;
+- `TRANSLATION_INVALID_RESPONSE`;
+- `TRANSLATION_PROVIDER_REJECTED`;
+- `TRANSLATION_PROVIDER_FAILED`;
+- `TRANSLATION_QUEUE_FULL`.
 
-Errors MUST NOT contain API keys, provider request bodies, raw provider responses, or private text.
+Errors do not include API keys, provider request bodies, raw provider responses, or transcript content.
 
-## Browser Requirements
+## Cloud Service 0.4.0
 
-The next browser extension version MUST display:
-
-- translation provider;
-- translation status;
-- recent ordered Ukrainian text;
-- final translation count;
-- latest translation latency;
-- sanitized translation error.
-
-Recent Ukrainian text MUST remain bounded and session-only.
-
-## Cloud Requirements
-
-The next cloud service version MUST include:
+Implemented:
 
 - provider-neutral `TranslationProvider` interface;
-- Gemini translation adapter;
-- environment configuration validation;
+- disabled provider for safe `NOT_CONFIGURED` operation;
+- Gemini REST adapter using native cloud runtime fetch;
+- API-key authentication through `x-goog-api-key`;
+- configurable translation model;
+- structured JSON response schema;
 - structured-output validation;
-- bounded sequential queue;
-- translation metrics;
-- graceful close behavior;
-- fake-provider automated tests;
+- bounded source text and context;
+- 15-second timeout;
+- rate-limit and rejection mapping;
+- per-session ordered translation queue;
+- segment identity preservation;
+- translation counts and latency summary metrics;
+- cancellation on Stop and disconnect;
+- health capability report for translation provider, configuration, and model;
 - no content persistence.
 
-## Implementation Versions
+When `GEMINI_API_KEY` is absent:
 
-Planned versions:
+- service startup remains successful;
+- health reports translation as not configured;
+- AssemblyAI STT remains operational;
+- stream events report translation provider `gemini` and state `NOT_CONFIGURED`;
+- no provider request is made.
+
+## Browser Extension 0.5.0
+
+Implemented:
+
+- Gemini translation preference in session requests;
+- translation provider and status display;
+- ordered recent Ukrainian text display;
+- final translation count;
+- latest and average translation latency display;
+- sanitized translation error display;
+- bounded recent translation state;
+- browser session-only storage;
+- clean translation state handling during Stop.
+
+The Ukrainian volume control remains a placeholder until Milestone 6 TTS integration.
+
+## Automated Validation Scope
+
+Implemented automated checks cover:
+
+- optional Gemini configuration and default model;
+- invalid model configuration rejection;
+- Gemini structured request generation;
+- successful structured translation parsing;
+- malformed output rejection;
+- rate-limit mapping;
+- timeout mapping;
+- AssemblyAI regression behavior;
+- public health capability report;
+- authentication and session lifecycle regression;
+- final STT segment identity preservation;
+- ordered translation output;
+- bounded four-segment and 3000-character context;
+- queue overflow above 20 pending operations;
+- translation failure without STT termination;
+- cancellation of pending work during shutdown.
+
+Default automated tests use fake providers and do not call the live Gemini API.
+
+## Implementation Versions
 
 - cloud service: `0.4.0`;
 - browser extension: `0.5.0`.
 
-## Automated Validation Plan
+## Deployment Configuration
 
-Required tests:
+Current Render configuration may remain unchanged until live translation testing.
 
-- provider configuration absent;
-- successful English-to-Ukrainian translation;
-- structured output parsing;
-- malformed output rejection;
-- timeout handling;
-- rate-limit mapping;
-- segment identity preservation;
-- ordered multi-segment output;
-- bounded queue overflow behavior;
-- context length limit;
-- translation failure without STT termination;
-- clean session close;
-- secret-pattern and ASCII documentation checks.
+Existing variables:
 
-Default automated tests MUST NOT call the live Gemini API.
+- `TEST_ACCESS_TOKEN`;
+- `ASSEMBLYAI_API_KEY`.
 
-## Live Validation Plan
+Required later for live translation:
+
+- `GEMINI_API_KEY`.
+
+Optional:
+
+- `GEMINI_TRANSLATION_MODEL=gemini-3.1-flash-lite`.
+
+The Gemini key must remain only in Render and must not be committed, sent to the browser, displayed in screenshots, or placed in logs.
+
+## Pending Live Validation
 
 Live validation requires:
 
+- cloud service `0.4.0` deployed successfully;
+- extension `0.5.0` confirmed in Chrome;
 - `GEMINI_API_KEY` configured only in Render;
 - no billing account linked to the Phase 1 test project;
-- cloud health or session startup reports translation as configured;
-- extension `0.5.0` is confirmed;
+- health reports Gemini translation as configured;
 - final English segments produce readable Ukrainian text;
-- segment order is preserved;
+- segment order and identity are preserved;
 - translation latency remains visible;
-- provider errors remain empty during a normal test;
+- provider errors remain empty during normal operation;
+- translation failure testing does not terminate STT;
 - Stop closes translation, STT, stream, and session cleanly;
-- no secret or persistent translation content is exposed.
+- no secret or persistent content is exposed.
 
 ## Exit Criterion
 
@@ -211,7 +250,7 @@ Milestone 5 passes when controlled English YouTube speech produces understandabl
 
 Current result:
 
-PROVIDER APPROVED. IMPLEMENTATION PENDING.
+IMPLEMENTATION COMPLETE. LIVE VALIDATION PENDING.
 
 ## References
 
@@ -219,9 +258,12 @@ PROVIDER APPROVED. IMPLEMENTATION PENDING.
 - [ADR-005_PHASE_1_STREAMING_STT_PROVIDER](../adr/ADR-005_PHASE_1_STREAMING_STT_PROVIDER.md)
 - [PHASE_1_MILESTONE_4_STT_INTEGRATION_VALIDATION](PHASE_1_MILESTONE_4_STT_INTEGRATION_VALIDATION.md)
 - [PHASE_1_CLOUD_YOUTUBE_MVP](PHASE_1_CLOUD_YOUTUBE_MVP.md)
+- [Cloud Service README](../../src/cloud/README.md)
+- [Browser Extension README](../../src/browser_extension/README.md)
 
 ## Version History
 
 | Version | Date | Description |
 |---------|------|-------------|
-| 0.1.0 | 2026-07-21 | Approved the Phase 1 translation provider and defined Milestone 5 implementation and validation contracts |
+| 0.2.0 | 2026-07-21 | Completed cloud 0.4.0 and extension 0.5.0 implementation; retained live Gemini validation gate |
+| 0.1.0 | 2026-07-21 | Approved the Phase 1 translation provider and defined implementation and validation contracts |

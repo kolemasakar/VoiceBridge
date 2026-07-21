@@ -16,9 +16,13 @@ import {
   createSttProvider,
   type SttProvider
 } from "./stt_provider.js";
+import {
+  createTranslationProvider,
+  type TranslationProvider
+} from "./translation_provider.js";
 
 const SERVICE_NAME = "voicebridge-cloud";
-const SERVICE_VERSION = "0.3.1";
+const SERVICE_VERSION = "0.4.0";
 const SESSION_PATH = /^\/api\/v1\/sessions\/([A-Za-z0-9-]+)$/;
 const COMMAND_PATH =
   /^\/api\/v1\/sessions\/([A-Za-z0-9-]+)\/(start|pause|resume|stop)$/;
@@ -93,7 +97,6 @@ function sendError(
       details: []
     }
   };
-
   sendJson(response, statusCode, body, context, origin);
 }
 
@@ -103,22 +106,17 @@ async function readJsonBody(
 ): Promise<unknown> {
   const chunks: Buffer[] = [];
   let totalBytes = 0;
-
   for await (const chunk of request) {
     const buffer = Buffer.isBuffer(chunk) ? chunk : Buffer.from(chunk);
     totalBytes += buffer.length;
-
     if (totalBytes > maximumBytes) {
       throw new Error("REQUEST_BODY_TOO_LARGE");
     }
-
     chunks.push(buffer);
   }
-
   if (chunks.length === 0) {
     throw new Error("INVALID_JSON");
   }
-
   try {
     return JSON.parse(Buffer.concat(chunks).toString("utf8"));
   } catch {
@@ -140,7 +138,6 @@ function parseCreateSessionInput(value: unknown): CreateSessionInput | null {
     | Record<string, unknown>
     | undefined;
   const voice = input.voice as Record<string, unknown> | undefined;
-
   if (
     input.source_language !== "en" ||
     input.target_language !== "uk" ||
@@ -194,13 +191,17 @@ function clientKey(request: IncomingMessage): string {
 export function createVoiceBridgeServer(
   config: AppConfig,
   sessionStore = new SessionStore(),
-  sttProvider: SttProvider = createSttProvider(config.assemblyAiApiKey)
+  sttProvider: SttProvider = createSttProvider(config.assemblyAiApiKey),
+  translationProvider: TranslationProvider = createTranslationProvider(
+    config.geminiApiKey,
+    config.geminiTranslationModel
+  )
 ) {
   const rateLimiter = new FixedWindowRateLimiter(
     config.rateLimitRequestsPerMinute
   );
-
   const streamTickets = new StreamTicketStore();
+
   const server = createServer(async (request, response) => {
     const context = createRequestContext(request);
     const method = request.method || "GET";
@@ -240,6 +241,11 @@ export function createVoiceBridgeServer(
             stt: {
               provider: sttProvider.name,
               configured: sttProvider.configured
+            },
+            translation: {
+              provider: translationProvider.name,
+              configured: translationProvider.configured,
+              model: config.geminiTranslationModel
             }
           },
           request_id: context.requestId,
@@ -253,7 +259,6 @@ export function createVoiceBridgeServer(
     }
 
     const authentication = authenticate(request, config.testAccessToken);
-
     if (!authentication.ok) {
       sendError(
         response,
@@ -274,7 +279,6 @@ export function createVoiceBridgeServer(
       try {
         const body = await readJsonBody(request, config.maxRequestBodyBytes);
         const input = parseCreateSessionInput(body);
-
         if (!input) {
           sendError(
             response,
@@ -288,7 +292,6 @@ export function createVoiceBridgeServer(
           );
           return;
         }
-
         const session = sessionStore.create(input);
         sendJson(
           response,
@@ -317,10 +320,8 @@ export function createVoiceBridgeServer(
     }
 
     const sessionMatch = SESSION_PATH.exec(path);
-
     if (method === "GET" && sessionMatch?.[1]) {
       const session = sessionStore.get(sessionMatch[1]);
-
       if (!session) {
         sendError(
           response,
@@ -335,7 +336,6 @@ export function createVoiceBridgeServer(
         );
         return;
       }
-
       sendJson(
         response,
         200,
@@ -347,10 +347,8 @@ export function createVoiceBridgeServer(
     }
 
     const streamTicketMatch = STREAM_TICKET_PATH.exec(path);
-
     if (method === "POST" && streamTicketMatch?.[1]) {
       const session = sessionStore.get(streamTicketMatch[1]);
-
       if (!session) {
         sendError(
           response,
@@ -365,7 +363,6 @@ export function createVoiceBridgeServer(
         );
         return;
       }
-
       if (session.state !== "ACTIVE") {
         sendError(
           response,
@@ -380,7 +377,6 @@ export function createVoiceBridgeServer(
         );
         return;
       }
-
       const ticket = streamTickets.issue(session.session_id);
       sendJson(
         response,
@@ -402,14 +398,9 @@ export function createVoiceBridgeServer(
     }
 
     const commandMatch = COMMAND_PATH.exec(path);
-
     if (method === "POST" && commandMatch?.[1] && commandMatch[2]) {
       try {
-        const session = sessionStore.command(
-          commandMatch[1],
-          commandMatch[2]
-        );
-
+        const session = sessionStore.command(commandMatch[1], commandMatch[2]);
         if (!session) {
           sendError(
             response,
@@ -424,7 +415,6 @@ export function createVoiceBridgeServer(
           );
           return;
         }
-
         sendJson(
           response,
           200,
@@ -447,7 +437,6 @@ export function createVoiceBridgeServer(
           );
           return;
         }
-
         throw error;
       }
       return;
@@ -470,7 +459,8 @@ export function createVoiceBridgeServer(
     sessionStore,
     streamTickets,
     config.corsAllowedOrigin,
-    sttProvider
+    sttProvider,
+    translationProvider
   );
   return server;
 }
@@ -479,7 +469,6 @@ export async function listen(
   config: AppConfig
 ): Promise<{ server: ReturnType<typeof createVoiceBridgeServer>; url: string }> {
   const server = createVoiceBridgeServer(config);
-
   await new Promise<void>((resolve, reject) => {
     server.once("error", reject);
     server.listen(config.port, config.host, () => {
@@ -487,7 +476,6 @@ export async function listen(
       resolve();
     });
   });
-
   const address = server.address() as AddressInfo;
   return {
     server,
