@@ -29,11 +29,15 @@ jobs:
             python3 tools/fix_m6_batch_separator.py
             changed=1
           fi
+          if [ -f tools/fix_m6_test_timeout.py ]; then
+            python3 tools/fix_m6_test_timeout.py
+            changed=1
+          fi
           if [ "$changed" -eq 1 ]; then
             git config user.name github-actions[bot]
             git config user.email 41898282+github-actions[bot]@users.noreply.github.com
             git add src docs tools
-            git commit -m "Fix Milestone 6 queue stabilization implementation"
+            git commit -m "Fix Milestone 6 queue stabilization tests"
             git push origin HEAD:agent/milestone-6-queue-and-rate-limit-fix
           else
             echo "Patch already applied."
