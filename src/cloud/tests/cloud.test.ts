@@ -467,7 +467,7 @@ function translationRequest(
   };
 }
 
-test("health reports cloud 0.4.0 and translation capability", async () => {
+test("health reports cloud 0.4.1 and translation capability", async () => {
   const response = await api(
     primary.baseUrl,
     "/api/v1/health",
@@ -481,7 +481,7 @@ test("health reports cloud 0.4.0 and translation capability", async () => {
   );
   assert.equal(response.status, 200);
   const body = await response.json();
-  assert.equal(body.version, "0.4.0");
+  assert.equal(body.version, "0.4.1");
   assert.deepEqual(body.capabilities.stt, {
     provider: "fake-stt",
     configured: true
