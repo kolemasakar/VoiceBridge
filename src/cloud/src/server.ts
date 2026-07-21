@@ -26,7 +26,7 @@ import {
 } from "./tts_provider.js";
 
 const SERVICE_NAME = "voicebridge-cloud";
-const SERVICE_VERSION = "0.5.0";
+const SERVICE_VERSION = "0.5.1";
 const SESSION_PATH = /^\/api\/v1\/sessions\/([A-Za-z0-9-]+)$/;
 const COMMAND_PATH =
   /^\/api\/v1\/sessions\/([A-Za-z0-9-]+)\/(start|pause|resume|stop)$/;

@@ -19,9 +19,9 @@ let currentTtsSegment = null;
 const activePlaybackSources = new Set();
 
 const MAX_CLIENT_BUFFERED_BYTES = 262144;
-const MAX_PLAYBACK_QUEUE_SECONDS = 45;
-const PLAYBACK_DRAIN_TIMEOUT_MS = 35000;
-const STREAM_STOP_TIMEOUT_MS = 45000;
+const MAX_PLAYBACK_QUEUE_SECONDS = 90;
+const PLAYBACK_DRAIN_TIMEOUT_MS = 70000;
+const STREAM_STOP_TIMEOUT_MS = 120000;
 
 let currentConfig = {
   original_pause_volume: 0.5,
@@ -55,6 +55,9 @@ function initialStreamState() {
     translationFinalSegments: [],
     translationFinalCount: 0,
     translationLatencyMs: null,
+    translationPending: 0,
+    translationRetryCount: 0,
+    translationRetryInMs: 0,
     ttsStatus: "OFFLINE",
     ttsProvider: null,
     ttsVoice: null,
@@ -63,6 +66,10 @@ function initialStreamState() {
     ttsLatencyMs: null,
     ttsAudioBytes: 0,
     ttsAudioDurationMs: 0,
+    ttsPending: 0,
+    ttsBuffered: 0,
+    ttsRetryCount: 0,
+    ttsRetryInMs: 0,
     playbackStatus: "IDLE",
     playbackQueuedMs: 0,
     playbackPlayedCount: 0
@@ -110,6 +117,9 @@ function streamSnapshot() {
     translation_final: finalTranslationText(),
     translation_final_count: streamState.translationFinalCount,
     translation_latency_ms: streamState.translationLatencyMs,
+    translation_pending: streamState.translationPending,
+    translation_retry_count: streamState.translationRetryCount,
+    translation_retry_in_ms: streamState.translationRetryInMs,
     tts_status: streamState.ttsStatus,
     tts_provider: streamState.ttsProvider,
     tts_voice: streamState.ttsVoice,
@@ -118,6 +128,10 @@ function streamSnapshot() {
     tts_latency_ms: streamState.ttsLatencyMs,
     tts_audio_bytes: streamState.ttsAudioBytes,
     tts_audio_duration_ms: streamState.ttsAudioDurationMs,
+    tts_pending: streamState.ttsPending,
+    tts_buffered: streamState.ttsBuffered,
+    tts_retry_count: streamState.ttsRetryCount,
+    tts_retry_in_ms: streamState.ttsRetryInMs,
     playback_status: streamState.playbackStatus,
     playback_queued_ms: streamState.playbackQueuedMs,
     playback_played_count: streamState.playbackPlayedCount
@@ -375,9 +389,13 @@ function handleStreamEvent(event) {
     streamState.translationProvider =
       event.data?.provider || streamState.translationProvider;
     streamState.translationStatus = event.data?.status || "UNKNOWN";
-    if (streamState.translationStatus !== "ERROR") {
-      streamState.translationError = null;
-    }
+    streamState.translationPending = Number(
+      event.data?.pending ?? streamState.translationPending
+    );
+    streamState.translationRetryCount = Number(
+      event.data?.retries ?? streamState.translationRetryCount
+    );
+    streamState.translationRetryInMs = Number(event.data?.retry_in_ms || 0);
   }
 
   if (event.event_type === "TRANSLATION_ERROR") {
@@ -400,6 +418,7 @@ function handleStreamEvent(event) {
     }
     streamState.translationStatus = "ACTIVE";
     streamState.translationError = null;
+    streamState.translationRetryInMs = 0;
     streamState.translationLatencyMs =
       event.data?.translation_latency_ms ?? streamState.translationLatencyMs;
   }
@@ -408,9 +427,16 @@ function handleStreamEvent(event) {
     streamState.ttsProvider = event.data?.provider || streamState.ttsProvider;
     streamState.ttsVoice = event.data?.voice || streamState.ttsVoice;
     streamState.ttsStatus = event.data?.status || "UNKNOWN";
-    if (streamState.ttsStatus !== "ERROR") {
-      streamState.ttsError = null;
-    }
+    streamState.ttsPending = Number(
+      event.data?.pending ?? streamState.ttsPending
+    );
+    streamState.ttsBuffered = Number(
+      event.data?.buffered ?? streamState.ttsBuffered
+    );
+    streamState.ttsRetryCount = Number(
+      event.data?.retries ?? streamState.ttsRetryCount
+    );
+    streamState.ttsRetryInMs = Number(event.data?.retry_in_ms || 0);
   }
 
   if (event.event_type === "TTS_ERROR") {
@@ -425,11 +451,14 @@ function handleStreamEvent(event) {
       sampleRate: Number(event.data?.sample_rate_hz || 24000),
       chunkCount: Number(event.data?.chunk_count || 0),
       chunksReceived: 0,
-      ended: false
+      ended: false,
+      sourceSegmentCount: Number(event.data?.source_segment_count || 1)
     };
     streamState.ttsProvider = event.data?.provider || streamState.ttsProvider;
     streamState.ttsVoice = event.data?.voice || streamState.ttsVoice;
     streamState.ttsStatus = "ACTIVE";
+    streamState.ttsError = null;
+    streamState.ttsRetryInMs = 0;
     streamState.ttsLatencyMs =
       event.data?.tts_latency_ms ?? streamState.ttsLatencyMs;
     streamState.playbackStatus = "BUFFERING";
@@ -461,7 +490,7 @@ function handleStreamEvent(event) {
       currentTtsSegment.segmentId === event.data?.segment_id
     ) {
       currentTtsSegment.ended = true;
-      streamState.ttsFinalCount += 1;
+      streamState.ttsFinalCount += currentTtsSegment.sourceSegmentCount;
       streamState.ttsAudioDurationMs += Number(
         event.data?.audio_duration_ms || 0
       );
@@ -506,6 +535,25 @@ function handleStreamEvent(event) {
       streamState.ttsLatencyMs =
         event.data?.average_tts_latency_ms ?? streamState.ttsLatencyMs;
     }
+    streamState.translationFinalCount = Math.max(
+      streamState.translationFinalCount,
+      Number(event.data?.final_translations || 0)
+    );
+    streamState.ttsFinalCount = Math.max(
+      streamState.ttsFinalCount,
+      Number(event.data?.final_tts_segments || 0)
+    );
+    streamState.translationRetryCount = Number(
+      event.data?.translation_retries ?? streamState.translationRetryCount
+    );
+    streamState.ttsRetryCount = Number(
+      event.data?.tts_retries ?? streamState.ttsRetryCount
+    );
+    streamState.translationPending = 0;
+    streamState.ttsPending = 0;
+    streamState.ttsBuffered = 0;
+    streamState.translationRetryInMs = 0;
+    streamState.ttsRetryInMs = 0;
   }
 
   if (

@@ -27,6 +27,8 @@ const elements = {
   translationFinal: document.querySelector("#translation-final"),
   translationEmpty: document.querySelector("#translation-empty"),
   translationCount: document.querySelector("#translation-count"),
+  translationPending: document.querySelector("#translation-pending"),
+  translationRetries: document.querySelector("#translation-retries"),
   ttsStatus: document.querySelector("#tts-status"),
   ttsProvider: document.querySelector("#tts-provider"),
   ttsVoice: document.querySelector("#tts-voice"),
@@ -34,7 +36,11 @@ const elements = {
   ttsLatency: document.querySelector("#tts-latency"),
   ttsBytes: document.querySelector("#tts-bytes"),
   ttsError: document.querySelector("#tts-error"),
+  ttsPending: document.querySelector("#tts-pending"),
+  ttsBuffered: document.querySelector("#tts-buffered"),
+  ttsRetries: document.querySelector("#tts-retries"),
   playbackStatus: document.querySelector("#playback-status"),
+  playbackPlayed: document.querySelector("#playback-played"),
   playbackQueued: document.querySelector("#playback-queued"),
   start: document.querySelector("#start"),
   stop: document.querySelector("#stop"),
@@ -134,6 +140,8 @@ function renderState(state) {
   elements.translationFinal.textContent = translationFinal;
   elements.translationEmpty.hidden = Boolean(translationFinal);
   elements.translationCount.textContent = state.translation_final_count ?? 0;
+  elements.translationPending.textContent = state.translation_pending ?? 0;
+  elements.translationRetries.textContent = state.translation_retry_count ?? 0;
 
   const ttsStatus = state.tts_status || "OFFLINE";
   const playbackStatus = state.playback_status || "IDLE";
@@ -148,7 +156,11 @@ function renderState(state) {
   elements.ttsBytes.textContent = state.tts_audio_bytes ?? 0;
   elements.ttsError.textContent = state.tts_error || "";
   elements.playbackStatus.textContent = playbackStatus.replaceAll("_", " ");
+  elements.ttsPending.textContent = state.tts_pending ?? 0;
+  elements.ttsBuffered.textContent = state.tts_buffered ?? 0;
+  elements.ttsRetries.textContent = state.tts_retry_count ?? 0;
   elements.playbackStatus.className = statusClass(playbackStatus);
+  elements.playbackPlayed.textContent = state.playback_played_count ?? 0;
   elements.playbackQueued.textContent =
     (state.playback_queued_ms ?? 0) + " ms";
 

@@ -476,7 +476,7 @@ function translationRequest(
   };
 }
 
-test("health reports cloud 0.5.0 and pipeline capabilities", async () => {
+test("health reports cloud 0.5.1 and pipeline capabilities", async () => {
   const response = await api(
     primary.baseUrl,
     "/api/v1/health",
@@ -490,7 +490,7 @@ test("health reports cloud 0.5.0 and pipeline capabilities", async () => {
   );
   assert.equal(response.status, 200);
   const body = await response.json();
-  assert.equal(body.version, "0.5.0");
+  assert.equal(body.version, "0.5.1");
   assert.deepEqual(body.capabilities.stt, {
     provider: "fake-stt",
     configured: true
@@ -907,7 +907,7 @@ test("stream stop drains a queue longer than three seconds", async () => {
   }
 });
 
-test("translation queue rejects work above twenty pending segments", async () => {
+test("translation queue rejects work above sixty pending segments", async () => {
   const running = await startServer(
     new ScriptedSttProvider("queue-stt", true),
     new BlockingTranslationProvider()
@@ -918,7 +918,7 @@ test("translation queue rejects work above twenty pending segments", async () =>
     const { socket } = await openStream(running.baseUrl, sessionId);
     const overflowPromise = nextSocketEvent(socket, "TRANSLATION_ERROR");
 
-    for (let index = 0; index < 21; index += 1) {
+    for (let index = 0; index < 61; index += 1) {
       socket.send(Buffer.alloc(1920));
     }
 
@@ -927,10 +927,10 @@ test("translation queue rejects work above twenty pending segments", async () =>
     assert.equal(socket.readyState, WebSocket.OPEN);
 
     const completed = await stopStream(socket, 12000);
-    assert.equal(completed.data.final_transcripts, 21);
+    assert.equal(completed.data.final_transcripts, 61);
     assert.equal(completed.data.final_translations, 0);
     assert.equal(completed.data.translation_errors, 2);
-    assert.equal(completed.data.translation_pending_at_stop, 20);
+    assert.equal(completed.data.translation_pending_at_stop, 60);
     assert.equal(completed.data.translation_drain_timed_out, true);
   } finally {
     await closeServer(running.server);
