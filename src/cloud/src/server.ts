@@ -201,13 +201,13 @@ export function createVoiceBridgeServer(
     config.geminiTranslationModel
   ),
   ttsProvider: TtsProvider = createTtsProvider({
-    provider: config.ttsProvider,
+    provider: config.ttsProvider ?? "gemini",
     geminiApiKey: config.geminiApiKey,
-    geminiModel: config.geminiTtsModel,
-    geminiVoice: config.geminiTtsVoice,
-    azureSpeechKey: config.azureSpeechKey,
-    azureSpeechRegion: config.azureSpeechRegion,
-    azureVoice: config.azureTtsVoice
+    geminiModel: config.geminiTtsModel ?? "gemini-2.5-flash-preview-tts",
+    geminiVoice: config.geminiTtsVoice ?? "Iapetus",
+    azureSpeechKey: config.azureSpeechKey ?? null,
+    azureSpeechRegion: config.azureSpeechRegion ?? "eastus",
+    azureVoice: config.azureTtsVoice ?? "uk-UA-OstapNeural"
   })
 ) {
   const rateLimiter = new FixedWindowRateLimiter(
