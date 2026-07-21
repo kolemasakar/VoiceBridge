@@ -82,6 +82,23 @@
         <p id="stt-error" role="alert"></p>
       </section>
 
+      <section class="transcript-card translation-card">
+        <div class="section-title">
+          <h2>Ukrainian translation</h2>
+          <strong id="translation-status">OFFLINE</strong>
+        </div>
+        <dl class="transcript-meta">
+          <div><dt>Provider</dt><dd id="translation-provider">-</dd></div>
+          <div><dt>Final segments</dt><dd id="translation-count">0</dd></div>
+          <div><dt>Translation latency</dt><dd id="translation-latency">-</dd></div>
+        </dl>
+        <div id="translation-text" class="transcript-text" aria-live="polite">
+          <span id="translation-final"></span>
+          <span id="translation-empty">Waiting for final English segments...</span>
+        </div>
+        <p id="translation-error" role="alert"></p>
+      </section>
+
       <section class="controls">
         <button id="start" class="primary">Start capture</button>
         <button id="stop" disabled>Stop</button>
