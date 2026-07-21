@@ -18,7 +18,7 @@ Status:
 Approved
 
 Version:
-1.5.0
+1.6.0
 
 Last Updated:
 2026-07-21
@@ -26,49 +26,28 @@ Last Updated:
 ## Table of Contents
 
 1. Project Vision
-   UA: Bachennia proiektu
-
 2. Development Strategy
-   UA: Stratehiia rozvytku
-
 3. Phase Overview
-   UA: Ohliad faz
-
 4. Phase 1 Cloud YouTube MVP
-   UA: Persha faza khmarnoho YouTube MVP
-
 5. Phase 2 Universal Cloud Audio Translation
-   UA: Universalnyi khmarnyi audio pereklad
-
 6. Phase 3 Cloud Service Hardening
-   UA: Posylennia khmarnykh servisiv
-
 7. Phase 4 Multi Platform Expansion
-   UA: Rozshyrennia platform
-
 8. Phase 5 Interpreter Mode and Optional Agent
-   UA: Rezhym perekladacha ta neoboviazkovyi ahent
-
 9. Milestone Criteria
-   UA: Kryterii kontrolnykh tochek
-
 10. References
-    UA: Posylannia
-
 11. Version History
-    UA: Istoriia versii
 
 ## 1. Project Vision
 
 VoiceBridge is an open-source AI communication bridge that removes language barriers.
 
-The initial goal:
+Initial goal:
 
 - allow users to watch English YouTube videos with Ukrainian AI voice translation;
-- provide natural listening experience without manual subtitles;
-- validate real-time speech translation workflow.
+- provide a natural listening experience without manual subtitles;
+- validate a real-time speech translation workflow.
 
-The long-term goal:
+Long-term goal:
 
 - enable real-time multilingual communication between people using different languages.
 
@@ -79,19 +58,18 @@ The project follows incremental validation and a Cloud First implementation mode
 Cloud First rules:
 
 - the browser is the primary client for Phases 1 through 4;
-- speech recognition, translation, speech synthesis, session orchestration, and state management run in the cloud;
+- STT, translation, TTS, orchestration, and authoritative state run in the cloud;
 - users do not require a local development environment;
-- a minimal local cross-platform VoiceBridge Agent MAY be introduced in Phase 5 only when browser or operating-system security prevents required system-audio capture;
-- the Agent MUST NOT move AI processing, orchestration, or authoritative session state out of the cloud;
-- the test launch MAY use a single shared test access token without registration or account management;
-- production authentication MUST be designed and approved before public or multi-user deployment.
+- a minimal cross-platform VoiceBridge Agent MAY be introduced in Phase 5 only when browser or operating-system security prevents required system-audio capture;
+- the Agent MUST NOT move AI processing or authoritative state out of the cloud;
+- the test launch MAY use one shared revocable token;
+- production authentication MUST be approved before public multi-user deployment.
 
 Each phase MUST:
 
 - have a documented objective;
 - produce a measurable result;
-- update project history;
-- update project status;
+- update project history and status;
 - define the next milestone.
 
 ## 3. Phase Overview
@@ -111,14 +89,16 @@ Goal:
 Create the first working demonstration.
 
 Target scenario:
-User opens an English YouTube video in a browser and receives Ukrainian AI voice translation from the cloud pipeline.
+A user opens an English YouTube video and receives Ukrainian AI speech from the cloud pipeline.
 
 Validation criteria:
 
 - successful demo on selected YouTube videos;
-- acceptable translation quality;
+- acceptable recognition and translation quality;
+- understandable Ukrainian speech;
 - acceptable delay;
-- stable playback experience.
+- stable playback and automatic ducking;
+- clean bounded shutdown.
 
 Current milestone state:
 
@@ -128,8 +108,8 @@ Current milestone state:
 |2|Cloud Skeleton|Passed|
 |3|Streaming Transport|Passed|
 |4|Streaming STT Integration|Passed|
-|5|English-to-Ukrainian Translation Integration|Live translation passed; final drain control test pending|
-|6|Ukrainian TTS and Browser Playback|Planned|
+|5|English-to-Ukrainian Translation Integration|Passed|
+|6|Ukrainian TTS and Browser Playback|Implementation complete; live validation pending|
 |7|End-to-End Hardening and Demo Validation|Planned|
 
 Milestone 4 validated:
@@ -138,35 +118,52 @@ Milestone 4 validated:
 - cloud service `0.3.1`;
 - AssemblyAI Universal-Streaming English;
 - continuous live session longer than ten minutes;
-- readable ordered English partial and final transcripts;
-- bounded acknowledgement state;
+- ordered English partial and final transcripts;
 - zero dropped frames;
-- clean `IDLE`, `COMPLETED`, and `CLOSED` shutdown states.
+- clean shutdown states.
 
-Milestone 5 implemented and live-tested:
+Milestone 5 validated:
 
-- Gemini Developer API selected behind a provider-neutral cloud boundary;
 - cloud service `0.4.2`;
 - browser extension `0.5.0`;
-- translation of final STT segments only;
-- final STT segment identity preserved through translation;
-- bounded sequential queue with a maximum of 20 pending operations;
-- context limited to four prior final segments and 3000 characters;
-- 15-second provider timeout;
-- ten-second graceful shutdown drain;
-- visible translation status, provider, count, latency, and sanitized errors;
-- translation failure isolated from audio streaming and STT;
-- safe `NOT_CONFIGURED` operation while `GEMINI_API_KEY` is absent;
-- readable ordered Ukrainian text validated with live Gemini;
-- zero dropped audio frames during controlled tests;
+- Gemini English-to-Ukrainian translation;
+- ordered final-segment translation;
+- bounded sequential queue and context;
+- visible translation latency and errors;
+- ten-second graceful translation drain;
+- equal final English and Ukrainian segment counts after Stop;
+- readable Ukrainian text;
+- zero dropped audio frames;
 - no cloud content persistence.
 
-Milestone 5 remaining validation:
+Milestone 6 implemented:
 
-- deploy cloud service `0.4.2`;
-- run a one-to-two-minute controlled public YouTube test;
-- confirm equal final English and Ukrainian segment counts after Stop when the accepted queue completes within ten seconds;
-- confirm clean shutdown and zero secret exposure.
+- Gemini TTS selected behind a provider-neutral boundary;
+- cloud service `0.5.0`;
+- browser extension `0.6.0`;
+- configurable model `gemini-2.5-flash-preview-tts`;
+- configurable initial voice `Iapetus`;
+- ordered TTS queue with a maximum of 20 pending operations;
+- normalized mono `pcm_s16le` at 24000 Hz;
+- bounded WebSocket PCM chunks;
+- TTS latency, audio byte, duration, error, and drain metrics;
+- browser Web Audio playback queue;
+- real Ukrainian volume control;
+- automatic original-audio ducking and restoration;
+- bounded cloud and local playback drains;
+- provider failure isolation;
+- no synthesized-audio persistence.
+
+Milestone 6 remaining validation:
+
+- complete automated validation and merge;
+- deploy cloud service `0.5.0`;
+- load browser extension `0.6.0`;
+- validate Ukrainian voice quality and ordering;
+- validate real Ukrainian gain control;
+- validate automatic ducking and restoration;
+- validate bounded Stop and resource cleanup;
+- confirm no secret or persistent content exposure.
 
 ## 5. Phase 2 Universal Cloud Audio Translation
 
@@ -220,13 +217,13 @@ Possible capabilities:
 
 ## 9. Milestone Criteria
 
-A phase is completed only when:
+A milestone is completed only when:
 
 - objectives are achieved;
-- documentation is updated;
-- project history is updated;
+- automated and live validation criteria pass;
+- documentation and project history are updated;
 - repository changes are committed;
-- next phase entry conditions are defined.
+- next milestone entry conditions are defined.
 
 ## 10. References
 
@@ -236,14 +233,16 @@ A phase is completed only when:
 - ../governance/16_AI_DEVELOPMENT_RULES.md
 - ../phases/PHASE_1_MILESTONE_4_STT_INTEGRATION_VALIDATION.md
 - ../phases/PHASE_1_MILESTONE_5_TRANSLATION_INTEGRATION.md
+- ../phases/PHASE_1_MILESTONE_6_TTS_PLAYBACK.md
 
 ## 11. Version History
 
 | Version | Date | Description |
 |---------|------|-------------|
-|1.5.0|2026-07-21|Recorded live Gemini validation and cloud 0.4.2 ten-second graceful drain|
-|1.4.0|2026-07-21|Completed Milestone 5 implementation and retained the controlled live validation gate|
-|1.3.0|2026-07-21|Completed Milestone 4 live STT validation and activated Milestone 5 Translation Integration|
-|1.2.0|2026-07-18|Activated Phase 1 Cloud YouTube MVP planning and execution|
+|1.6.0|2026-07-21|Passed Milestone 5 and activated Milestone 6 TTS and browser playback validation|
+|1.5.0|2026-07-21|Recorded live Gemini translation and cloud 0.4.2 graceful drain|
+|1.4.0|2026-07-21|Completed Milestone 5 implementation|
+|1.3.0|2026-07-21|Completed Milestone 4 and activated translation integration|
+|1.2.0|2026-07-18|Activated Phase 1 Cloud YouTube MVP execution|
 |1.1.0|2026-07-18|Aligned roadmap with Cloud First architecture and simplified test authentication|
 |1.0.0|2026-07-18|Initial roadmap definition|

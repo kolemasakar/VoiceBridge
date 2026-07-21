@@ -27,6 +27,15 @@ const elements = {
   translationFinal: document.querySelector("#translation-final"),
   translationEmpty: document.querySelector("#translation-empty"),
   translationCount: document.querySelector("#translation-count"),
+  ttsStatus: document.querySelector("#tts-status"),
+  ttsProvider: document.querySelector("#tts-provider"),
+  ttsVoice: document.querySelector("#tts-voice"),
+  ttsCount: document.querySelector("#tts-count"),
+  ttsLatency: document.querySelector("#tts-latency"),
+  ttsBytes: document.querySelector("#tts-bytes"),
+  ttsError: document.querySelector("#tts-error"),
+  playbackStatus: document.querySelector("#playback-status"),
+  playbackQueued: document.querySelector("#playback-queued"),
   start: document.querySelector("#start"),
   stop: document.querySelector("#stop"),
   testDucking: document.querySelector("#test-ducking"),
@@ -52,14 +61,17 @@ async function serviceWorkerMessage(type, data = undefined) {
     type,
     data
   });
-  if (!response?.ok) throw new Error(response?.error || "The extension operation failed.");
+  if (!response?.ok) {
+    throw new Error(response?.error || "The extension operation failed.");
+  }
   return response;
 }
 
 function formatDuration(totalSeconds = 0) {
   const minutes = Math.floor(totalSeconds / 60);
   const seconds = totalSeconds % 60;
-  return String(minutes).padStart(2, "0") + ":" + String(seconds).padStart(2, "0");
+  return String(minutes).padStart(2, "0") + ":" +
+    String(seconds).padStart(2, "0");
 }
 
 function statusClass(value) {
@@ -76,7 +88,9 @@ function renderState(state) {
   elements.start.disabled = active;
   elements.stop.disabled = !active;
   elements.testDucking.disabled = !active;
-  elements.sampleRate.textContent = state.sample_rate_hz ? state.sample_rate_hz + " Hz" : "-";
+  elements.sampleRate.textContent = state.sample_rate_hz
+    ? state.sample_rate_hz + " Hz"
+    : "-";
   elements.channels.textContent = state.channels ?? "-";
   elements.rms.textContent = state.rms ?? "-";
   elements.peak.textContent = state.peak ?? "-";
@@ -109,7 +123,8 @@ function renderState(state) {
 
   const translationStatus = state.translation_status || "OFFLINE";
   const translationFinal = state.translation_final || "";
-  elements.translationStatus.textContent = translationStatus.replaceAll("_", " ");
+  elements.translationStatus.textContent =
+    translationStatus.replaceAll("_", " ");
   elements.translationStatus.className = statusClass(translationStatus);
   elements.translationProvider.textContent = state.translation_provider || "-";
   elements.translationLatency.textContent = state.translation_latency_ms == null
@@ -119,6 +134,23 @@ function renderState(state) {
   elements.translationFinal.textContent = translationFinal;
   elements.translationEmpty.hidden = Boolean(translationFinal);
   elements.translationCount.textContent = state.translation_final_count ?? 0;
+
+  const ttsStatus = state.tts_status || "OFFLINE";
+  const playbackStatus = state.playback_status || "IDLE";
+  elements.ttsStatus.textContent = ttsStatus.replaceAll("_", " ");
+  elements.ttsStatus.className = statusClass(ttsStatus);
+  elements.ttsProvider.textContent = state.tts_provider || "-";
+  elements.ttsVoice.textContent = state.tts_voice || "-";
+  elements.ttsCount.textContent = state.tts_final_count ?? 0;
+  elements.ttsLatency.textContent = state.tts_latency_ms == null
+    ? "-"
+    : state.tts_latency_ms + " ms";
+  elements.ttsBytes.textContent = state.tts_audio_bytes ?? 0;
+  elements.ttsError.textContent = state.tts_error || "";
+  elements.playbackStatus.textContent = playbackStatus.replaceAll("_", " ");
+  elements.playbackStatus.className = statusClass(playbackStatus);
+  elements.playbackQueued.textContent =
+    (state.playback_queued_ms ?? 0) + " ms";
 
   const effectivePercent = Math.round(
     (state.effective_original_volume ??
@@ -135,10 +167,17 @@ function renderCloudState(state = {}) {
   const status = state.status || "NOT_CONFIGURED";
   elements.cloudStatus.textContent = status.replaceAll("_", " ");
   elements.cloudStatus.className = statusClass(status);
-  if (state.session_id) elements.cloudDetail.textContent = "Session " + state.session_id.slice(0, 8) + "...";
-  else if (state.message) elements.cloudDetail.textContent = state.message;
-  else if (status === "READY") elements.cloudDetail.textContent = "Cloud API and token are valid.";
-  else if (status === "NOT_CONFIGURED") elements.cloudDetail.textContent = "Enter the test token generated in Render.";
+  if (state.session_id) {
+    elements.cloudDetail.textContent =
+      "Session " + state.session_id.slice(0, 8) + "...";
+  } else if (state.message) {
+    elements.cloudDetail.textContent = state.message;
+  } else if (status === "READY") {
+    elements.cloudDetail.textContent = "Cloud API and token are valid.";
+  } else if (status === "NOT_CONFIGURED") {
+    elements.cloudDetail.textContent =
+      "Enter the test token generated in Render.";
+  }
 }
 
 function validateCloudForm() {
@@ -146,10 +185,19 @@ function validateCloudForm() {
   const cloudToken = elements.cloudToken.value.trim();
   if (!cloudApiUrl) throw new Error("Cloud API URL is required.");
   let parsedUrl;
-  try { parsedUrl = new URL(cloudApiUrl); } catch { throw new Error("Cloud API URL is not valid."); }
-  const localHttp = parsedUrl.protocol === "http:" && ["localhost", "127.0.0.1"].includes(parsedUrl.hostname);
-  if (parsedUrl.protocol !== "https:" && !localHttp) throw new Error("Cloud API URL must use HTTPS.");
-  if (cloudToken.length < 16) throw new Error("Test access token must contain at least 16 characters.");
+  try {
+    parsedUrl = new URL(cloudApiUrl);
+  } catch {
+    throw new Error("Cloud API URL is not valid.");
+  }
+  const localHttp = parsedUrl.protocol === "http:" &&
+    ["localhost", "127.0.0.1"].includes(parsedUrl.hostname);
+  if (parsedUrl.protocol !== "https:" && !localHttp) {
+    throw new Error("Cloud API URL must use HTTPS.");
+  }
+  if (cloudToken.length < 16) {
+    throw new Error("Test access token must contain at least 16 characters.");
+  }
   return { cloud_api_url: cloudApiUrl, test_access_token: cloudToken };
 }
 
@@ -158,7 +206,10 @@ async function saveCloudSettings(testConnection) {
   await chrome.storage.local.set(settings);
   if (!testConnection) return;
   elements.saveCloud.disabled = true;
-  renderCloudState({ status: "CHECKING", message: "Checking authenticated cloud access..." });
+  renderCloudState({
+    status: "CHECKING",
+    message: "Checking authenticated cloud access..."
+  });
   try {
     const response = await serviceWorkerMessage("TEST_CLOUD_CONNECTION");
     renderCloudState(response.state);
@@ -168,8 +219,12 @@ async function saveCloudSettings(testConnection) {
 }
 
 async function loadCloudSettings() {
-  const settings = await chrome.storage.local.get(["cloud_api_url", "test_access_token"]);
-  elements.cloudApiUrl.value = settings.cloud_api_url || DEFAULT_CLOUD_API_URL;
+  const settings = await chrome.storage.local.get([
+    "cloud_api_url",
+    "test_access_token"
+  ]);
+  elements.cloudApiUrl.value =
+    settings.cloud_api_url || DEFAULT_CLOUD_API_URL;
   elements.cloudToken.value = settings.test_access_token || "";
   const response = await serviceWorkerMessage("GET_CLOUD_STATE");
   renderCloudState(response.state);
@@ -201,7 +256,9 @@ async function startCapture() {
     renderCloudState(cloudResponse.state);
     const streamResponse = await serviceWorkerMessage("GET_STREAM_TICKET");
     try {
-      const streamId = await chrome.tabCapture.getMediaStreamId({ targetTabId: tab.id });
+      const streamId = await chrome.tabCapture.getMediaStreamId({
+        targetTabId: tab.id
+      });
       const config = {
         original_pause_volume: Number(elements.originalVolume.value) / 100,
         original_duck_volume: 0.15,
@@ -217,7 +274,9 @@ async function startCapture() {
           stream: streamResponse.stream
         }
       });
-      if (!response?.ok) throw new Error(response?.error || "Unable to start capture.");
+      if (!response?.ok) {
+        throw new Error(response?.error || "Unable to start capture.");
+      }
     } catch (error) {
       await serviceWorkerMessage("STOP_CLOUD_SESSION").catch(() => undefined);
       throw error;
@@ -231,13 +290,17 @@ async function startCapture() {
 
 async function stopCapture() {
   elements.error.textContent = "";
+  elements.stop.disabled = true;
+  elements.status.textContent = "DRAINING";
   const failures = [];
   try {
     const response = await chrome.runtime.sendMessage({
       target: "offscreen",
       type: "STOP_CAPTURE"
     });
-    if (!response?.ok) failures.push(response?.error || "Unable to stop capture.");
+    if (!response?.ok) {
+      failures.push(response?.error || "Unable to stop capture.");
+    }
   } catch (error) {
     failures.push(error.message);
   }
@@ -259,9 +322,14 @@ async function sendVolumes() {
   elements.originalValue.textContent = elements.originalVolume.value + "%";
   elements.ukrainianValue.textContent = elements.ukrainianVolume.value + "%";
   elements.effectiveVolume.value = elements.originalVolume.value;
-  elements.effectiveLabel.textContent = "Background " + elements.originalVolume.value + "%";
+  elements.effectiveLabel.textContent =
+    "Background " + elements.originalVolume.value + "%";
   await chrome.storage.local.set(data);
-  await chrome.runtime.sendMessage({ target: "offscreen", type: "SET_VOLUMES", data });
+  await chrome.runtime.sendMessage({
+    target: "offscreen",
+    type: "SET_VOLUMES",
+    data
+  });
 }
 
 async function loadVolumes() {
@@ -293,7 +361,9 @@ elements.testDucking.addEventListener("click", async () => {
     target: "offscreen",
     type: "TEST_DUCKING"
   });
-  if (!response?.ok) elements.error.textContent = response?.error || "Ducking test failed.";
+  if (!response?.ok) {
+    elements.error.textContent = response?.error || "Ducking test failed.";
+  }
 });
 elements.originalVolume.addEventListener("input", sendVolumes);
 elements.ukrainianVolume.addEventListener("input", sendVolumes);

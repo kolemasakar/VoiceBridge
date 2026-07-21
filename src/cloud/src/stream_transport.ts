@@ -11,6 +11,8 @@ import type {
 import type { StreamTicketStore } from "./stream_ticket_store.js";
 import type { TranslationProvider } from "./translation_provider.js";
 import { TranslationProviderError } from "./translation_provider.js";
+import type { TtsProvider } from "./tts_provider.js";
+import { TtsProviderError } from "./tts_provider.js";
 
 const STREAM_PATH = /^\/api\/v1\/sessions\/([A-Za-z0-9-]+)\/stream$/;
 const BASE_PROTOCOL = "voicebridge.v1";
@@ -25,6 +27,10 @@ const MAX_TRANSLATION_CONTEXT_SEGMENTS = 4;
 const MAX_TRANSLATION_CONTEXT_CHARACTERS = 3000;
 const MAX_TRANSLATION_SOURCE_CHARACTERS = 2000;
 const TRANSLATION_DRAIN_TIMEOUT_MS = 10000;
+const MAX_TTS_QUEUE = 20;
+const MAX_TTS_SOURCE_CHARACTERS = 4000;
+const TTS_AUDIO_CHUNK_BYTES = 12288;
+const TTS_DRAIN_TIMEOUT_MS = 30000;
 
 interface ClientEvent {
   event_type: string;
@@ -59,6 +65,19 @@ interface StreamContext {
   translationErrors: number;
   translationLatencyTotalMs: number;
   translationLatencyMaximumMs: number;
+  ttsChain: Promise<void>;
+  ttsPending: number;
+  ttsAccepting: boolean;
+  ttsDelivering: boolean;
+  ttsAbortController: AbortController;
+  ttsPendingAtStop: number;
+  ttsDrainTimedOut: boolean;
+  finalTtsSegments: number;
+  ttsErrors: number;
+  ttsLatencyTotalMs: number;
+  ttsLatencyMaximumMs: number;
+  ttsAudioBytes: number;
+  ttsAudioDurationMs: number;
 }
 
 function rejectUpgrade(socket: Duplex, statusCode: number, message: string): void {
@@ -170,6 +189,18 @@ function summary(context: StreamContext): Record<string, unknown> {
       : null,
     maximum_translation_latency_ms: context.finalTranslations > 0
       ? context.translationLatencyMaximumMs
+      : null,
+    final_tts_segments: context.finalTtsSegments,
+    tts_errors: context.ttsErrors,
+    tts_pending_at_stop: context.ttsPendingAtStop,
+    tts_drain_timed_out: context.ttsDrainTimedOut,
+    tts_audio_bytes: context.ttsAudioBytes,
+    tts_audio_duration_ms: context.ttsAudioDurationMs,
+    average_tts_latency_ms: context.finalTtsSegments > 0
+      ? Math.round(context.ttsLatencyTotalMs / context.finalTtsSegments)
+      : null,
+    maximum_tts_latency_ms: context.finalTtsSegments > 0
+      ? context.ttsLatencyMaximumMs
       : null
   };
 }
@@ -180,7 +211,9 @@ export function attachStreamTransport(
   tickets: StreamTicketStore,
   allowedOrigin: string,
   sttProvider: SttProvider,
-  translationProvider: TranslationProvider
+  translationProvider: TranslationProvider,
+  ttsProvider: TtsProvider,
+  ttsVoice = "Iapetus"
 ): void {
   const requestSessions = new WeakMap<IncomingMessage, string>();
   const activeSessions = new Map<string, WebSocket>();
@@ -265,9 +298,38 @@ export function attachStreamTransport(
       finalTranslations: 0,
       translationErrors: 0,
       translationLatencyTotalMs: 0,
-      translationLatencyMaximumMs: 0
+      translationLatencyMaximumMs: 0,
+      ttsChain: Promise.resolve(),
+      ttsPending: 0,
+      ttsAccepting: true,
+      ttsDelivering: true,
+      ttsAbortController: new AbortController(),
+      ttsPendingAtStop: 0,
+      ttsDrainTimedOut: false,
+      finalTtsSegments: 0,
+      ttsErrors: 0,
+      ttsLatencyTotalMs: 0,
+      ttsLatencyMaximumMs: 0,
+      ttsAudioBytes: 0,
+      ttsAudioDurationMs: 0
     };
     const correlationId = randomUUID();
+
+    const eventPayload = (
+      eventType: string,
+      data: Record<string, unknown>
+    ): string => {
+      context.sequence += 1;
+      return JSON.stringify({
+        event_id: randomUUID(),
+        event_type: eventType,
+        sequence: context.sequence,
+        session_id: sessionId,
+        occurred_at: new Date().toISOString(),
+        correlation_id: correlationId,
+        data
+      });
+    };
 
     const sendEvent = (
       eventType: string,
@@ -276,16 +338,32 @@ export function attachStreamTransport(
       if (webSocket.readyState !== WebSocket.OPEN) {
         return;
       }
-      context.sequence += 1;
-      webSocket.send(JSON.stringify({
-        event_id: randomUUID(),
-        event_type: eventType,
-        sequence: context.sequence,
-        session_id: sessionId,
-        occurred_at: new Date().toISOString(),
-        correlation_id: correlationId,
-        data
-      }));
+      webSocket.send(eventPayload(eventType, data));
+    };
+
+    const sendEventAsync = async (
+      eventType: string,
+      data: Record<string, unknown>
+    ): Promise<void> => {
+      if (webSocket.readyState !== WebSocket.OPEN) {
+        throw new Error("Stream is not open.");
+      }
+      const payload = eventPayload(eventType, data);
+      await new Promise<void>((resolve, reject) => {
+        webSocket.send(payload, (error) => {
+          if (error) {
+            reject(error);
+            return;
+          }
+          resolve();
+        });
+      });
+      while (
+        webSocket.readyState === WebSocket.OPEN &&
+        webSocket.bufferedAmount > MAX_SERVER_BUFFERED_BYTES
+      ) {
+        await new Promise((resolve) => setTimeout(resolve, 10));
+      }
     };
 
     const sendTranslationError = (
@@ -307,6 +385,153 @@ export function attachStreamTransport(
         status: "ERROR",
         pending: context.translationPending
       });
+    };
+
+    const sendTtsError = (
+      segmentId: string | null,
+      code: string,
+      message: string,
+      retryable: boolean
+    ): void => {
+      context.ttsErrors += 1;
+      sendEvent("TTS_ERROR", {
+        segment_id: segmentId,
+        provider: ttsProvider.name,
+        code,
+        message,
+        retryable
+      });
+      sendEvent("TTS_STATUS", {
+        provider: ttsProvider.name,
+        voice: ttsVoice,
+        status: "ERROR",
+        pending: context.ttsPending
+      });
+    };
+
+    const enqueueTts = (
+      segmentId: string,
+      translatedText: string
+    ): void => {
+      if (!ttsProvider.configured || !context.ttsAccepting) {
+        return;
+      }
+      if (context.ttsPending >= MAX_TTS_QUEUE) {
+        sendTtsError(
+          segmentId,
+          "TTS_QUEUE_FULL",
+          "TTS queue is full.",
+          true
+        );
+        return;
+      }
+
+      context.ttsPending += 1;
+      sendEvent("TTS_STATUS", {
+        provider: ttsProvider.name,
+        voice: ttsVoice,
+        status: "ACTIVE",
+        pending: context.ttsPending
+      });
+
+      const operation = async (): Promise<void> => {
+        try {
+          const result = await ttsProvider.synthesize({
+            segmentId,
+            language: "uk",
+            text: translatedText.slice(0, MAX_TTS_SOURCE_CHARACTERS),
+            voice: ttsVoice,
+            requestedAt: new Date().toISOString(),
+            signal: context.ttsAbortController.signal
+          });
+          if (!context.ttsDelivering) {
+            return;
+          }
+
+          const chunkCount = Math.ceil(
+            result.audio.byteLength / TTS_AUDIO_CHUNK_BYTES
+          );
+          await sendEventAsync("TTS_AUDIO_START", {
+            segment_id: result.segmentId,
+            provider: result.provider,
+            voice: result.voice,
+            audio_format: result.audioFormat,
+            sample_rate_hz: result.sampleRateHz,
+            channels: result.channels,
+            byte_length: result.audio.byteLength,
+            chunk_count: chunkCount,
+            audio_duration_ms: result.audioDurationMs,
+            tts_latency_ms: result.ttsLatencyMs,
+            completed_at: result.completedAt
+          });
+
+          for (let index = 0; index < chunkCount; index += 1) {
+            if (!context.ttsDelivering) {
+              return;
+            }
+            const start = index * TTS_AUDIO_CHUNK_BYTES;
+            const end = Math.min(
+              start + TTS_AUDIO_CHUNK_BYTES,
+              result.audio.byteLength
+            );
+            await sendEventAsync("TTS_AUDIO_CHUNK", {
+              segment_id: result.segmentId,
+              chunk_index: index,
+              chunk_count: chunkCount,
+              audio_base64: result.audio.subarray(start, end).toString("base64")
+            });
+          }
+
+          await sendEventAsync("TTS_AUDIO_END", {
+            segment_id: result.segmentId,
+            provider: result.provider,
+            voice: result.voice,
+            audio_duration_ms: result.audioDurationMs,
+            byte_length: result.audio.byteLength,
+            tts_latency_ms: result.ttsLatencyMs
+          });
+
+          context.finalTtsSegments += 1;
+          context.ttsLatencyTotalMs += result.ttsLatencyMs;
+          context.ttsLatencyMaximumMs = Math.max(
+            context.ttsLatencyMaximumMs,
+            result.ttsLatencyMs
+          );
+          context.ttsAudioBytes += result.audio.byteLength;
+          context.ttsAudioDurationMs += result.audioDurationMs;
+        } catch (error) {
+          if (!context.ttsDelivering) {
+            return;
+          }
+          const providerError = error instanceof TtsProviderError
+            ? error
+            : new TtsProviderError(
+              "TTS_PROVIDER_FAILED",
+              "TTS provider request failed."
+            );
+          sendTtsError(
+            segmentId,
+            providerError.code,
+            providerError.message,
+            providerError.code === "TTS_TIMEOUT" ||
+              providerError.code === "TTS_RATE_LIMITED"
+          );
+        } finally {
+          context.ttsPending = Math.max(0, context.ttsPending - 1);
+          if (context.ttsPending === 0 && context.ttsAccepting) {
+            sendEvent("TTS_STATUS", {
+              provider: ttsProvider.name,
+              voice: ttsVoice,
+              status: "READY",
+              pending: 0
+            });
+          }
+        }
+      };
+
+      context.ttsChain = context.ttsChain
+        .then(operation)
+        .catch(() => undefined);
     };
 
     const enqueueTranslation = (
@@ -361,6 +586,7 @@ export function attachStreamTransport(
             translation_latency_ms: result.translationLatencyMs,
             completed_at: result.completedAt
           });
+          enqueueTts(result.segmentId, result.translatedText);
         } catch (error) {
           if (!context.translationDelivering) {
             return;
@@ -440,6 +666,46 @@ export function attachStreamTransport(
       );
     };
 
+    const drainTts = async (): Promise<void> => {
+      context.ttsPendingAtStop = context.ttsPending;
+      if (context.ttsPending === 0) {
+        return;
+      }
+
+      sendEvent("TTS_STATUS", {
+        provider: ttsProvider.name,
+        voice: ttsVoice,
+        status: "DRAINING",
+        pending: context.ttsPending
+      });
+
+      let timeout: NodeJS.Timeout | null = null;
+      const drained = await Promise.race([
+        context.ttsChain.then(() => true),
+        new Promise<boolean>((resolve) => {
+          timeout = setTimeout(() => resolve(false), TTS_DRAIN_TIMEOUT_MS);
+        })
+      ]);
+
+      if (timeout) {
+        clearTimeout(timeout);
+      }
+      if (drained) {
+        return;
+      }
+
+      context.ttsDrainTimedOut = true;
+      context.ttsDelivering = false;
+      context.ttsAbortController.abort();
+      await context.ttsChain;
+      sendTtsError(
+        null,
+        "TTS_DRAIN_TIMEOUT",
+        "TTS queue did not drain before shutdown.",
+        false
+      );
+    };
+
     sendEvent("STREAM_READY", {
       protocol: BASE_PROTOCOL,
       max_binary_frame_bytes: MAX_BINARY_FRAME_BYTES,
@@ -450,7 +716,16 @@ export function attachStreamTransport(
       translation_provider: translationProvider.name,
       translation_configured: translationProvider.configured,
       max_translation_queue: MAX_TRANSLATION_QUEUE,
-      translation_drain_timeout_ms: TRANSLATION_DRAIN_TIMEOUT_MS
+      translation_drain_timeout_ms: TRANSLATION_DRAIN_TIMEOUT_MS,
+      tts_provider: ttsProvider.name,
+      tts_configured: ttsProvider.configured,
+      tts_voice: ttsVoice,
+      tts_audio_format: "pcm_s16le",
+      tts_sample_rate_hz: 24000,
+      tts_channels: 1,
+      max_tts_queue: MAX_TTS_QUEUE,
+      tts_audio_chunk_bytes: TTS_AUDIO_CHUNK_BYTES,
+      tts_drain_timeout_ms: TTS_DRAIN_TIMEOUT_MS
     });
 
     const handleTranscript = (transcript: SttTranscript): void => {
@@ -571,6 +846,12 @@ export function attachStreamTransport(
           status: translationProvider.configured ? "READY" : "NOT_CONFIGURED",
           pending: 0
         });
+        sendEvent("TTS_STATUS", {
+          provider: ttsProvider.name,
+          voice: ttsVoice,
+          status: ttsProvider.configured ? "READY" : "NOT_CONFIGURED",
+          pending: 0
+        });
 
         try {
           context.sttConnection = await sttProvider.connect(
@@ -601,6 +882,9 @@ export function attachStreamTransport(
             stt_configured: sttProvider.configured,
             translation_provider: translationProvider.name,
             translation_configured: translationProvider.configured,
+            tts_provider: ttsProvider.name,
+            tts_configured: ttsProvider.configured,
+            tts_voice: ttsVoice,
             ...event.data
           });
         } catch (error) {
@@ -634,6 +918,16 @@ export function attachStreamTransport(
           pending: context.translationPending,
           drain_timed_out: context.translationDrainTimedOut
         });
+        context.ttsAccepting = false;
+        await drainTts();
+        context.ttsDelivering = false;
+        sendEvent("TTS_STATUS", {
+          provider: ttsProvider.name,
+          voice: ttsVoice,
+          status: "CLOSED",
+          pending: context.ttsPending,
+          drain_timed_out: context.ttsDrainTimedOut
+        });
         sendEvent("STREAM_COMPLETED", summary(context));
         webSocket.close(1000, "Stream completed");
         return;
@@ -654,6 +948,9 @@ export function attachStreamTransport(
       context.translationAccepting = false;
       context.translationDelivering = false;
       context.translationAbortController.abort();
+      context.ttsAccepting = false;
+      context.ttsDelivering = false;
+      context.ttsAbortController.abort();
       if (!context.stopping) {
         context.stopping = true;
         context.sttConnection?.close().catch(() => undefined);
@@ -667,6 +964,7 @@ export function attachStreamTransport(
     }
     activeSessions.clear();
     translationProvider.close().catch(() => undefined);
+    ttsProvider.close().catch(() => undefined);
     webSocketServer.close();
   });
 }

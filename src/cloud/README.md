@@ -1,44 +1,30 @@
 # VoiceBridge Cloud Service
 
 Purpose:
-Provide the Phase 1 cloud API, bounded audio streaming, AssemblyAI STT, and ordered English-to-Ukrainian translation.
+Provide the Phase 1 cloud API, bounded browser audio streaming, AssemblyAI English STT, Gemini English-to-Ukrainian translation, and Gemini Ukrainian TTS.
 
 Version:
-0.4.2
+0.5.0
 
 Status:
-Implementation complete; final controlled graceful-drain validation pending.
+Implementation complete; controlled live TTS and browser playback validation pending.
 
 ## Capabilities
 
-- public `GET /api/v1/health`;
-- shared Bearer-token validation;
-- in-memory authoritative session state;
-- create and read session endpoints;
-- start, pause, resume, and stop commands;
+- authenticated session lifecycle;
 - one-time WebSocket stream tickets;
-- authenticated WebSocket upgrade without the shared token in the URL;
-- bounded binary PCM audio frames;
-- acknowledgement and flow-control events;
-- per-stream counters without audio persistence;
-- provider-neutral cloud-side STT boundary;
-- AssemblyAI Universal-Streaming English STT;
-- ordered partial and final English transcript events;
-- provider-neutral cloud-side translation boundary;
-- Gemini English-to-Ukrainian translation adapter;
-- ordered bounded per-session translation queue;
-- graceful drain of already accepted translations for up to 10000 milliseconds on Stop;
-- cancellation after drain timeout or unexpected disconnect;
-- STT segment identity preserved in translation events;
-- bounded prior English context;
-- recognition and translation latency measurements;
+- bounded mono PCM input with acknowledgements and flow control;
+- AssemblyAI partial and final English transcripts;
+- ordered Gemini Ukrainian translations;
+- ordered Gemini Ukrainian speech synthesis;
+- provider-neutral STT, translation, and TTS interfaces;
+- final-segment identity preserved through translation and TTS;
+- bounded translation and TTS queues;
+- bounded PCM audio output chunks;
+- recognition, translation, and TTS latency metrics;
+- translation and TTS graceful drains during Stop;
 - sanitized provider errors;
-- canonical API error envelopes;
-- request and correlation identifiers;
-- bounded JSON request bodies;
-- test-environment CORS;
-- fixed-window request limiting;
-- environment-based configuration;
+- no content persistence;
 - deterministic automated tests;
 - Docker deployment.
 
@@ -46,17 +32,9 @@ Implementation complete; final controlled graceful-drain validation pending.
 
 - Node.js 24 or later;
 - npm;
-- one test access token with at least 16 characters.
+- `TEST_ACCESS_TOKEN` with at least 16 characters.
 
 ## Configuration
-
-Copy `.env.example` to an ignored environment file or provide variables through the deployment platform.
-
-Required:
-
-```text
-TEST_ACCESS_TOKEN
-```
 
 Required for live STT:
 
@@ -64,25 +42,21 @@ Required for live STT:
 ASSEMBLYAI_API_KEY
 ```
 
-Without `ASSEMBLYAI_API_KEY`, the service remains healthy and reports STT as `NOT_CONFIGURED`.
-
-Required for live translation:
+Required for live Gemini translation and TTS:
 
 ```text
 GEMINI_API_KEY
 ```
 
-Optional translation model override:
+Optional model and voice overrides:
 
 ```text
 GEMINI_TRANSLATION_MODEL=gemini-3.1-flash-lite
+GEMINI_TTS_MODEL=gemini-2.5-flash-preview-tts
+GEMINI_TTS_VOICE=Iapetus
 ```
 
-Without `GEMINI_API_KEY`, the service remains healthy, AssemblyAI STT continues to work, and translation reports `NOT_CONFIGURED`.
-
-The controlled Gemini free-tier test is limited to public YouTube or synthetic content approved for external provider processing. It MUST NOT be used for private, confidential, regulated, or production traffic.
-
-Other optional settings:
+Other optional variables:
 
 ```text
 HOST
@@ -92,30 +66,26 @@ MAX_REQUEST_BODY_BYTES
 RATE_LIMIT_REQUESTS_PER_MINUTE
 ```
 
-Real tokens and API keys MUST NOT be committed.
+Without a provider key, the service remains healthy and reports the corresponding capability as `NOT_CONFIGURED`.
 
-## Install and Validate
+Provider keys MUST remain outside the repository and browser extension.
+
+## Validate
 
 ```text
 npm ci
 npm run check
 ```
 
-Default endpoint:
+Health endpoint:
 
 ```text
-http://127.0.0.1:8080/api/v1/health
+GET /api/v1/health
 ```
 
-## Create a Session
+The health response reports service version and STT, translation, and TTS configuration without exposing secrets.
 
-```text
-POST /api/v1/sessions
-Authorization: Bearer TEST_ACCESS_TOKEN
-Content-Type: application/json
-```
-
-Request:
+## Session Request
 
 ```json
 {
@@ -127,44 +97,18 @@ Request:
   "provider_preferences": {
     "recognition": "assemblyai",
     "translation": "gemini",
-    "synthesis": null
+    "synthesis": "gemini"
   },
   "voice": {
-    "voice_id": null,
+    "voice_id": "Iapetus",
     "speaking_rate": null
   }
 }
 ```
 
-## Session Commands
+## Streaming Events
 
-```text
-GET  /api/v1/sessions/{session_id}
-POST /api/v1/sessions/{session_id}/start
-POST /api/v1/sessions/{session_id}/pause
-POST /api/v1/sessions/{session_id}/resume
-POST /api/v1/sessions/{session_id}/stop
-```
-
-## Audio and Text Stream
-
-An `ACTIVE` session can request a one-time stream ticket:
-
-```text
-POST /api/v1/sessions/{session_id}/stream-ticket
-Authorization: Bearer TEST_ACCESS_TOKEN
-```
-
-Connect to:
-
-```text
-WS /api/v1/sessions/{session_id}/stream
-Sec-WebSocket-Protocol: voicebridge.v1, voicebridge.ticket.TICKET
-```
-
-After `STREAM_READY`, send `STREAM_START` describing mono `pcm_s16le` audio. Binary frames are limited to 32768 bytes. The server sends `AUDIO_ACK` every 10 frames. The client MUST keep no more than 50 frames unacknowledged and MUST bound its WebSocket output buffer.
-
-STT events:
+STT:
 
 ```text
 STT_STATUS
@@ -173,7 +117,7 @@ TRANSCRIPT_FINAL
 STT_ERROR
 ```
 
-Translation events:
+Translation:
 
 ```text
 TRANSLATION_STATUS
@@ -181,42 +125,56 @@ TRANSLATION_FINAL
 TRANSLATION_ERROR
 ```
 
-Only final English transcript segments are translated. `TRANSLATION_FINAL` preserves the original final STT `segment_id`. The queue accepts at most 20 pending operations and uses at most four previous final English segments, bounded to 3000 context characters.
-
-On `STREAM_STOP`, the service first closes STT, stops accepting new translation work, and allows already accepted translations up to 10000 milliseconds to complete in order. If the queue does not drain within the bound, remaining work is cancelled and the completion summary reports the timeout.
-
-Translation errors do not terminate audio streaming or STT. Audio, transcripts, provider prompts, provider responses, and translations are not persisted by VoiceBridge Cloud.
-
-## Docker
+TTS:
 
 ```text
-docker build -t voicebridge-cloud .
-docker run --rm -p 8080:8080 \
-  -e TEST_ACCESS_TOKEN=replace-with-a-long-random-token \
-  -e ASSEMBLYAI_API_KEY=replace-with-an-assemblyai-api-key \
-  -e GEMINI_API_KEY=replace-with-a-gemini-api-key \
-  voicebridge-cloud
+TTS_STATUS
+TTS_AUDIO_START
+TTS_AUDIO_CHUNK
+TTS_AUDIO_END
+TTS_ERROR
 ```
+
+The TTS adapter normalizes provider output to:
+
+- `pcm_s16le`;
+- `24000` Hz;
+- one channel.
+
+PCM is divided into bounded chunks before WebSocket delivery. Audio is not persisted.
+
+## Queue and Shutdown Policy
+
+- final STT segments only are translated;
+- final Ukrainian translations only are synthesized;
+- translation and TTS use separate sequential queues;
+- each queue accepts at most 20 pending operations;
+- translation drains for up to 10 seconds during Stop;
+- TTS drains for up to 30 seconds during Stop;
+- unexpected disconnect cancels pending provider work immediately;
+- provider failures do not terminate earlier pipeline stages.
+
+## Privacy
+
+The controlled Gemini free-tier test is limited to public YouTube or synthetic content approved for provider processing.
+
+It MUST NOT process private, confidential, regulated, or production content.
+
+VoiceBridge does not persist audio, transcripts, translations, prompts, provider responses, or synthesized speech.
 
 ## Current Limitations
 
-- single process;
-- in-memory sessions;
-- no content persistence;
-- AssemblyAI is the only implemented STT provider;
-- Gemini is the only implemented translation provider;
-- no automatic STT reconnect or audio replay;
-- no automatic translation retry or fallback;
-- recent transcript and translation display is bounded to browser session state;
-- no TTS;
-- shared token is not a production identity model.
+- single process and in-memory sessions;
+- one implemented provider per pipeline stage;
+- Gemini TTS is a preview model;
+- the initial TTS adapter receives the complete provider audio response before sending bounded chunks;
+- no automatic provider retry or fallback;
+- no production identity model.
 
 ## Security
 
-- keep all real secrets outside the repository;
-- rotate and revoke secrets when exposure is suspected;
-- restrict `CORS_ALLOWED_ORIGIN` outside controlled testing;
+- keep all secrets only in the deployment environment;
 - use HTTPS at the deployment boundary;
-- do not log stream tickets, shared tokens, provider keys, prompts, or responses;
-- treat stream tickets as short-lived bearer secrets;
-- do not use the Gemini free tier for private or production content.
+- restrict CORS outside controlled testing;
+- do not log keys, tokens, prompts, responses, transcripts, translations, or PCM;
+- treat stream tickets as short-lived bearer secrets.

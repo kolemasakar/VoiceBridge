@@ -10,7 +10,7 @@
     <main>
       <header>
         <h1>VoiceBridge</h1>
-        <p>Cloud session and capture</p>
+        <p>Cloud session, translation, and playback</p>
       </header>
 
       <section class="status-card">
@@ -97,6 +97,23 @@
           <span id="translation-empty">Waiting for final English segments...</span>
         </div>
         <p id="translation-error" role="alert"></p>
+      </section>
+
+      <section class="metrics tts-card">
+        <div class="section-title">
+          <h2>Ukrainian speech</h2>
+          <strong id="tts-status">OFFLINE</strong>
+        </div>
+        <dl>
+          <div><dt>Provider</dt><dd id="tts-provider">-</dd></div>
+          <div><dt>Voice</dt><dd id="tts-voice">-</dd></div>
+          <div><dt>Audio segments</dt><dd id="tts-count">0</dd></div>
+          <div><dt>TTS latency</dt><dd id="tts-latency">-</dd></div>
+          <div><dt>Playback</dt><dd id="playback-status">IDLE</dd></div>
+          <div><dt>Queued audio</dt><dd id="playback-queued">0 ms</dd></div>
+          <div><dt>Audio bytes</dt><dd id="tts-bytes">0</dd></div>
+        </dl>
+        <p id="tts-error" role="alert"></p>
       </section>
 
       <section class="controls">
