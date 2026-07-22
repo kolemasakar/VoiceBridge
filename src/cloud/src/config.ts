@@ -1,3 +1,5 @@
+export type TranslationProviderName = "gemini" | "azure";
+export type TranslationFallbackProviderName = "gemini" | "none";
 export type TtsProviderName = "gemini" | "azure";
 
 export interface AppConfig {
@@ -7,6 +9,11 @@ export interface AppConfig {
   assemblyAiApiKey: string | null;
   geminiApiKey: string | null;
   geminiTranslationModel: string;
+  translationProvider?: TranslationProviderName;
+  translationFallbackProvider?: TranslationFallbackProviderName;
+  azureTranslatorKey?: string | null;
+  azureTranslatorRegion?: string;
+  azureTranslatorEndpoint?: string;
   ttsProvider?: TtsProviderName;
   geminiTtsModel?: string;
   geminiTtsVoice?: string;
@@ -25,10 +32,7 @@ function parseInteger(
   minimum: number,
   maximum: number
 ): number {
-  if (value === undefined || value === "") {
-    return fallback;
-  }
-
+  if (value === undefined || value === "") return fallback;
   const parsed = Number(value);
   if (!Number.isInteger(parsed) || parsed < minimum || parsed > maximum) {
     throw new Error(
@@ -52,12 +56,37 @@ function parseIdentifier(
   return identifier;
 }
 
-function parseTtsProvider(value: string | undefined): TtsProviderName {
-  const provider = (value || "gemini").trim().toLowerCase();
-  if (provider !== "gemini" && provider !== "azure") {
-    throw new Error("TTS_PROVIDER must be either gemini or azure.");
+function parseProvider<T extends string>(
+  value: string | undefined,
+  fallback: T,
+  allowed: readonly T[],
+  name: string
+): T {
+  const provider = (value || fallback).trim().toLowerCase() as T;
+  if (!allowed.includes(provider)) {
+    throw new Error(`${name} must be one of: ${allowed.join(", ")}.`);
   }
   return provider;
+}
+
+function parseHttpsEndpoint(
+  value: string | undefined,
+  fallback: string,
+  name: string
+): string {
+  const raw = value || fallback;
+  let parsed: URL;
+  try {
+    parsed = new URL(raw);
+  } catch {
+    throw new Error(`${name} must be a valid URL.`);
+  }
+  const localHttp = parsed.protocol === "http:" &&
+    ["localhost", "127.0.0.1"].includes(parsed.hostname);
+  if (parsed.protocol !== "https:" && !localHttp) {
+    throw new Error(`${name} must use HTTPS.`);
+  }
+  return raw.replace(/\/+$/, "");
 }
 
 export function loadConfig(
@@ -81,7 +110,35 @@ export function loadConfig(
       "gemini-3.1-flash-lite",
       "GEMINI_TRANSLATION_MODEL"
     ),
-    ttsProvider: parseTtsProvider(environment.TTS_PROVIDER),
+    translationProvider: parseProvider(
+      environment.TRANSLATION_PROVIDER,
+      "azure",
+      ["azure", "gemini"] as const,
+      "TRANSLATION_PROVIDER"
+    ),
+    translationFallbackProvider: parseProvider(
+      environment.TRANSLATION_FALLBACK_PROVIDER,
+      "gemini",
+      ["gemini", "none"] as const,
+      "TRANSLATION_FALLBACK_PROVIDER"
+    ),
+    azureTranslatorKey: environment.AZURE_TRANSLATOR_KEY || null,
+    azureTranslatorRegion: parseIdentifier(
+      environment.AZURE_TRANSLATOR_REGION,
+      "eastus",
+      "AZURE_TRANSLATOR_REGION"
+    ).toLowerCase(),
+    azureTranslatorEndpoint: parseHttpsEndpoint(
+      environment.AZURE_TRANSLATOR_ENDPOINT,
+      "https://api.cognitive.microsofttranslator.com",
+      "AZURE_TRANSLATOR_ENDPOINT"
+    ),
+    ttsProvider: parseProvider(
+      environment.TTS_PROVIDER,
+      "gemini",
+      ["azure", "gemini"] as const,
+      "TTS_PROVIDER"
+    ),
     geminiTtsModel: parseIdentifier(
       environment.GEMINI_TTS_MODEL,
       "gemini-2.5-flash-preview-tts",
