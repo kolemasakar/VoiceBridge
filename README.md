@@ -90,6 +90,7 @@ A production identity model must replace the shared token before public multi-us
 
 - [Phase 1 MVP Validation](docs/phases/PHASE_1_MVP_VALIDATION.md)
 - [Phase 1 MVP Recovery Bootstrap](docs/bootstrap/PHASE_1_MVP_VALIDATED_BOOTSTRAP.md)
+- [Phase 1 MVP History Entry](docs/history/2026-07-22_PHASE_1_MVP_VALIDATED.md)
 - [Project Overview](docs/overview/01_PROJECT_OVERVIEW.md)
 - [Project Description](docs/overview/07_PROJECT_DESCRIPTION.md)
 - [Roadmap](docs/planning/03_ROADMAP.md)

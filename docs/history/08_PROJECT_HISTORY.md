@@ -12,10 +12,10 @@ Status:
 Approved
 
 Version:
-1.7.0
+1.13.0
 
 Last Updated:
-2026-07-18
+2026-07-22
 
 ## 1. Project Origin
 
@@ -280,16 +280,11 @@ PASSED.
 
 ## 13. Next Engineering Action
 
-Configure and validate Milestone 4 - STT Integration.
+Phase 1 MVP work is complete.
 
-Required evidence:
+Do not reopen completed Phase 1 scope without a documented defect or approved change.
 
-- an AssemblyAI free account is created without a payment method;
-- `ASSEMBLYAI_API_KEY` is configured only in Render;
-- cloud service 0.3.1 reports configured AssemblyAI STT;
-- extension 0.4.1 displays ordered partial and final English text;
-- record latency, accuracy, failures, and free-credit usage.
-
+The next project scope must be explicitly approved by the project owner. Candidate work belongs to Phase 2 Universal Cloud Audio or Phase 3 Cloud Service Hardening.
 ## 14. Milestone 3 Streaming Transport
 
 Implemented:
@@ -368,6 +363,45 @@ Validation record:
 Status:
 Implementation complete; Render configuration and live browser validation pending.
 
+## 15A. Phase 1 MVP Final Validation
+
+Date:
+
+2026-07-22.
+
+Final result:
+
+`VOICEBRIDGE_PHASE_1_MVP_VALIDATED`
+
+Accepted versions:
+
+- cloud service `0.6.0`;
+- browser extension `0.6.2`;
+- implementation baseline commit `1d7e82ecb122ab953190f9b2fdc8e7fbea86840c`.
+
+Accepted pipeline:
+
+```text
+AssemblyAI English STT
+    -> Azure Translator primary
+    -> Gemini translation fallback
+    -> Azure Speech Ukrainian TTS
+```
+
+Final controlled test completed 28 English, Ukrainian, voiced, and played segments with zero translation retries, zero TTS retries, zero pending operations after completion, zero dropped audio frames, and one-press Stop returning the extension to `IDLE`.
+
+Observed final stage latency was 712 ms for STT, 81 ms for translation, and 190 ms for TTS.
+
+A prior Azure Speech endurance session exceeded 12 minutes and completed 108 English, translated, voiced, and played segments with zero TTS retries.
+
+The project owner confirmed understandable Ukrainian speech, automatic ducking, original-audio restoration, normal Azure pipeline operation, and correct one-press Stop behavior.
+
+Records:
+
+- `../phases/PHASE_1_MVP_VALIDATION.md`;
+- `2026-07-22_PHASE_1_MVP_VALIDATED.md`;
+- `../bootstrap/PHASE_1_MVP_VALIDATED_BOOTSTRAP.md`.
+
 ## 16. References
 
 - [01_PROJECT_OVERVIEW](../overview/01_PROJECT_OVERVIEW.md)
@@ -387,6 +421,7 @@ Implementation complete; Render configuration and live browser validation pendin
 
 | Version | Date | Description |
 |---------|------|-------------|
+| 1.13.0 | 2026-07-22 | Validated the minimum Phase 1 MVP and recorded the Azure pipeline and one-press Stop acceptance |
 | 1.12.0 | 2026-07-19 | Replaced the initial Milestone 4 STT adapter with AssemblyAI Free |
 | 1.11.0 | 2026-07-19 | Added Milestone 4 provider-neutral STT implementation and pending live validation |
 | 1.10.0 | 2026-07-19 | Completed ten-minute Milestone 3 streaming validation and activated STT integration |

@@ -159,7 +159,7 @@ Read these first after recovery:
 - `docs/phases/PHASE_1_CLOUD_YOUTUBE_MVP.md`;
 - `docs/phases/PHASE_1_MILESTONE_6_TTS_PLAYBACK.md`;
 - `docs/adr/ADR-008_AZURE_TTS_PROVIDER.md`;
-- `docs/adr/ADR-009_AZURE_TRANSLATOR_PRIMARY.md` if present under the current ADR naming convention;
+- `docs/adr/ADR-008_PHASE_1_AZURE_TRANSLATION_PROVIDER.md`;
 - `src/cloud/README.md`;
 - `src/browser_extension/README.md`.
 
