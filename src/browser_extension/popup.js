@@ -60,6 +60,7 @@ const elements = {
 };
 
 const DEFAULT_CLOUD_API_URL = "https://voicebridge-cloud-us.onrender.com";
+let stopInProgress = false;
 
 async function serviceWorkerMessage(type, data = undefined) {
   const response = await chrome.runtime.sendMessage({
@@ -85,15 +86,20 @@ function statusClass(value) {
 }
 
 function renderState(state) {
-  const active = state.status === "ACTIVE";
+  const active = ["ACTIVE", "PAUSED"].includes(state.status);
+  const stopping = stopInProgress ||
+    ["STOPPING", "DRAINING"].includes(state.status);
   const error = state.status === "ERROR";
-  elements.status.textContent = state.status || "IDLE";
-  elements.statusDot.classList.toggle("active", active);
+  elements.status.textContent = stopping
+    ? "STOPPING"
+    : state.status || "IDLE";
+  elements.statusDot.classList.toggle("active", active && !stopping);
   elements.statusDot.classList.toggle("error", error);
   elements.elapsed.textContent = formatDuration(state.elapsed_seconds);
-  elements.start.disabled = active;
-  elements.stop.disabled = !active;
-  elements.testDucking.disabled = !active;
+  elements.start.disabled = active || stopping;
+  elements.stop.disabled = !active || stopping;
+  elements.stop.textContent = stopping ? "Stopping..." : "Stop";
+  elements.testDucking.disabled = !active || stopping;
   elements.sampleRate.textContent = state.sample_rate_hz
     ? state.sample_rate_hz + " Hz"
     : "-";
@@ -301,29 +307,34 @@ async function startCapture() {
 }
 
 async function stopCapture() {
+  if (stopInProgress) return;
+  stopInProgress = true;
   elements.error.textContent = "";
-  elements.stop.disabled = true;
-  elements.status.textContent = "DRAINING";
+  renderState({ status: "STOPPING" });
   const failures = [];
   try {
-    const response = await chrome.runtime.sendMessage({
-      target: "offscreen",
-      type: "STOP_CAPTURE"
-    });
-    if (!response?.ok) {
-      failures.push(response?.error || "Unable to stop capture.");
+    try {
+      const response = await chrome.runtime.sendMessage({
+        target: "offscreen",
+        type: "STOP_CAPTURE"
+      });
+      if (!response?.ok) {
+        failures.push(response?.error || "Unable to stop capture.");
+      }
+    } catch (error) {
+      failures.push(error.message);
     }
-  } catch (error) {
-    failures.push(error.message);
+    try {
+      const cloudResponse = await serviceWorkerMessage("STOP_CLOUD_SESSION");
+      renderCloudState(cloudResponse.state);
+    } catch (error) {
+      failures.push(error.message);
+    }
+  } finally {
+    stopInProgress = false;
+    await refreshState();
+    elements.error.textContent = failures.join(" ");
   }
-  try {
-    const cloudResponse = await serviceWorkerMessage("STOP_CLOUD_SESSION");
-    renderCloudState(cloudResponse.state);
-  } catch (error) {
-    failures.push(error.message);
-  }
-  await refreshState();
-  elements.error.textContent = failures.join(" ");
 }
 
 async function sendVolumes() {
@@ -381,7 +392,11 @@ elements.originalVolume.addEventListener("input", sendVolumes);
 elements.ukrainianVolume.addEventListener("input", sendVolumes);
 chrome.storage.onChanged.addListener((changes, areaName) => {
   if (areaName === "session" && changes.capture_state) {
-    renderState(changes.capture_state.newValue);
+    const state = changes.capture_state.newValue;
+    if (["IDLE", "ERROR"].includes(state?.status)) {
+      stopInProgress = false;
+    }
+    renderState(state);
   }
   if (areaName === "session" && changes.cloud_state) {
     renderCloudState(changes.cloud_state.newValue);

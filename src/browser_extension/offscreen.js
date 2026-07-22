@@ -16,6 +16,7 @@ let streamSocket = null;
 let streamCloseExpected = false;
 let playbackEndTime = 0;
 let currentTtsSegment = null;
+let stopPromise = null;
 const activePlaybackSources = new Set();
 
 const MAX_CLIENT_BUFFERED_BYTES = 262144;
@@ -731,7 +732,16 @@ async function closeCloudStream() {
   streamSocket = null;
 }
 
-async function stopCapture(reason = "USER_STOP") {
+async function performStopCapture(reason = "USER_STOP") {
+  await publishState({
+    status: "STOPPING",
+    started_at: startedAt,
+    elapsed_seconds: startedAt
+      ? Math.floor((Date.now() - Date.parse(startedAt)) / 1000)
+      : 0,
+    error: null,
+    ...streamSnapshot()
+  });
   stopMetrics();
   if (audioProcessorNode) {
     audioProcessorNode.port.onmessage = null;
@@ -778,6 +788,15 @@ async function stopCapture(reason = "USER_STOP") {
   });
 }
 
+function stopCapture(reason = "USER_STOP") {
+  if (stopPromise) return stopPromise;
+  stopPromise = performStopCapture(reason)
+    .finally(() => {
+      stopPromise = null;
+    });
+  return stopPromise;
+}
+
 function calculateLevel() {
   if (!analyserNode) return { rms: 0, peak: 0 };
   const samples = new Float32Array(analyserNode.fftSize);
@@ -799,7 +818,7 @@ async function publishMetrics(track) {
   const settings = track.getSettings();
   const level = calculateLevel();
   await publishState({
-    status: "ACTIVE",
+    status: stopPromise ? "STOPPING" : "ACTIVE",
     started_at: startedAt,
     elapsed_seconds: Math.floor((Date.now() - Date.parse(startedAt)) / 1000),
     sample_rate_hz: settings.sampleRate || audioContext.sampleRate,

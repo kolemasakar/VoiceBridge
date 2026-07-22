@@ -26,7 +26,7 @@ import {
 } from "./tts_provider.js";
 
 const SERVICE_NAME = "voicebridge-cloud";
-const SERVICE_VERSION = "0.5.1";
+const SERVICE_VERSION = "0.6.0";
 const SESSION_PATH = /^\/api\/v1\/sessions\/([A-Za-z0-9-]+)$/;
 const COMMAND_PATH =
   /^\/api\/v1\/sessions\/([A-Za-z0-9-]+)\/(start|pause|resume|stop)$/;
@@ -196,10 +196,16 @@ export function createVoiceBridgeServer(
   config: AppConfig,
   sessionStore = new SessionStore(),
   sttProvider: SttProvider = createSttProvider(config.assemblyAiApiKey),
-  translationProvider: TranslationProvider = createTranslationProvider(
-    config.geminiApiKey,
-    config.geminiTranslationModel
-  ),
+  translationProvider: TranslationProvider = createTranslationProvider({
+    provider: config.translationProvider ?? "azure",
+    fallbackProvider: config.translationFallbackProvider ?? "gemini",
+    geminiApiKey: config.geminiApiKey,
+    geminiModel: config.geminiTranslationModel,
+    azureTranslatorKey: config.azureTranslatorKey ?? null,
+    azureTranslatorRegion: config.azureTranslatorRegion ?? "eastus",
+    azureTranslatorEndpoint: config.azureTranslatorEndpoint ??
+      "https://api.cognitive.microsofttranslator.com"
+  }),
   ttsProvider: TtsProvider = createTtsProvider({
     provider: config.ttsProvider ?? "gemini",
     geminiApiKey: config.geminiApiKey,
