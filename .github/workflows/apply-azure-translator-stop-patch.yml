@@ -40,8 +40,13 @@ jobs:
         run: |
           python3 - <<'PY'
           from pathlib import Path
+          import subprocess
+          paths = subprocess.check_output(
+              ["git", "ls-files", "*.md"], text=True
+          ).splitlines()
           bad=[]
-          for path in Path('.').rglob('*.md'):
+          for value in paths:
+              path = Path(value)
               try:
                   path.read_text(encoding='ascii')
               except UnicodeDecodeError:
