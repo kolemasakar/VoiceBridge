@@ -1,21 +1,22 @@
 name: Apply Azure Translator and Stop State
 
 on:
-  push:
+  pull_request:
     branches:
-      - agent/azure-translator-stop-state
+      - main
 
 permissions:
   contents: write
 
 jobs:
   apply:
+    if: github.event.pull_request.head.repo.full_name == github.repository
     runs-on: ubuntu-latest
     steps:
-      - name: Checkout
+      - name: Checkout pull request branch
         uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803
         with:
-          ref: agent/azure-translator-stop-state
+          ref: ${{ github.head_ref }}
       - name: Set up Node.js
         uses: actions/setup-node@249970729cb0ef3589644e2896645e5dc5ba9c38
         with:
@@ -58,4 +59,4 @@ jobs:
           git config user.email "actions@users.noreply.github.com"
           git add .
           git commit -m "ADD_AZURE_TRANSLATOR_AND_IDEMPOTENT_STOP_STATE"
-          git push
+          git push origin HEAD:${{ github.head_ref }}
