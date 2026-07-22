@@ -1,85 +1,69 @@
 # Phase 1 Milestone 6 Ukrainian TTS and Browser Playback
 
-Status: IMPLEMENTATION COMPLETE; CONTROLLED LIVE VALIDATION PENDING
+Status: PASSED
 
-Date: 2026-07-21
+Date: 2026-07-22
 
 ## Objective
 
-Convert ordered final Ukrainian translations into understandable Ukrainian speech and play the speech in the browser while automatically lowering the original YouTube audio.
+Convert ordered final Ukrainian translations into understandable Ukrainian speech and play the speech in the browser while automatically lowering and restoring the original YouTube audio.
 
-## Approved Provider
+## Final Provider Decision
 
-- provider: Gemini Developer API;
-- model: `gemini-2.5-flash-preview-tts`;
-- default voice: `Iapetus`;
-- credential: existing cloud-only `GEMINI_API_KEY`;
-- optional configuration: `GEMINI_TTS_MODEL` and `GEMINI_TTS_VOICE`.
+Primary TTS provider:
 
-Decision record:
+- provider: Azure Speech;
+- region: `eastus`;
+- voice: `uk-UA-OstapNeural`;
+- output: raw mono 16-bit PCM at 24000 Hz;
+- credential: cloud-only `AZURE_SPEECH_KEY`.
 
-`docs/adr/ADR-007_PHASE_1_TTS_PROVIDER.md`
+Gemini TTS remains implemented behind the provider-neutral boundary but is not selected for the validated runtime.
 
-## Implemented Runtime Flow
+Decision records:
+
+- `docs/adr/ADR-007_PHASE_1_TTS_PROVIDER.md`;
+- `docs/adr/ADR-008_AZURE_TTS_PROVIDER.md`.
+
+## Validated Runtime Flow
 
 ```text
 Final Ukrainian translation
-    |
-    v
-Bounded sequential TTS queue
-    |
-    v
-Provider-neutral TtsProvider
-    |
-    v
-Gemini Ukrainian PCM synthesis
-    |
-    v
-Bounded ordered WebSocket audio events
-    |
-    v
-Offscreen AudioContext playback queue
-    |
-    v
-Automatic original-audio ducking
+    -> bounded sequential TTS queue
+    -> provider-neutral TtsProvider
+    -> Azure Speech Ukrainian PCM synthesis
+    -> bounded ordered WebSocket audio events
+    -> offscreen AudioContext playback queue
+    -> automatic original-audio ducking
+    -> original-audio restoration
 ```
 
-## Cloud Service 0.5.0
+## Accepted Runtime Baseline
 
-Implemented:
+- cloud service `0.6.0`;
+- browser extension `0.6.2`;
+- Azure Speech voice `uk-UA-OstapNeural`;
+- implementation baseline commit `1d7e82ecb122ab953190f9b2fdc8e7fbea86840c`.
+
+## Cloud TTS Capabilities
 
 - provider-neutral TTS interface;
-- disabled provider for safe not-configured operation;
-- Gemini TTS REST adapter;
-- configurable model and voice;
-- Ukrainian prompt discipline;
-- raw mono 16-bit PCM validation;
-- fixed output metadata: 24000 Hz, one channel;
-- 20-second provider timeout;
-- maximum 4000 source characters;
-- maximum 2 MiB provider audio response;
+- Azure Speech REST adapter;
+- cloud-only subscription-key authentication;
+- regional endpoint selection;
+- SSML language `uk-UA`;
+- XML escaping;
+- output normalization to mono `pcm_s16le` at 24000 Hz;
+- provider timeout and response-size bounds;
 - ordered per-stream TTS queue;
-- maximum 20 pending TTS operations;
-- bounded 12288-byte PCM output chunks encoded in WebSocket JSON events;
-- server WebSocket output-buffer control;
-- TTS counts, bytes, audio duration, latency, errors, pending count, and drain state;
-- 30-second graceful TTS drain on Stop;
+- bounded pending work and retries;
+- bounded PCM WebSocket chunks;
+- TTS counts, bytes, latency, errors, pending count, and drain state;
+- graceful TTS drain during explicit Stop;
 - immediate cancellation after unexpected disconnect;
-- no audio persistence.
+- no synthesized-audio persistence.
 
-Implemented events:
-
-- `TTS_STATUS`;
-- `TTS_ERROR`;
-- `TTS_AUDIO_START`;
-- `TTS_AUDIO_CHUNK`;
-- `TTS_AUDIO_END`.
-
-The original translation `segment_id` is preserved through every TTS event.
-
-## Browser Extension 0.6.0
-
-Implemented:
+## Browser Playback Capabilities
 
 - Ukrainian PCM decoding into Web Audio buffers;
 - ordered buffer scheduling;
@@ -87,108 +71,115 @@ Implemented:
 - real Ukrainian volume control;
 - automatic original-audio ducking during queued or active Ukrainian playback;
 - smooth original-audio gain transitions;
-- restoration of the configured background level after playback drains;
-- maximum 45 seconds of queued playback;
-- visible TTS provider, voice, status, segment count, latency, audio bytes, playback status, and queued duration;
-- 35-second local playback drain during Stop;
+- restoration of the configured original level after playback drains;
+- bounded playback queue;
+- visible provider, voice, status, segment count, latency, bytes, playback state, and queued duration;
+- bounded local playback drain during Stop;
 - cleanup of source nodes, buffers, gain nodes, timers, streams, and AudioContext;
 - manual ducking test retained for diagnostics.
 
-## Shutdown Policy
+## Stop State Correction
 
-On explicit Stop:
+Browser extension `0.6.2` corrected the prior multi-click Stop behavior.
 
-1. browser stops sending captured PCM;
-2. cloud closes STT;
-3. cloud drains accepted translations;
-4. cloud drains accepted TTS operations;
-5. browser receives the final bounded PCM chunks;
-6. cloud stream closes cleanly;
-7. browser finishes scheduled Ukrainian playback within its bound;
-8. browser restores original gain and releases audio resources;
-9. Cloud API session moves to `COMPLETED`.
+Accepted transition:
 
-Unexpected disconnect cancels provider work and browser playback immediately.
+```text
+ACTIVE -> STOPPING -> IDLE
+```
 
-## Error Isolation
+Validated behavior:
 
-TTS errors do not terminate:
-
-- tab capture;
-- audio transport;
-- AssemblyAI STT;
-- Gemini translation.
-
-Sanitized TTS categories include:
-
-- `TTS_NOT_CONFIGURED`;
-- `TTS_TIMEOUT`;
-- `TTS_RATE_LIMITED`;
-- `TTS_INVALID_RESPONSE`;
-- `TTS_PROVIDER_REJECTED`;
-- `TTS_PROVIDER_FAILED`;
-- `TTS_QUEUE_FULL`;
-- `TTS_DRAIN_TIMEOUT`.
-
-No key, prompt, raw provider response, transcript, translation, or PCM content is logged or persisted.
+- one Stop click starts the complete shutdown sequence;
+- Start, Stop, and manual ducking controls remain disabled while stopping;
+- repeated Stop commands are ignored;
+- capture stops before cloud draining;
+- accepted STT, translation, TTS, and playback work drains within bounds;
+- original gain is restored;
+- browser resources are released;
+- final cloud and provider states close cleanly.
 
 ## Automated Validation
 
-Automated tests cover:
+Automated checks cover:
 
 - TTS configuration defaults and validation;
-- Gemini request construction;
-- voice selection;
-- base64 PCM response normalization;
-- audio format, sample rate, channel count, byte length, and duration;
-- translation-to-TTS segment identity preservation;
+- Azure request construction and regional authentication;
+- SSML and XML escaping;
+- PCM format, sample rate, channel count, byte length, and duration;
+- HTTP 429 and temporary provider failure mapping;
+- segment identity preservation;
 - bounded ordered audio chunk events;
 - completion summary metrics;
-- TTS failure isolation from STT and translation;
+- TTS failure isolation;
 - browser JavaScript syntax;
-- extension manifest validation;
+- extension manifest version `0.6.2`;
 - extension packaging;
-- ASCII documentation validation.
+- ASCII Markdown validation.
 
-Live provider requests are not made during automated tests.
+## Live Acceptance Evidence
+
+Final controlled acceptance session:
+
+- English final segments: 28;
+- Ukrainian final segments: 28;
+- voiced segments: 28;
+- played segments: 28;
+- TTS retries: 0;
+- TTS pending: 0;
+- TTS buffered: 0;
+- queued audio after completion: 0 ms;
+- playback final state: `COMPLETED`;
+- final observed TTS latency: 190 ms;
+- one Stop click returned capture to `IDLE`.
+
+Extended Azure Speech session:
+
+- duration greater than 12 minutes;
+- English final segments: 108;
+- Ukrainian final segments: 108;
+- voiced segments: 108;
+- played segments: 108;
+- TTS retries: 0;
+- pending and buffered operations after Stop: 0;
+- playback final state: `COMPLETED`.
+
+Observed values are controlled-test evidence and are not production service-level guarantees.
+
+## User Acceptance
+
+The project owner confirmed:
+
+- Ukrainian speech remained understandable throughout the test;
+- original audio was automatically reduced during Ukrainian speech;
+- original audio returned after Ukrainian speech;
+- Ukrainian volume control affected playback;
+- one Stop click completed shutdown normally.
 
 ## Privacy Boundary
 
-The Gemini free tier is restricted to controlled public YouTube or synthetic test content approved for provider processing.
+- Azure Speech key remains only in cloud environment configuration;
+- browser clients do not receive provider keys;
+- private, confidential, regulated, or production content is prohibited during the controlled MVP test stage;
+- VoiceBridge does not intentionally persist raw audio, transcript text, translation text, provider responses, SSML, or synthesized PCM.
 
-Private, confidential, regulated, or production content is prohibited.
+## Exit Result
 
-## Controlled Live Validation
+Milestone 6 exit criterion is satisfied.
 
-The live test must confirm:
+The user hears ordered understandable Ukrainian translated speech during YouTube playback with functional Ukrainian volume control, automatic original-audio ducking and restoration, bounded queues, visible latency, one-press Stop, clean cleanup, and no secret exposure.
 
-- cloud service `0.5.0` deploys successfully;
-- browser extension `0.6.0` loads successfully;
-- TTS provider is `gemini`;
-- voice is `Iapetus` unless an approved override is used;
-- final Ukrainian translations generate ordered audio segments;
-- Ukrainian speech is understandable;
-- TTS latency is visible;
-- Ukrainian volume changes playback level;
-- original YouTube audio ducks during Ukrainian speech;
-- original audio restores after speech;
-- dropped capture frames remain zero or within the approved limit;
-- Stop drains queues and ends in `IDLE`, `COMPLETED`, and `CLOSED` states;
-- no provider secret or persisted content is exposed.
+Final result:
 
-## Exit Criterion
-
-Milestone 6 passes when a controlled public English YouTube video produces ordered understandable Ukrainian speech in the browser with functional volume control, automatic ducking, bounded queues, visible latency, clean shutdown, and no secret or content persistence.
-
-Current result:
-
-IMPLEMENTATION COMPLETE. CONTROLLED LIVE VALIDATION PENDING.
+`PHASE_1_MILESTONE_6_PASSED`
 
 ## References
 
-- [ADR-007_PHASE_1_TTS_PROVIDER](../adr/ADR-007_PHASE_1_TTS_PROVIDER.md)
-- [ADR-006_PHASE_1_TRANSLATION_PROVIDER](../adr/ADR-006_PHASE_1_TRANSLATION_PROVIDER.md)
-- [PHASE_1_MILESTONE_5_TRANSLATION_INTEGRATION](PHASE_1_MILESTONE_5_TRANSLATION_INTEGRATION.md)
+- [Phase 1 MVP Validation](PHASE_1_MVP_VALIDATION.md)
+- [Initial TTS Provider ADR](../adr/ADR-007_PHASE_1_TTS_PROVIDER.md)
+- [Azure Speech TTS ADR](../adr/ADR-008_AZURE_TTS_PROVIDER.md)
+- [Azure Translator ADR](../adr/ADR-008_PHASE_1_AZURE_TRANSLATION_PROVIDER.md)
+- [Milestone 5 Translation Integration](PHASE_1_MILESTONE_5_TRANSLATION_INTEGRATION.md)
 - [Cloud Service README](../../src/cloud/README.md)
 - [Browser Extension README](../../src/browser_extension/README.md)
 
@@ -196,4 +187,5 @@ IMPLEMENTATION COMPLETE. CONTROLLED LIVE VALIDATION PENDING.
 
 | Version | Date | Description |
 |---------|------|-------------|
-| 0.1.0 | 2026-07-21 | Implemented cloud TTS, browser PCM playback, automatic ducking, metrics, tests, and validation plan |
+| 1.0.0 | 2026-07-22 | Passed Azure Speech TTS, browser playback, ducking, restoration, endurance, and one-press Stop validation |
+| 0.1.0 | 2026-07-21 | Implemented initial Gemini TTS, browser PCM playback, automatic ducking, metrics, tests, and validation plan |

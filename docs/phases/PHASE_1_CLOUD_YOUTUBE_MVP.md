@@ -12,13 +12,13 @@ Out of Scope:
 Public multi-user production access, full user accounts, billing, mobile applications, external meeting platforms, bidirectional interpreter mode, persistent user-content history, and local VoiceBridge Agent implementation.
 
 Status:
-Draft
+Approved - Phase 1 MVP Validated
 
 Version:
-1.4.0
+2.0.0
 
 Last Updated:
-2026-07-18
+2026-07-22
 
 ## Table of Contents
 
@@ -852,6 +852,47 @@ tools/
 
 Final file names and internal code structure MUST be confirmed when the implementation stack is selected.
 
+## 20A. Final Phase 1 MVP Result
+
+Status:
+
+`VOICEBRIDGE_PHASE_1_MVP_VALIDATED`
+
+Validated baseline:
+
+- cloud service `0.6.0`;
+- browser extension `0.6.2`;
+- AssemblyAI English streaming STT;
+- Azure Translator primary English-to-Ukrainian translation;
+- Gemini translation fallback;
+- Azure Speech Ukrainian TTS with `uk-UA-OstapNeural`;
+- ordered browser PCM playback;
+- automatic original-audio ducking and restoration;
+- one-press idempotent Stop with visible `STOPPING` state.
+
+Final controlled acceptance evidence:
+
+- English final segments: 28;
+- Ukrainian final segments: 28;
+- voiced segments: 28;
+- played segments: 28;
+- translation retries: 0;
+- TTS retries: 0;
+- pending operations after completion: 0;
+- dropped audio frames: 0;
+- final playback state: `COMPLETED`;
+- final capture state: `IDLE`.
+
+The project owner confirmed understandable Ukrainian speech, functional automatic ducking, original-audio restoration, normal Azure pipeline operation, and correct one-press Stop behavior.
+
+Canonical evidence:
+
+- `PHASE_1_MVP_VALIDATION.md`;
+- `../history/2026-07-22_PHASE_1_MVP_VALIDATED.md`;
+- `../bootstrap/PHASE_1_MVP_VALIDATED_BOOTSTRAP.md`.
+
+Earlier milestone implementation and pending-validation sections in this plan are retained as historical execution snapshots. This final section is authoritative for Phase 1 completion state.
+
 ## 21. References
 
 Project references:
@@ -877,6 +918,7 @@ Technical references:
 
 | Version | Date | Description |
 |---------|------|-------------|
+| 2.0.0 | 2026-07-22 | Validated and closed the minimum Phase 1 YouTube MVP |
 | 1.9.0 | 2026-07-19 | Replaced the initial Milestone 4 STT adapter with AssemblyAI Free |
 | 1.8.0 | 2026-07-19 | Added Milestone 4 provider-neutral STT implementation and pending live validation |
 | 1.7.0 | 2026-07-19 | Completed ten-minute Milestone 3 streaming validation and activated Milestone 4 |

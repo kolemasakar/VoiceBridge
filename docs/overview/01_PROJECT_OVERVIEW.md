@@ -18,10 +18,10 @@ Status:
 Approved
 
 Version:
-1.1.0
+1.2.0
 
 Last Updated:
-2026-07-18
+2026-07-22
 
 ## Table of Contents
 
@@ -61,6 +61,8 @@ The project converts spoken source-language audio into translated target-languag
 The initial product direction is English-to-Ukrainian AI voice translation for YouTube videos.
 
 The long-term direction is a universal multilingual communication bridge for videos, live conversations, meetings, calls, and other audio sources.
+
+The minimum Phase 1 YouTube MVP was validated on 2026-07-22 with AssemblyAI STT, Azure Translator, Azure Speech TTS, browser playback, automatic ducking, and one-press Stop.
 
 ## 2. Repository Purpose
 
@@ -150,5 +152,6 @@ When documents conflict, the more specific approved governance or architecture d
 
 | Version | Date | Description |
 |---------|------|-------------|
+| 1.2.0 | 2026-07-22 | Recorded the validated minimum Phase 1 YouTube MVP |
 | 1.1.0 | 2026-07-18 | Added Cloud First runtime direction and test authentication baseline |
 | 1.0.0 | 2026-07-18 | Initial approved project overview |
