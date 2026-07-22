@@ -2,6 +2,7 @@ const OFFSCREEN_PATH = "offscreen.html";
 const DEFAULT_CLOUD_API_URL = "https://voicebridge-cloud-us.onrender.com";
 const CLOUD_REQUEST_TIMEOUT_MS = 70000;
 let creatingOffscreen = null;
+let stoppingCloudSession = null;
 
 function sessionRequestBody() {
   return {
@@ -12,11 +13,11 @@ function sessionRequestBody() {
     output_type: "BROWSER_PLAYBACK",
     provider_preferences: {
       recognition: "assemblyai",
-      translation: "gemini",
-      synthesis: "gemini"
+      translation: "azure",
+      synthesis: "azure"
     },
     voice: {
-      voice_id: "Iapetus",
+      voice_id: "uk-UA-OstapNeural",
       speaking_rate: null
     }
   };
@@ -188,7 +189,7 @@ async function startCloudSession() {
   }
 }
 
-async function stopCloudSession() {
+async function performStopCloudSession() {
   const current = await getCloudState();
   if (!current.session_id) {
     if (["READY", "NOT_CONFIGURED"].includes(current.status)) return current;
@@ -219,6 +220,15 @@ async function stopCloudSession() {
     });
     throw error;
   }
+}
+
+function stopCloudSession() {
+  if (stoppingCloudSession) return stoppingCloudSession;
+  stoppingCloudSession = performStopCloudSession()
+    .finally(() => {
+      stoppingCloudSession = null;
+    });
+  return stoppingCloudSession;
 }
 
 async function getStreamTicket() {

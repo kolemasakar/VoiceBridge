@@ -2,7 +2,7 @@
   "manifest_version": 3,
   "name": "VoiceBridge YouTube Translator",
   "description": "Phase 1 prototype for cloud STT, English-to-Ukrainian translation, Ukrainian speech synthesis, browser playback, and automatic ducking.",
-  "version": "0.6.1",
+  "version": "0.6.2",
   "minimum_chrome_version": "116",
   "permissions": [
     "activeTab",
