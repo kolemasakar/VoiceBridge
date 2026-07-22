@@ -22,7 +22,7 @@ def replace_once(path: str, old: str, new: str) -> None:
 
 replace_once(
     "src/cloud/src/server.ts",
-    'const SERVICE_VERSION = "0.5.2";',
+    'const SERVICE_VERSION = "0.5.1";',
     'const SERVICE_VERSION = "0.6.0";'
 )
 replace_once(
