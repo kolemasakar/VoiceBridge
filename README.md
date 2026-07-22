@@ -10,7 +10,7 @@ Slogan:
 
 VoiceBridge converts spoken source-language audio into translated target-language speech.
 
-The initial product target is real-time English-to-Ukrainian AI voice translation for YouTube videos.
+The validated Phase 1 product is real-time English-to-Ukrainian AI voice translation for YouTube videos.
 
 VoiceBridge uses a Cloud First architecture:
 
@@ -21,45 +21,66 @@ VoiceBridge uses a Cloud First architecture:
 
 ## Current Status
 
-Completed:
+Phase 1 minimum YouTube MVP:
 
-- repository and documentation foundation;
-- governance, requirements, system design, and security baselines;
-- Cloud First architecture and API baselines;
-- simplified test authentication;
-- Milestone 1 browser capture feasibility;
-- Milestone 2 cloud skeleton deployment;
-- Milestone 3 bounded browser-to-cloud audio streaming;
-- Milestone 4 AssemblyAI streaming STT and live endurance validation;
-- Milestone 5 Gemini English-to-Ukrainian translation and complete graceful shutdown validation.
+`VALIDATED`
 
-Active:
+Accepted runtime baseline:
 
-- Milestone 6 Ukrainian TTS and browser playback;
-- Azure Speech Ukrainian TTS integration and controlled live validation;
-- browser extension `0.6.1` playback, volume control, and automatic ducking validation;
-- sustained Ukrainian voice quality and queue stability testing.
+- cloud service `0.6.0`;
+- browser extension `0.6.2`;
+- AssemblyAI English streaming STT;
+- Azure Translator primary English-to-Ukrainian translation;
+- Gemini translation fallback;
+- Azure Speech Ukrainian TTS with `uk-UA-OstapNeural`;
+- ordered browser PCM playback;
+- independent original and Ukrainian volume controls;
+- automatic original-audio ducking and restoration;
+- one-press idempotent Stop with visible `STOPPING` state;
+- bounded queues, retries, drains, and cleanup;
+- no intentional VoiceBridge content persistence.
+
+Final controlled acceptance evidence:
+
+- English final segments: 28;
+- Ukrainian final segments: 28;
+- voiced segments: 28;
+- played segments: 28;
+- translation retries: 0;
+- TTS retries: 0;
+- pending operations after completion: 0;
+- dropped audio frames: 0;
+- final playback state: `COMPLETED`;
+- final capture state: `IDLE`.
 
 Active Phase 1 cloud endpoint:
 
 `https://voicebridge-cloud-us.onrender.com`
 
-## Current Phase 1 Pipeline
+## Validated Phase 1 Pipeline
 
 ```text
 YouTube tab audio
     -> VoiceBridge browser capture
     -> VoiceBridge Cloud
     -> AssemblyAI English STT
-    -> Gemini Ukrainian translation
+    -> Azure Translator Ukrainian translation
     -> Azure Speech Ukrainian TTS
     -> browser PCM playback
-    -> automatic original-audio ducking
+    -> automatic original-audio ducking and restoration
+```
+
+Translation fallback path:
+
+```text
+AssemblyAI English STT
+    -> Gemini Ukrainian translation
+    -> Azure Speech Ukrainian TTS
 ```
 
 ## Test Authentication
 
-The test launch uses one shared revocable access token.
+The controlled test launch uses one shared revocable access token.
 
 The test model does not include registration, passwords, account recovery, organizations, or persistent user profiles.
 
@@ -67,6 +88,8 @@ A production identity model must replace the shared token before public multi-us
 
 ## Documentation
 
+- [Phase 1 MVP Validation](docs/phases/PHASE_1_MVP_VALIDATION.md)
+- [Phase 1 MVP Recovery Bootstrap](docs/bootstrap/PHASE_1_MVP_VALIDATED_BOOTSTRAP.md)
 - [Project Overview](docs/overview/01_PROJECT_OVERVIEW.md)
 - [Project Description](docs/overview/07_PROJECT_DESCRIPTION.md)
 - [Roadmap](docs/planning/03_ROADMAP.md)
@@ -74,9 +97,10 @@ A production identity model must replace the shared token before public multi-us
 - [Technology Stack](docs/architecture/05_TECHNOLOGY_STACK.md)
 - [Cloud First ADR](docs/adr/ADR-001_CLOUD_FIRST_ARCHITECTURE.md)
 - [Streaming STT Provider ADR](docs/adr/ADR-005_PHASE_1_STREAMING_STT_PROVIDER.md)
-- [Translation Provider ADR](docs/adr/ADR-006_PHASE_1_TRANSLATION_PROVIDER.md)
+- [Initial Translation Provider ADR](docs/adr/ADR-006_PHASE_1_TRANSLATION_PROVIDER.md)
 - [Initial TTS Provider ADR](docs/adr/ADR-007_PHASE_1_TTS_PROVIDER.md)
-- [Azure TTS Provider ADR](docs/adr/ADR-008_AZURE_TTS_PROVIDER.md)
+- [Azure Speech TTS ADR](docs/adr/ADR-008_AZURE_TTS_PROVIDER.md)
+- [Azure Translator Primary ADR](docs/adr/ADR-008_PHASE_1_AZURE_TRANSLATION_PROVIDER.md)
 - [Functional Requirements](docs/requirements/09_FUNCTIONAL_REQUIREMENTS.md)
 - [System Design](docs/design/10_SYSTEM_DESIGN.md)
 - [Non-Functional Requirements](docs/requirements/11_NON_FUNCTIONAL_REQUIREMENTS.md)
