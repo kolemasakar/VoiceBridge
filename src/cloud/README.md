@@ -23,6 +23,17 @@ AZURE_TRANSLATOR_KEY
 GEMINI_API_KEY
 ```
 
+AssemblyAI model configuration:
+
+```text
+ASSEMBLYAI_SPEECH_MODEL=universal-streaming-english
+```
+
+`ASSEMBLYAI_SPEECH_MODEL` defaults to the approved value shown above. Empty or
+unapproved values fail service startup. Every AssemblyAI streaming request sends
+this non-empty `speech_model` parameter explicitly, so provider-side default
+model changes cannot silently change VoiceBridge behavior.
+
 Provider selection:
 
 ```text
@@ -51,6 +62,9 @@ in the browser extension or repository.
 
 ## Runtime Behavior
 
+- AssemblyAI receives an explicit approved STT model on every connection;
+- the selected STT provider and model are recorded in the structured
+  `service_started` log event;
 - final English segments are translated in order;
 - Azure Translator is attempted first;
 - Gemini is used when Azure is unavailable or fails;
