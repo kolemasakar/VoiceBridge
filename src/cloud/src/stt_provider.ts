@@ -1,12 +1,48 @@
 import WebSocket, { type RawData } from "ws";
 
 const ASSEMBLYAI_ENDPOINT = "wss://streaming.assemblyai.com/v3/ws";
+export const DEFAULT_ASSEMBLYAI_SPEECH_MODEL =
+  "universal-streaming-english";
+const APPROVED_ASSEMBLYAI_SPEECH_MODELS = [
+  DEFAULT_ASSEMBLYAI_SPEECH_MODEL
+] as const;
 const CONNECT_TIMEOUT_MS = 10000;
 const CLOSE_TIMEOUT_MS = 3000;
 const TARGET_AUDIO_CHUNK_MS = 100;
 const MINIMUM_AUDIO_CHUNK_MS = 50;
 const MAX_PROVIDER_BUFFERED_BYTES = 524288;
 const MAX_PROVIDER_MESSAGE_BYTES = 1048576;
+
+export function resolveAssemblyAiSpeechModel(
+  value: string | undefined
+): string {
+  const model = value === undefined
+    ? DEFAULT_ASSEMBLYAI_SPEECH_MODEL
+    : value.trim();
+
+  if (!model) {
+    throw new Error("ASSEMBLYAI_SPEECH_MODEL must not be empty.");
+  }
+
+  if (!APPROVED_ASSEMBLYAI_SPEECH_MODELS.includes(
+    model as (typeof APPROVED_ASSEMBLYAI_SPEECH_MODELS)[number]
+  )) {
+    throw new Error(
+      "ASSEMBLYAI_SPEECH_MODEL must be an explicitly approved model: " +
+      APPROVED_ASSEMBLYAI_SPEECH_MODELS.join(", ") + "."
+    );
+  }
+
+  return model;
+}
+
+export function configuredAssemblyAiSpeechModel(
+  environment: NodeJS.ProcessEnv = process.env
+): string {
+  return resolveAssemblyAiSpeechModel(
+    environment.ASSEMBLYAI_SPEECH_MODEL
+  );
+}
 
 export interface SttStreamOptions {
   sampleRateHz: number;
@@ -38,6 +74,7 @@ export interface SttConnection {
 export interface SttProvider {
   readonly name: string;
   readonly configured: boolean;
+  readonly model?: string;
   connect(
     options: SttStreamOptions,
     observer: SttObserver
@@ -57,6 +94,11 @@ class DisabledSttConnection implements SttConnection {
 export class DisabledSttProvider implements SttProvider {
   readonly name = "assemblyai";
   readonly configured = false;
+  readonly model: string;
+
+  constructor(speechModel = configuredAssemblyAiSpeechModel()) {
+    this.model = resolveAssemblyAiSpeechModel(speechModel);
+  }
 
   async connect(
     _options: SttStreamOptions,
@@ -132,8 +174,7 @@ function parseTranscript(
     ? confidences.reduce((total, value) => total + value, 0) /
       confidences.length
     : null;
-  const isFinal =
-    result.end_of_turn === true && result.turn_is_formatted === true;
+  const isFinal = result.end_of_turn === true;
 
   return {
     text,
@@ -237,11 +278,15 @@ class AssemblyAiSttConnection implements SttConnection {
 export class AssemblyAiSttProvider implements SttProvider {
   readonly name = "assemblyai";
   readonly configured = true;
+  readonly model: string;
 
   constructor(
     private readonly apiKey: string,
-    private readonly endpoint = ASSEMBLYAI_ENDPOINT
-  ) {}
+    private readonly endpoint = ASSEMBLYAI_ENDPOINT,
+    speechModel = configuredAssemblyAiSpeechModel()
+  ) {
+    this.model = resolveAssemblyAiSpeechModel(speechModel);
+  }
 
   connect(
     options: SttStreamOptions,
@@ -249,8 +294,10 @@ export class AssemblyAiSttProvider implements SttProvider {
   ): Promise<SttConnection> {
     const url = new URL(this.endpoint);
     url.searchParams.set("sample_rate", String(options.sampleRateHz));
-    url.searchParams.set("speech_model", "universal-streaming-english");
-    url.searchParams.set("format_turns", "true");
+    url.searchParams.set("speech_model", this.model);
+    if (this.model === DEFAULT_ASSEMBLYAI_SPEECH_MODEL) {
+      url.searchParams.set("format_turns", "true");
+    }
 
     return new Promise((resolve, reject) => {
       let openedAt = Date.now();
@@ -365,8 +412,12 @@ export class AssemblyAiSttProvider implements SttProvider {
   }
 }
 
-export function createSttProvider(apiKey: string | null): SttProvider {
+export function createSttProvider(
+  apiKey: string | null,
+  speechModel = configuredAssemblyAiSpeechModel()
+): SttProvider {
+  const model = resolveAssemblyAiSpeechModel(speechModel);
   return apiKey
-    ? new AssemblyAiSttProvider(apiKey)
-    : new DisabledSttProvider();
+    ? new AssemblyAiSttProvider(apiKey, ASSEMBLYAI_ENDPOINT, model)
+    : new DisabledSttProvider(model);
 }
