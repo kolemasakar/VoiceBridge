@@ -6,6 +6,9 @@ export const DEFAULT_ASSEMBLYAI_SPEECH_MODEL =
 const APPROVED_ASSEMBLYAI_SPEECH_MODELS = [
   DEFAULT_ASSEMBLYAI_SPEECH_MODEL
 ] as const;
+export const ASSEMBLYAI_END_OF_TURN_CONFIDENCE_THRESHOLD = 0.7;
+export const ASSEMBLYAI_MIN_TURN_SILENCE_MS = 800;
+export const ASSEMBLYAI_MAX_TURN_SILENCE_MS = 3600;
 const CONNECT_TIMEOUT_MS = 10000;
 const CLOSE_TIMEOUT_MS = 3000;
 const TARGET_AUDIO_CHUNK_MS = 100;
@@ -297,6 +300,18 @@ export class AssemblyAiSttProvider implements SttProvider {
     url.searchParams.set("speech_model", this.model);
     if (this.model === DEFAULT_ASSEMBLYAI_SPEECH_MODEL) {
       url.searchParams.set("format_turns", "true");
+      url.searchParams.set(
+        "end_of_turn_confidence_threshold",
+        String(ASSEMBLYAI_END_OF_TURN_CONFIDENCE_THRESHOLD)
+      );
+      url.searchParams.set(
+        "min_turn_silence",
+        String(ASSEMBLYAI_MIN_TURN_SILENCE_MS)
+      );
+      url.searchParams.set(
+        "max_turn_silence",
+        String(ASSEMBLYAI_MAX_TURN_SILENCE_MS)
+      );
     }
 
     return new Promise((resolve, reject) => {

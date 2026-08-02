@@ -3,6 +3,9 @@ import type { AddressInfo } from "node:net";
 import { test } from "node:test";
 import { WebSocketServer } from "ws";
 import {
+  ASSEMBLYAI_END_OF_TURN_CONFIDENCE_THRESHOLD,
+  ASSEMBLYAI_MAX_TURN_SILENCE_MS,
+  ASSEMBLYAI_MIN_TURN_SILENCE_MS,
   AssemblyAiSttProvider,
   DEFAULT_ASSEMBLYAI_SPEECH_MODEL,
   configuredAssemblyAiSpeechModel,
@@ -53,7 +56,7 @@ test("STT provider reports the selected model even when disabled", () => {
   );
 });
 
-test("AssemblyAI connection always sends a non-empty explicit speech_model", async () => {
+test("AssemblyAI connection sends explicit model and conservative turn detection", async () => {
   const providerServer = new WebSocketServer({
     host: "127.0.0.1",
     port: 0
@@ -102,6 +105,18 @@ test("AssemblyAI connection always sends a non-empty explicit speech_model", asy
     );
     assert.notEqual(requested.searchParams.get("speech_model"), "");
     assert.equal(requested.searchParams.get("format_turns"), "true");
+    assert.equal(
+      requested.searchParams.get("end_of_turn_confidence_threshold"),
+      String(ASSEMBLYAI_END_OF_TURN_CONFIDENCE_THRESHOLD)
+    );
+    assert.equal(
+      requested.searchParams.get("min_turn_silence"),
+      String(ASSEMBLYAI_MIN_TURN_SILENCE_MS)
+    );
+    assert.equal(
+      requested.searchParams.get("max_turn_silence"),
+      String(ASSEMBLYAI_MAX_TURN_SILENCE_MS)
+    );
 
     await connection.close();
   } finally {

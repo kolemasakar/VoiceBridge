@@ -34,6 +34,18 @@ unapproved values fail service startup. Every AssemblyAI streaming request sends
 this non-empty `speech_model` parameter explicitly, so provider-side default
 model changes cannot silently change VoiceBridge behavior.
 
+AssemblyAI turn detection uses the conservative free configuration:
+
+```text
+end_of_turn_confidence_threshold=0.7
+min_turn_silence=800
+max_turn_silence=3600
+```
+
+The conservative preset gives the streaming model more context before it closes
+a final English segment. It may increase the delay before some final segments,
+but it does not select a paid model or add a paid feature.
+
 Provider selection:
 
 ```text
@@ -63,6 +75,7 @@ in the browser extension or repository.
 ## Runtime Behavior
 
 - AssemblyAI receives an explicit approved STT model on every connection;
+- AssemblyAI receives explicit conservative turn-detection parameters;
 - the selected STT provider and model are recorded in the structured
   `service_started` log event;
 - final English segments are translated in order;
