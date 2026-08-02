@@ -1,14 +1,18 @@
 import { loadConfig } from "./config.js";
 import { listen } from "./server.js";
+import { configuredAssemblyAiSpeechModel } from "./stt_provider.js";
 
 try {
   const config = loadConfig();
+  const sttModel = configuredAssemblyAiSpeechModel();
   const { server, url } = await listen(config);
   console.log(
     JSON.stringify({
       event: "service_started",
       service: "voicebridge-cloud",
-      url
+      url,
+      stt_provider: "assemblyai",
+      stt_model: sttModel
     })
   );
 
