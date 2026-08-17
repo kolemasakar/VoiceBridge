@@ -1,0 +1,60 @@
+name: Render Media Beta Post-Bootstrap Inspect
+
+on:
+  push:
+    branches: [agent/krc-media-transcript]
+    paths: [.github/workflows/render-media-beta-post-bootstrap-inspect.yml]
+
+permissions:
+  contents: read
+
+jobs:
+  inspect:
+    runs-on: ubuntu-latest
+    env:
+      SERVICE_NAME: voicebridge-krc-media-beta-kolemasakar
+      HEALTH_URL: https://voicebridge-krc-media-beta-kolemasakar.onrender.com/api/v1/health
+    steps:
+      - name: Inspect service and latest deploy
+        env:
+          RENDER_API_KEY: ${{ secrets.RENDER_API_KEY }}
+        shell: bash
+        run: |
+          set -euo pipefail
+          tmp="$(mktemp)"
+          code="$(curl -sS --get -o "$tmp" -w '%{http_code}' \
+            'https://api.render.com/v1/services' \
+            --data-urlencode "name=${SERVICE_NAME}" \
+            --data-urlencode 'limit=20' \
+            -H 'Accept: application/json' \
+            -H "Authorization: Bearer ${RENDER_API_KEY}")"
+          [[ "$code" == 200 ]] || { echo "Service lookup failed HTTP $code" >&2; exit 1; }
+          id="$(jq -r --arg n "$SERVICE_NAME" '[.[]|(.service//.)|select(.name==$n)]|first|(.id//empty)' "$tmp")"
+          branch="$(jq -r --arg n "$SERVICE_NAME" '[.[]|(.service//.)|select(.name==$n)]|first|(.branch//empty)' "$tmp")"
+          plan="$(jq -r --arg n "$SERVICE_NAME" '[.[]|(.service//.)|select(.name==$n)]|first|(.serviceDetails.plan//.plan//empty)' "$tmp")"
+          rm -f "$tmp"
+          [[ -n "$id" ]] || { echo "Beta service not found" >&2; exit 1; }
+          echo "Service ID: $id"
+          echo "Branch: $branch"
+          echo "Plan: $plan"
+
+          tmp="$(mktemp)"
+          code="$(curl -sS --get -o "$tmp" -w '%{http_code}' \
+            "https://api.render.com/v1/services/${id}/deploys" \
+            --data-urlencode 'limit=1' \
+            -H 'Accept: application/json' \
+            -H "Authorization: Bearer ${RENDER_API_KEY}")"
+          [[ "$code" == 200 ]] || { echo "Deploy lookup failed HTTP $code" >&2; exit 1; }
+          jq -r 'if length == 0 then "Latest deploy: none" else (.[0].deploy//.[0]) as $d | "Latest deploy ID: \($d.id//"unknown")\nLatest deploy status: \($d.status//"unknown")\nLatest deploy commit: \($d.commit.id//$d.commitId//"unknown")" end' "$tmp"
+          rm -f "$tmp"
+
+      - name: Probe beta health
+        continue-on-error: true
+        shell: bash
+        run: |
+          set -euo pipefail
+          status="$(curl -sS --max-time 30 -o /tmp/health.json -w '%{http_code}' "$HEALTH_URL" || true)"
+          echo "Beta health HTTP status: ${status:-unreachable}"
+          if [[ "$status" == 200 ]]; then
+            jq -c '{status,service,version,media_transcript:(.capabilities.media_transcript//null)}' /tmp/health.json 2>/dev/null || cat /tmp/health.json
+          fi
