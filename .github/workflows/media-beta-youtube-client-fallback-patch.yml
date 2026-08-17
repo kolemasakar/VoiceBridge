@@ -1,0 +1,57 @@
+name: Apply MEDIA BETA YouTube Client Fallback
+
+on:
+  push:
+    branches:
+      - agent/krc-media-transcript
+    paths:
+      - .github/workflows/media-beta-youtube-client-fallback-patch.yml
+
+permissions:
+  contents: write
+
+jobs:
+  patch:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: agent/krc-media-transcript
+
+      - name: Patch yt-dlp YouTube client selection
+        shell: python
+        run: |
+          from pathlib import Path
+
+          extractor = 'youtube:player_client=web_embedded,android_vr'
+
+          service = Path('src/cloud/src/media_beta_service.ts')
+          text = service.read_text(encoding='utf-8')
+          old1 = '''    "--no-warnings",\n    "--quiet",\n    url'''
+          new1 = f'''    "--no-warnings",\n    "--quiet",\n    "--extractor-args",\n    "{extractor}",\n    url'''
+          old2 = '''      "--no-warnings",\n      "--quiet",\n      "--max-filesize",'''
+          new2 = f'''      "--no-warnings",\n      "--quiet",\n      "--extractor-args",\n      "{extractor}",\n      "--max-filesize",'''
+          if old1 not in text or old2 not in text:
+              raise SystemExit('Expected media_beta_service.ts anchors not found')
+          text = text.replace(old1, new1, 1).replace(old2, new2, 1)
+          service.write_text(text, encoding='utf-8')
+
+          captions = Path('src/cloud/src/youtube_captions.ts')
+          text = captions.read_text(encoding='utf-8')
+          old3 = '''      "--no-warnings",\n      "--quiet",\n      "-o",'''
+          new3 = f'''      "--no-warnings",\n      "--quiet",\n      "--extractor-args",\n      "{extractor}",\n      "-o",'''
+          if old3 not in text:
+              raise SystemExit('Expected youtube_captions.ts anchor not found')
+          text = text.replace(old3, new3, 1)
+          captions.write_text(text, encoding='utf-8')
+
+      - name: Commit patch
+        shell: bash
+        run: |
+          set -euo pipefail
+          git config user.name 'github-actions[bot]'
+          git config user.email '41898282+github-actions[bot]@users.noreply.github.com'
+          git add src/cloud/src/media_beta_service.ts src/cloud/src/youtube_captions.ts
+          git diff --cached --check
+          git commit -m 'MEDIA_BETA_YOUTUBE_CLIENT_FALLBACK'
+          git push origin HEAD:agent/krc-media-transcript
