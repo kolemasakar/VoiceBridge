@@ -1,5 +1,5 @@
 # KRC MEDIA BETA Browser Helper
-Допоміжне Chrome/Edge розширення для закритого beta-тестування client-assisted YouTube ingestion.
+Closed-beta Chrome/Edge helper for client-assisted YouTube ingestion.
 
 Version: 0.1.0
 Status: A4.2 PREVIEW
@@ -59,7 +59,7 @@ Implemented now:
 - per-tester access-code ownership;
 - 32 MB upload guard;
 - 60-minute duration guard enforced by the backend;
-- shared beta STT budget inside the client-ingest service;
+- client-ingest beta STT budget;
 - async UK/RU/EN/auto AssemblyAI path;
 - timestamped transcript segments;
 - provider transcript delete request;
