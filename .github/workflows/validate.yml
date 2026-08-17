@@ -81,7 +81,7 @@ jobs:
           cd dist
           zip -r VoiceBridge_Extension_0.6.2.zip extension
           sha256sum VoiceBridge_Extension_0.6.2.zip > VoiceBridge_Extension_0.6.2_SHA256.txt
-      - name: Package MEDIA BETA helper 0.1.0
+      - name: Package MEDIA BETA helper 0.2.0
         run: |
           mkdir -p dist/media_beta_helper
           cp src/media_beta_helper/manifest.json dist/media_beta_helper/
@@ -93,8 +93,8 @@ jobs:
           cp src/media_beta_helper/service_worker.js dist/media_beta_helper/
           cp src/media_beta_helper/README.md dist/media_beta_helper/
           cd dist
-          zip -r KRC_MEDIA_BETA_Helper_0.1.0.zip media_beta_helper
-          sha256sum KRC_MEDIA_BETA_Helper_0.1.0.zip > KRC_MEDIA_BETA_Helper_0.1.0_SHA256.txt
+          zip -r KRC_MEDIA_BETA_Helper_0.2.0.zip media_beta_helper
+          sha256sum KRC_MEDIA_BETA_Helper_0.2.0.zip > KRC_MEDIA_BETA_Helper_0.2.0_SHA256.txt
       - name: Upload browser extension 0.6.2
         uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a
         with:
@@ -103,13 +103,13 @@ jobs:
             dist/VoiceBridge_Extension_0.6.2.zip
             dist/VoiceBridge_Extension_0.6.2_SHA256.txt
           if-no-files-found: error
-      - name: Upload MEDIA BETA helper 0.1.0
+      - name: Upload MEDIA BETA helper 0.2.0
         uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a
         with:
-          name: KRC_MEDIA_BETA_Helper_0.1.0
+          name: KRC_MEDIA_BETA_Helper_0.2.0
           path: |
-            dist/KRC_MEDIA_BETA_Helper_0.1.0.zip
-            dist/KRC_MEDIA_BETA_Helper_0.1.0_SHA256.txt
+            dist/KRC_MEDIA_BETA_Helper_0.2.0.zip
+            dist/KRC_MEDIA_BETA_Helper_0.2.0_SHA256.txt
           if-no-files-found: error
 
   repository-docs:
