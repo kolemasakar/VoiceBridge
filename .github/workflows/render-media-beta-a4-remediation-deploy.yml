@@ -1,4 +1,5 @@
 name: Render MEDIA BETA A4 Remediation Deploy
+# A4 remediation trigger: mweb + bgutil PO Token Provider + yt-dlp EJS stack.
 
 on:
   push:
