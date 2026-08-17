@@ -15,6 +15,9 @@ const ASSEMBLYAI_ASYNC_MODEL = "universal-2";
 const DEFAULT_COMMAND_TIMEOUT_MS = 120000;
 const DEFAULT_POLL_INTERVAL_MS = 2000;
 const DEFAULT_TRANSCRIPTION_TIMEOUT_MS = 20 * 60 * 1000;
+const DEFAULT_MEDIA_MAX_DURATION_SECONDS = 7200;
+const DEFAULT_MEDIA_JOB_TTL_SECONDS = 3600;
+const DEFAULT_MEDIA_MAX_CONCURRENT_JOBS = 2;
 const MAX_COMMAND_OUTPUT_BYTES = 2 * 1024 * 1024;
 const MAX_MEDIA_FILE_BYTES = 128 * 1024 * 1024;
 const MAX_SEGMENT_CHARACTERS = 1600;
@@ -480,12 +483,11 @@ class AssemblyAiAsyncTranscriber {
     path: string,
     init: RequestInit
   ): Promise<AssemblyAiTranscript & Record<string, unknown>> {
+    const headers = new Headers(init.headers);
+    headers.set("Authorization", this.apiKey);
     const response = await fetch(`${ASSEMBLYAI_BASE_URL}${path}`, {
       ...init,
-      headers: {
-        Authorization: this.apiKey,
-        ...(init.headers || {})
-      }
+      headers
     });
     const text = await response.text();
     let payload: Record<string, unknown> = {};
@@ -596,10 +598,17 @@ class AssemblyAiAsyncTranscriber {
 
 export interface MediaTranscriptServiceOptions {
   assemblyAiApiKey: string | null;
+  maxDurationSeconds?: number;
+  jobTtlSeconds?: number;
+  maxConcurrentJobs?: number;
+}
+
+type NormalizedMediaTranscriptServiceOptions = {
+  assemblyAiApiKey: string | null;
   maxDurationSeconds: number;
   jobTtlSeconds: number;
   maxConcurrentJobs: number;
-}
+};
 
 export class MediaTranscriptService {
   readonly configured: boolean;
@@ -607,10 +616,19 @@ export class MediaTranscriptService {
   readonly providerModel = ASSEMBLYAI_ASYNC_MODEL;
   private readonly jobs = new Map<string, MediaTranscriptJob>();
   private readonly requestKeys = new Map<string, string>();
+  private readonly options: NormalizedMediaTranscriptServiceOptions;
   private activeJobs = 0;
 
-  constructor(private readonly options: MediaTranscriptServiceOptions) {
-    this.configured = Boolean(options.assemblyAiApiKey);
+  constructor(options: MediaTranscriptServiceOptions) {
+    this.options = {
+      assemblyAiApiKey: options.assemblyAiApiKey,
+      maxDurationSeconds:
+        options.maxDurationSeconds ?? DEFAULT_MEDIA_MAX_DURATION_SECONDS,
+      jobTtlSeconds: options.jobTtlSeconds ?? DEFAULT_MEDIA_JOB_TTL_SECONDS,
+      maxConcurrentJobs:
+        options.maxConcurrentJobs ?? DEFAULT_MEDIA_MAX_CONCURRENT_JOBS
+    };
+    this.configured = Boolean(this.options.assemblyAiApiKey);
   }
 
   start(input: MediaTranscriptInput): {
@@ -739,7 +757,7 @@ export class MediaTranscriptService {
       this.touch(job);
 
       const transcriber = new AssemblyAiAsyncTranscriber(
-        this.options.assemblyAiApiKey as string
+        this.options.assemblyAiApiKey
       );
       const uploadUrl = await transcriber.upload(downloaded.path);
       const transcriptId = await transcriber.submit(uploadUrl, job.language_hint);
