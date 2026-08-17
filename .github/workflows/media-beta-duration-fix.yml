@@ -21,12 +21,78 @@ jobs:
 
       - name: Fix MediaRecorder WebM duration handling
         shell: bash
-        env:
-          PATCH_B64: ZnJvbSBwYXRobGliIGltcG9ydCBQYXRoCgpwYXRoID0gUGF0aCgic3JjL2Nsb3VkL3NyYy9tZWRpYV9jbGllbnRfaW5nZXN0LnRzIikKdGV4dCA9IHBhdGgucmVhZF90ZXh0KGVuY29kaW5nPSJ1dGYtOCIpCm9sZCA9ICIiIiAgICAgIGNvbnN0IHNvdXJjZVBhdGggPSBqb2luKGRpcmVjdG9yeSwgYGNsaWVudCR7ZXh0ZW5zaW9uRm9yQ29udGVudFR5cGUoY29udGVudFR5cGUpfWApOwogICAgICBhd2FpdCB3cml0ZUZpbGUoc291cmNlUGF0aCwgYXVkaW8pOwogICAgICBjb25zdCBkdXJhdGlvblNlY29uZHMgPSBhd2FpdCBwcm9iZUR1cmF0aW9uU2Vjb25kcyhzb3VyY2VQYXRoKTsKICAgICAgaWYgKGR1cmF0aW9uU2Vjb25kcyA+IHRoaXMub3B0aW9ucy5tYXhEdXJhdGlvblNlY29uZHMpIHsKICAgICAgICB0aHJvdyBuZXcgTWVkaWFUcmFuc2NyaXB0RXJyb3IoCiAgICAgICAgICAiTUVESUFfRFVSQVRJT05fTElNSVQiLAogICAgICAgICAgYENsb3NlZCBiZXRhIHZpZGVvcyBhcmUgbGltaXRlZCB0byAke3RoaXMub3B0aW9ucy5tYXhEdXJhdGlvblNlY29uZHN9IHNlY29uZHMuYCwKICAgICAgICAgIDQxMywKICAgICAgICAgIGZhbHNlCiAgICAgICAgKTsKICAgICAgfQogICAgICBqb2IubWVkaWEuZHVyYXRpb25fc2Vjb25kcyA9IGR1cmF0aW9uU2Vjb25kczsKCiAgICAgIGNvbnN0IHJlc2VydmF0aW9uID0gdGhpcy5vcHRpb25zLmJldGFHYXRlLnJlc2VydmVTdHRTZWNvbmRzKGR1cmF0aW9uU2Vjb25kcyk7CiAgICAgIGpvYi5iZXRhX3F1b3RhID0gcmVzZXJ2YXRpb24udXNhZ2U7CiAgICAgIGlmICghcmVzZXJ2YXRpb24uYWxsb3dlZCkgewogICAgICAgIHRocm93IG5ldyBNZWRpYVRyYW5zY3JpcHRFcnJvcigKICAgICAgICAgICJNRURJQV9EQUlMWV9TVFRfUVVPVEFfRVhIQVVTVEVEIiwKICAgICAgICAgICJUaGUgY2xvc2VkIGJldGEgZGFpbHkgU1RUIGJ1ZGdldCBpcyBleGhhdXN0ZWQuIiwKICAgICAgICAgIDQyOSwKICAgICAgICAgIHRydWUKICAgICAgICApOwogICAgICB9CiAgICAgIGpvYi5zdHRfc2Vjb25kc19jaGFyZ2VkID0gTWF0aC5jZWlsKGR1cmF0aW9uU2Vjb25kcyk7CgogICAgICBjb25zdCBzdHRQYXRoID0gam9pbihkaXJlY3RvcnksICJzdHQubXAzIik7CiAgICAgIGF3YWl0IHJ1bkNvbW1hbmQoImZmbXBlZyIsIFsKICAgICAgICAiLXkiLAogICAgICAgICItbG9nbGV2ZWwiLAogICAgICAgICJlcnJvciIsCiAgICAgICAgIi1pIiwKICAgICAgICBzb3VyY2VQYXRoLAogICAgICAgICItdm4iLAogICAgICAgICItYWMiLAogICAgICAgICIxIiwKICAgICAgICAiLWFyIiwKICAgICAgICAiMTYwMDAiLAogICAgICAgICItYjphIiwKICAgICAgICAiMzJrIiwKICAgICAgICBzdHRQYXRoCiAgICAgIF0pOwogICAgICBjb25zdCBzdHRJbmZvID0gYXdhaXQgc3RhdChzdHRQYXRoKTsKICAgICAgaWYgKCFzdHRJbmZvLmlzRmlsZSgpIHx8IHN0dEluZm8uc2l6ZSA8PSAwIHx8IHN0dEluZm8uc2l6ZSA+IE1BWF9TVFRfTUVESUFfQllURVMpIHsKICAgICAgICB0aHJvdyBuZXcgTWVkaWFUcmFuc2NyaXB0RXJyb3IoCiAgICAgICAgICAiTUVESUFfRklMRV9UT09fTEFSR0UiLAogICAgICAgICAgIlRoZSBTVFQgYXVkaW8gZXhjZWVkcyB0aGUgY2xvc2VkIGJldGEgdXBsb2FkIGxpbWl0LiIsCiAgICAgICAgICA0MTMsCiAgICAgICAgICBmYWxzZQogICAgICAgICk7CiAgICAgIH0KIiIiCm5ldyA9ICIiIiAgICAgIGNvbnN0IHNvdXJjZVBhdGggPSBqb2luKGRpcmVjdG9yeSwgYGNsaWVudCR7ZXh0ZW5zaW9uRm9yQ29udGVudFR5cGUoY29udGVudFR5cGUpfWApOwogICAgICBhd2FpdCB3cml0ZUZpbGUoc291cmNlUGF0aCwgYXVkaW8pOwoKICAgICAgLy8gTWVkaWFSZWNvcmRlciBXZWJNL09wdXMgYmxvYnMgbWF5IG9taXQgYSBjb250YWluZXItbGV2ZWwgZHVyYXRpb24uCiAgICAgIC8vIE5vcm1hbGl6ZSBmaXJzdCwgd2l0aCBhIGhhcmQgcHJvY2Vzc2luZyBjYXAsIHRoZW4gcHJvYmUgdGhlIG5vcm1hbGl6ZWQKICAgICAgLy8gTVAzIHdoZXJlIGR1cmF0aW9uIG1ldGFkYXRhIGlzIHJlbGlhYmxlLiBRdW90YSBpcyByZXNlcnZlZCBvbmx5IGFmdGVyCiAgICAgIC8vIGR1cmF0aW9uIHZhbGlkYXRpb24gc3VjY2VlZHMuCiAgICAgIGNvbnN0IHN0dFBhdGggPSBqb2luKGRpcmVjdG9yeSwgInN0dC5tcDMiKTsKICAgICAgYXdhaXQgcnVuQ29tbWFuZCgiZmZtcGVnIiwgWwogICAgICAgICIt eSIsCiAgICAgICAgIi1sb2dsZXZlbCIsCiAgICAgICAgImVycm9yIiwKICAgICAgICAiLWkiLAogICAgICAgIHNvdXJjZVBhdGgsCiAgICAgICAgIi10IiwKICAgICAgICBTdHJpbmcodGhpcy5vcHRpb25zLm1heER1cmF0aW9uU2Vjb25kcyArIDEpLAogICAgICAgICItdm4iLAogICAgICAgICItYWMiLAogICAgICAgICIxIiwKICAgICAgICAiLWFyIiwKICAgICAgICAiMTYwMDAiLAogICAgICAgICItYjphIiwKICAgICAgICAiMzJrIiwKICAgICAgICBzdHRQYXRoCiAgICAgIF0pOwogICAgICBjb25zdCBzdHRJbmZvID0gYXdhaXQgc3RhdChzdHRQYXRoKTsKICAgICAgaWYgKCFzdHRJbmZvLmlzRmlsZSgpIHx8IHN0dEluZm8uc2l6ZSA8PSAwIHx8IHN0dEluZm8uc2l6ZSA+IE1BWF9TVFRfTUVESUFfQllURVMpIHsKICAgICAgICB0aHJvdyBuZXcgTWVkaWFUcmFuc2NyaXB0RXJyb3IoCiAgICAgICAgICAiTUVESUFfRklMRV9UT09fTEFSR0UiLAogICAgICAgICAgIlRoZSBTVFQgYXVkaW8gZXhjZWVkcyB0aGUgY2xvc2VkIGJldGEgdXBsb2FkIGxpbWl0LiIsCiAgICAgICAgICA0MTMsCiAgICAgICAgICBmYWxzZQogICAgICAgICk7CiAgICAgIH0KCiAgICAgIGNvbnN0IGR1cmF0aW9uU2Vjb25kcyA9IGF3YWl0IHByb2JlRHVyYXRpb25TZWNvbmRzKHN0dFBhdGgpOwogICAgICBpZiAoZHVyYXRpb25TZWNvbmRzID4gdGhpcy5vcHRpb25zLm1heER1cmF0aW9uU2Vjb25kcyArIDAuNSkgewogICAgICAgIHRocm93IG5ldyBNZWRpYVRyYW5zY3JpcHRFcnJvcigKICAgICAgICAgICJNRURJQV9EVVJBVElPTl9MSU1JVCIsCiAgICAgICAgICBgQ2xvc2VkIGJldGEgdmlkZW9zIGFyZSBsaW1pdGVkIHRvICR7dGhpcy5vcHRpb25zLm1heER1cmF0aW9uU2Vjb25kc30gc2Vjb25kcy5gLAogICAgICAgICAgNDEzLAogICAgICAgICAgZmFsc2UKICAgICAgICApOwogICAgICB9CiAgICAgIGpvYi5tZWRpYS5kdXJhdGlvbl9zZWNvbmRzID0gZHVyYXRpb25TZWNvbmRzOwoKICAgICAgY29uc3QgcmVzZXJ2YXRpb24gPSB0aGlzLm9wdGlvbnMuYmV0YUdhdGUucmVzZXJ2ZVN0dFNlY29uZHMoZHVyYXRpb25TZWNvbmRzKTsKICAgICAgam9iLmJldGFfcXVvdGEgPSByZXNlcnZhdGlvbi51c2FnZTsKICAgICAgaWYgKCFyZXNlcnZhdGlvbi5hbGxvd2VkKSB7CiAgICAgICAgdGhyb3cgbmV3IE1lZGlhVHJhbnNjcmlwdEVycm9yKAogICAgICAgICAgIk1FRElBX0RBSUxZX1NUVF9RVU9UQV9FWEhBVVNURUQiLAogICAgICAgICAgIlRoZSBjbG9zZWQgYmV0YSBkYWlseSBTVFIgYnVkZ2V0IGlzIGV4aGF1c3RlZC4iLAogICAgICAgICAgNDI5LAogICAgICAgICAgdHJ1ZQogICAgICAgICk7CiAgICAgIH0KICAgICAgam9iLnN0dF9zZWNvbmRzX2NoYXJnZWQgPSBNYXRoLmNlaWwoZHVyYXRpb25TZWNvbmRzKTsKIiIiCmlmIG9sZCBub3QgaW4gdGV4dDoKICAgIHJhaXNlIFN5c3RlbUV4aXQoInRhcmdldCBwcm9jZXNzQXVkaW8gYmxvY2sgbm90IGZvdW5kIikKcGF0aC53cml0ZV90ZXh0KHRleHQucmVwbGFjZShvbGQsIG5ldywgMSksIGVuY29kaW5nPSJ1dGYtOCIpCg==
         run: |
           set -euo pipefail
-          printf '%s' "$PATCH_B64" | base64 -d > /tmp/patch.py
-          python /tmp/patch.py
+          python - <<'PY'
+          from pathlib import Path
+
+          path = Path("src/cloud/src/media_client_ingest.ts")
+          lines = path.read_text(encoding="utf-8").splitlines()
+          start = next(i for i, line in enumerate(lines) if line == "      const sourcePath = join(directory, `client${extensionForContentType(contentType)}`);")
+          end = next(i for i, line in enumerate(lines) if i > start and line == "      if (!this.options.assemblyAiApiKey) {")
+          replacement = [
+              "      const sourcePath = join(directory, `client${extensionForContentType(contentType)}`);",
+              "      await writeFile(sourcePath, audio);",
+              "",
+              "      // MediaRecorder WebM/Opus blobs may omit a container-level duration.",
+              "      // Normalize first with a hard processing cap, then probe the normalized",
+              "      // MP3 where duration metadata is reliable. Reserve quota only after",
+              "      // duration validation succeeds.",
+              "      const sttPath = join(directory, \"stt.mp3\");",
+              "      await runCommand(\"ffmpeg\", [",
+              "        \"-y\",",
+              "        \"-loglevel\",",
+              "        \"error\",",
+              "        \"-i\",",
+              "        sourcePath,",
+              "        \"-t\",",
+              "        String(this.options.maxDurationSeconds + 1),",
+              "        \"-vn\",",
+              "        \"-ac\",",
+              "        \"1\",",
+              "        \"-ar\",",
+              "        \"16000\",",
+              "        \"-b:a\",",
+              "        \"32k\",",
+              "        sttPath",
+              "      ]);",
+              "      const sttInfo = await stat(sttPath);",
+              "      if (!sttInfo.isFile() || sttInfo.size <= 0 || sttInfo.size > MAX_STT_MEDIA_BYTES) {",
+              "        throw new MediaTranscriptError(",
+              "          \"MEDIA_FILE_TOO_LARGE\",",
+              "          \"The STT audio exceeds the closed beta upload limit.\",",
+              "          413,",
+              "          false",
+              "        );",
+              "      }",
+              "",
+              "      const durationSeconds = await probeDurationSeconds(sttPath);",
+              "      if (durationSeconds > this.options.maxDurationSeconds + 0.5) {",
+              "        throw new MediaTranscriptError(",
+              "          \"MEDIA_DURATION_LIMIT\",",
+              "          `Closed beta videos are limited to ${this.options.maxDurationSeconds} seconds.`,",
+              "          413,",
+              "          false",
+              "        );",
+              "      }",
+              "      job.media.duration_seconds = durationSeconds;",
+              "",
+              "      const reservation = this.options.betaGate.reserveSttSeconds(durationSeconds);",
+              "      job.beta_quota = reservation.usage;",
+              "      if (!reservation.allowed) {",
+              "        throw new MediaTranscriptError(",
+              "          \"MEDIA_DAILY_STT_QUOTA_EXHAUSTED\",",
+              "          \"The closed beta daily STT budget is exhausted.\",",
+              "          429,",
+              "          true",
+              "        );",
+              "      }",
+              "      job.stt_seconds_charged = Math.ceil(durationSeconds);",
+              "",
+          ]
+          path.write_text("\n".join(lines[:start] + replacement + lines[end:]) + "\n", encoding="utf-8")
+          PY
+
           git config user.name "github-actions[bot]"
           git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
           git add src/cloud/src/media_client_ingest.ts
