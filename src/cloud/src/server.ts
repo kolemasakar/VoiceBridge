@@ -3,6 +3,7 @@ import type { AddressInfo } from "node:net";
 import { authenticate } from "./auth.js";
 import type { AppConfig } from "./config.js";
 import { createRequestContext, type RequestContext } from "./identifiers.js";
+import { createMediaClientHttpHandler } from "./media_client_http.js";
 import { MediaBetaGate } from "./media_beta.js";
 import {
   MediaBetaTranscriptService,
@@ -67,7 +68,7 @@ function setCommonHeaders(
   response.setHeader("access-control-allow-origin", origin);
   response.setHeader(
     "access-control-allow-headers",
-    "authorization, content-type, x-request-id, x-correlation-id"
+    "authorization, content-type, x-request-id, x-correlation-id, x-media-beta-code, x-media-source-url"
   );
   response.setHeader(
     "access-control-allow-methods",
@@ -241,6 +242,7 @@ export function createVoiceBridgeServer(
     config.rateLimitRequestsPerMinute
   );
   const streamTickets = new StreamTicketStore();
+  const mediaClientHttp = createMediaClientHttpHandler(config);
   const selectedTtsVoice = ttsProvider.name === "azure"
     ? config.azureTtsVoice || "uk-UA-OstapNeural"
     : config.geminiTtsVoice || "Iapetus";
@@ -305,6 +307,7 @@ export function createVoiceBridgeServer(
               max_concurrent_jobs: config.mediaMaxConcurrentJobs ?? 1,
               daily_stt_seconds: config.mediaDailySttSeconds ?? 7200
             },
+            media_client_ingest: mediaClientHttp.capability,
             translation: {
               provider: translationProvider.name,
               configured: translationProvider.configured,
@@ -328,6 +331,10 @@ export function createVoiceBridgeServer(
         context,
         config.corsAllowedOrigin
       );
+      return;
+    }
+
+    if (await mediaClientHttp.handle(request, response, context)) {
       return;
     }
 
