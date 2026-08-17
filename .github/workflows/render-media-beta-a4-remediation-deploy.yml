@@ -1,0 +1,76 @@
+name: Render MEDIA BETA A4 Remediation Deploy
+
+on:
+  push:
+    branches:
+      - agent/krc-media-transcript
+    paths:
+      - .github/workflows/render-media-beta-a4-remediation-deploy.yml
+
+permissions:
+  contents: read
+
+jobs:
+  deploy:
+    runs-on: ubuntu-latest
+    env:
+      RENDER_API_KEY: ${{ secrets.RENDER_API_KEY }}
+      SERVICE_ID: srv-da1kic5bedkc73d6fk60
+      HEALTH_URL: https://voicebridge-krc-media-beta-kolemasakar.onrender.com/api/v1/health
+    steps:
+      - name: Trigger isolated beta deploy
+        id: deploy
+        shell: bash
+        run: |
+          set -euo pipefail
+          test -n "${RENDER_API_KEY:-}" || { echo 'RENDER_API_KEY missing' >&2; exit 1; }
+          payload="$(jq -nc --arg commitId "$GITHUB_SHA" '{commitId:$commitId,clearCache:"do_not_clear"}')"
+          tmp="$(mktemp)"
+          code="$(curl -sS -o "$tmp" -w '%{http_code}' \
+            -X POST "https://api.render.com/v1/services/${SERVICE_ID}/deploys" \
+            -H 'Accept: application/json' \
+            -H 'Content-Type: application/json' \
+            -H "Authorization: Bearer ${RENDER_API_KEY}" \
+            --data "$payload")"
+          [[ "$code" == 201 || "$code" == 202 ]] || { echo "Deploy request failed HTTP $code" >&2; rm -f "$tmp"; exit 1; }
+          id="$(jq -r '(.deploy // .).id // empty' "$tmp")"
+          rm -f "$tmp"
+          test -n "$id" || { echo 'Deploy id missing' >&2; exit 1; }
+          echo "deploy_id=$id" >> "$GITHUB_OUTPUT"
+          echo "Beta deploy accepted: $id"
+          echo "Commit: $GITHUB_SHA"
+
+      - name: Wait for beta deploy
+        env:
+          DEPLOY_ID: ${{ steps.deploy.outputs.deploy_id }}
+        shell: bash
+        run: |
+          set -euo pipefail
+          for i in $(seq 1 48); do
+            tmp="$(mktemp)"
+            code="$(curl -sS -o "$tmp" -w '%{http_code}' \
+              "https://api.render.com/v1/services/${SERVICE_ID}/deploys/${DEPLOY_ID}" \
+              -H 'Accept: application/json' \
+              -H "Authorization: Bearer ${RENDER_API_KEY}")"
+            [[ "$code" == 200 ]] || { rm -f "$tmp"; echo "Deploy status HTTP $code" >&2; exit 1; }
+            status="$(jq -r '(.deploy // .).status // "unknown"' "$tmp")"
+            rm -f "$tmp"
+            echo "Deploy status: $status"
+            case "$status" in
+              live) exit 0 ;;
+              build_failed|update_failed|canceled|deactivated) exit 1 ;;
+            esac
+            sleep 5
+          done
+          echo 'Timed out waiting for deploy' >&2
+          exit 1
+
+      - name: Verify beta health
+        shell: bash
+        run: |
+          set -euo pipefail
+          code="$(curl -sS --retry 3 --retry-delay 3 --max-time 60 -o /tmp/health.json -w '%{http_code}' "$HEALTH_URL")"
+          echo "Beta health HTTP: $code"
+          [[ "$code" == 200 ]]
+          jq -e '.status == "ok" and .capabilities.media_transcript.configured == true' /tmp/health.json >/dev/null
+          echo 'Beta health/configuration: PASS'
