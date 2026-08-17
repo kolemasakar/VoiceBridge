@@ -1,0 +1,42 @@
+name: Render Media Beta A3 Final Verify
+
+on:
+  push:
+    branches:
+      - agent/krc-media-transcript
+    paths:
+      - .github/workflows/render-media-beta-a3-final-verify.yml
+
+permissions:
+  contents: read
+
+jobs:
+  verify:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Verify beta and production health
+        shell: bash
+        run: |
+          set -euo pipefail
+          beta_url='https://voicebridge-krc-media-beta-kolemasakar.onrender.com/api/v1/health'
+          prod_url='https://voicebridge-cloud-us.onrender.com/api/v1/health'
+
+          beta_code="$(curl -sS --retry 2 --retry-delay 5 --max-time 90 -o /tmp/beta.json -w '%{http_code}' "$beta_url")"
+          prod_code="$(curl -sS --retry 2 --retry-delay 5 --max-time 90 -o /tmp/prod.json -w '%{http_code}' "$prod_url")"
+
+          echo "Beta health HTTP: $beta_code"
+          echo "Production health HTTP: $prod_code"
+          [[ "$beta_code" == 200 ]] || exit 1
+          [[ "$prod_code" == 200 ]] || exit 1
+
+          beta_configured="$(jq -r '.capabilities.media_transcript.configured // false' /tmp/beta.json)"
+          beta_mode="$(jq -r '.capabilities.media_transcript.mode // ""' /tmp/beta.json)"
+          prod_status="$(jq -r '.status // ""' /tmp/prod.json)"
+
+          echo "Beta media mode: $beta_mode"
+          echo "Beta media configured: $beta_configured"
+          echo "Production status: $prod_status"
+
+          [[ "$beta_mode" == closed_beta ]] || exit 1
+          [[ "$beta_configured" == true ]] || exit 1
+          [[ "$prod_status" == ok ]] || exit 1
