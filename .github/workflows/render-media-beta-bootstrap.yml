@@ -1,0 +1,124 @@
+name: Render Media Beta Bootstrap
+
+on:
+  push:
+    branches: [agent/krc-media-transcript]
+    paths: [.github/workflows/render-media-beta-bootstrap.yml]
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: render-media-beta-bootstrap
+  cancel-in-progress: false
+
+env:
+  TARGET_SERVICE: voicebridge-krc-media-beta-kolemasakar
+  PRODUCTION_SERVICE: voicebridge-cloud-us
+  TARGET_BRANCH: agent/krc-media-transcript
+  TARGET_REPO: https://github.com/kolemasakar/VoiceBridge
+  RENDER_CLI_VERSION: v2.22.0
+
+jobs:
+  bootstrap:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Resolve workspace and guard target
+        id: preflight
+        env:
+          RENDER_API_KEY: ${{ secrets.RENDER_API_KEY }}
+        shell: bash
+        run: |
+          set -euo pipefail
+          test -n "${RENDER_API_KEY:-}" || { echo "RENDER_API_KEY missing" >&2; exit 1; }
+          tmp="$(mktemp)"
+          code="$(curl -sS --get -o "$tmp" -w '%{http_code}' \
+            'https://api.render.com/v1/services' \
+            --data-urlencode 'limit=100' \
+            -H 'Accept: application/json' \
+            -H "Authorization: Bearer ${RENDER_API_KEY}")"
+          [[ "$code" == 200 ]] || { echo "Render lookup failed HTTP $code" >&2; exit 1; }
+          owner="$(jq -r --arg n "$PRODUCTION_SERVICE" '[.[]|(.service//.)|select(.name==$n)]|first|(.ownerId//.owner_id//empty)' "$tmp")"
+          target="$(jq -r --arg n "$TARGET_SERVICE" '[.[]|(.service//.)|select(.name==$n)]|first|(.id//empty)' "$tmp")"
+          rm -f "$tmp"
+          [[ -n "$owner" ]] || { echo "Production workspace not resolved." >&2; exit 1; }
+          echo "owner=$owner" >> "$GITHUB_OUTPUT"
+          if [[ -n "$target" ]]; then
+            echo "exists=true" >> "$GITHUB_OUTPUT"
+            echo "Target already exists: $target"
+          else
+            echo "exists=false" >> "$GITHUB_OUTPUT"
+            echo "Target absent; bootstrap allowed."
+          fi
+
+      - name: Install pinned Render CLI
+        if: steps.preflight.outputs.exists == 'false'
+        shell: bash
+        run: |
+          set -euo pipefail
+          v="${RENDER_CLI_VERSION#v}"
+          curl -sSfL "https://github.com/render-oss/cli/releases/download/${RENDER_CLI_VERSION}/cli_${v}_linux_amd64.zip" -o /tmp/render.zip
+          echo '6cdcd11897b7bd7e673317e6f4aaf041b654d818444f3b1efec7240a835f79ec  /tmp/render.zip' | sha256sum -c -
+          unzip -q /tmp/render.zip -d /tmp/render-cli
+          bin="$(find /tmp/render-cli -type f -perm -u+x | head -1)"
+          sudo install -m 0755 "$bin" /usr/local/bin/render
+          render --version
+
+      - name: Create isolated Free service
+        if: steps.preflight.outputs.exists == 'false'
+        env:
+          RENDER_API_KEY: ${{ secrets.RENDER_API_KEY }}
+        shell: bash
+        run: |
+          set -euo pipefail
+          render workspace set '${{ steps.preflight.outputs.owner }}' -o text
+          token="$(openssl rand -hex 24)"
+          echo "::add-mask::$token"
+          render services create --confirm -o json \
+            --name "$TARGET_SERVICE" \
+            --type web_service \
+            --repo "$TARGET_REPO" \
+            --branch "$TARGET_BRANCH" \
+            --runtime docker \
+            --root-directory src/cloud \
+            --region frankfurt \
+            --plan free \
+            --num-instances 1 \
+            --health-check-path /api/v1/health \
+            --auto-deploy=false \
+            --env-var "TEST_ACCESS_TOKEN=$token" \
+            --env-var MEDIA_MAX_DURATION_SECONDS=3600 \
+            --env-var MEDIA_MAX_CONCURRENT_JOBS=1 \
+            --env-var MEDIA_DAILY_STT_SECONDS=7200 \
+            --env-var MEDIA_JOB_TTL_SECONDS=3600 \
+            --env-var RATE_LIMIT_REQUESTS_PER_MINUTE=120 \
+            --env-var MAX_REQUEST_BODY_BYTES=32768 \
+            --env-var 'CORS_ALLOWED_ORIGIN=*' > /tmp/create.json
+          id="$(jq -r '.id//.service.id//.data.id//empty' /tmp/create.json)"
+          rm -f /tmp/create.json
+          [[ -n "$id" ]] || { echo "Service creation returned no ID." >&2; exit 1; }
+          echo "Created beta service: $id"
+
+      - name: Verify isolated service
+        env:
+          RENDER_API_KEY: ${{ secrets.RENDER_API_KEY }}
+        shell: bash
+        run: |
+          set -euo pipefail
+          tmp="$(mktemp)"
+          code="$(curl -sS --get -o "$tmp" -w '%{http_code}' \
+            'https://api.render.com/v1/services' \
+            --data-urlencode "name=${TARGET_SERVICE}" \
+            --data-urlencode 'limit=20' \
+            -H 'Accept: application/json' \
+            -H "Authorization: Bearer ${RENDER_API_KEY}")"
+          [[ "$code" == 200 ]] || { echo "Verification lookup failed HTTP $code" >&2; exit 1; }
+          id="$(jq -r --arg n "$TARGET_SERVICE" '[.[]|(.service//.)|select(.name==$n)]|first|(.id//empty)' "$tmp")"
+          branch="$(jq -r --arg n "$TARGET_SERVICE" '[.[]|(.service//.)|select(.name==$n)]|first|(.branch//empty)' "$tmp")"
+          plan="$(jq -r --arg n "$TARGET_SERVICE" '[.[]|(.service//.)|select(.name==$n)]|first|(.serviceDetails.plan//.plan//empty)' "$tmp")"
+          rm -f "$tmp"
+          [[ -n "$id" ]] || { echo "Beta service not found." >&2; exit 1; }
+          [[ "$branch" == "$TARGET_BRANCH" ]] || { echo "Unexpected branch: $branch" >&2; exit 1; }
+          [[ "$plan" == free ]] || { echo "Unexpected plan: $plan" >&2; exit 1; }
+          echo "PASS: $id / branch=$branch / plan=$plan"
