@@ -195,7 +195,9 @@ export async function tryYoutubeCaptions(
       "--no-warnings",
       "--quiet",
       "--extractor-args",
-      "youtube:player_client=web_embedded,android_vr",
+      "youtube:player_client=mweb",
+      "--js-runtimes",
+      "node",
       "-o",
       template,
       url
