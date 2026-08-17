@@ -194,6 +194,8 @@ export async function tryYoutubeCaptions(
       "json3",
       "--no-warnings",
       "--quiet",
+      "--extractor-args",
+      "youtube:player_client=web_embedded,android_vr",
       "-o",
       template,
       url

@@ -192,6 +192,8 @@ async function inspectYoutube(url: string): Promise<MediaInspection> {
     "--dump-single-json",
     "--no-warnings",
     "--quiet",
+    "--extractor-args",
+    "youtube:player_client=web_embedded,android_vr",
     url
   ]);
   let metadata: Record<string, unknown>;
@@ -233,6 +235,8 @@ async function downloadLowBitrateAudio(url: string): Promise<{
       "--no-playlist",
       "--no-warnings",
       "--quiet",
+      "--extractor-args",
+      "youtube:player_client=web_embedded,android_vr",
       "--max-filesize",
       String(MAX_SOURCE_MEDIA_BYTES),
       "-f",
