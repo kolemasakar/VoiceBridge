@@ -1,0 +1,50 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>KRC MEDIA BETA</title>
+  <link rel="stylesheet" href="popup.css">
+</head>
+<body>
+  <main>
+    <h1>KRC MEDIA BETA</h1>
+    <p class="hint">Use only with a <code>KRCC_...</code> job created by the beta GPT.</p>
+
+    <label>
+      Beta backend
+      <input id="endpoint" type="url" autocomplete="off">
+    </label>
+
+    <label>
+      Job ID
+      <input id="jobId" type="text" placeholder="KRCC_..." autocomplete="off">
+    </label>
+
+    <label>
+      Beta access code
+      <input id="betaCode" type="password" autocomplete="off">
+    </label>
+
+    <div class="buttons">
+      <button id="start" type="button">Start capture</button>
+      <button id="stop" type="button">Stop</button>
+    </div>
+
+    <section class="status">
+      <strong id="status">IDLE</strong>
+      <p id="message">Ready.</p>
+      <dl>
+        <dt>Job</dt><dd id="stateJob">-</dd>
+        <dt>Language</dt><dd id="language">-</dd>
+        <dt>Segments</dt><dd id="segments">-</dd>
+        <dt>STT seconds</dt><dd id="sttSeconds">-</dd>
+        <dt>Provider cleanup</dt><dd id="providerDeleted">-</dd>
+      </dl>
+    </section>
+
+    <p class="warning">Play the YouTube video at normal speed while capture is active. Stop when the relevant video content is finished.</p>
+  </main>
+  <script src="popup.js"></script>
+</body>
+</html>
