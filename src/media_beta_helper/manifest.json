@@ -1,14 +1,15 @@
 {
   "manifest_version": 3,
   "name": "KRC MEDIA BETA Helper",
-  "description": "Closed-beta helper that captures audio from the active YouTube tab and sends it to the isolated K-Research & Critic media backend.",
-  "version": "0.1.0",
+  "description": "Closed-beta helper that prefers YouTube captions and falls back to active-tab audio for the isolated K-Research & Critic media backend.",
+  "version": "0.2.0",
   "minimum_chrome_version": "116",
   "permissions": [
     "activeTab",
     "offscreen",
     "storage",
-    "tabCapture"
+    "tabCapture",
+    "scripting"
   ],
   "host_permissions": [
     "https://voicebridge-krc-media-beta-kolemasakar.onrender.com/*",

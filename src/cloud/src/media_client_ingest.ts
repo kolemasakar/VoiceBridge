@@ -27,6 +27,18 @@ export interface MediaClientTranscriptInput {
   beta_access_code: string;
 }
 
+export interface MediaClientCaptionSegmentInput {
+  start_ms: number;
+  end_ms: number;
+  text: string;
+}
+
+export interface MediaClientCaptionsInput {
+  language: string;
+  caption_type: "manual" | "auto_generated";
+  segments: MediaClientCaptionSegmentInput[];
+}
+
 export type MediaClientTranscriptStatus =
   | MediaTranscriptStatus
   | "AWAITING_CLIENT";
@@ -42,8 +54,9 @@ export interface MediaClientTranscriptJobView {
   language_confidence: number | null;
   ingress_mode: "client_assisted";
   client_upload_required: boolean;
-  transcript_source: "assemblyai_stt" | null;
-  provider: "assemblyai" | null;
+  transcript_source: "assemblyai_stt" | "youtube_captions" | null;
+  caption_type: "manual" | "auto_generated" | null;
+  provider: "assemblyai" | "youtube" | null;
   provider_model: string | null;
   provider_data_deleted: boolean | null;
   stt_seconds_charged: number;
@@ -422,6 +435,7 @@ export class MediaClientIngestService {
       ingress_mode: "client_assisted",
       client_upload_required: true,
       transcript_source: null,
+      caption_type: null,
       provider: null,
       provider_model: null,
       provider_data_deleted: null,
@@ -478,6 +492,130 @@ export class MediaClientIngestService {
       segments: segments.map((segment) => ({ ...segment }))
     };
   }
+
+  acceptCaptions(
+  jobId: string,
+  accessCode: string,
+  sourceUrl: string,
+  input: MediaClientCaptionsInput
+): MediaClientTranscriptJobView {
+  this.cleanupExpired();
+  const job = this.requireClientJob(jobId, accessCode);
+  if (job.status !== "AWAITING_CLIENT") {
+    throw new MediaTranscriptError(
+      "MEDIA_CLIENT_INVALID_STATE",
+      "The media job is not waiting for browser source content.",
+      409,
+      false
+    );
+  }
+  if (!mediaClientSourceMatches(job.source_url, sourceUrl)) {
+    throw new MediaTranscriptError(
+      "MEDIA_CLIENT_SOURCE_MISMATCH",
+      "The active browser tab does not match the YouTube URL for this job.",
+      409,
+      false
+    );
+  }
+
+  const language = typeof input?.language === "string"
+    ? input.language.trim().toLowerCase()
+    : "";
+  if (!/^[a-z]{2,3}(?:-[a-z0-9]+)*$/i.test(language) || language.length > 32) {
+    throw new MediaTranscriptError(
+      "MEDIA_CLIENT_CAPTIONS_INVALID",
+      "Caption language metadata is invalid.",
+      422,
+      false
+    );
+  }
+  if (input.caption_type !== "manual" && input.caption_type !== "auto_generated") {
+    throw new MediaTranscriptError(
+      "MEDIA_CLIENT_CAPTIONS_INVALID",
+      "Caption type must be manual or auto_generated.",
+      422,
+      false
+    );
+  }
+  if (!Array.isArray(input.segments) || input.segments.length < 1 || input.segments.length > 20000) {
+    throw new MediaTranscriptError(
+      "MEDIA_CLIENT_CAPTIONS_INVALID",
+      "Caption segments must contain 1..20000 entries.",
+      422,
+      false
+    );
+  }
+
+  const segments: MediaTranscriptSegment[] = [];
+  let totalCharacters = 0;
+  let previousStart = -1;
+  let maximumEnd = 0;
+  for (const raw of input.segments) {
+    const start = Number(raw?.start_ms);
+    const end = Number(raw?.end_ms);
+    const value = typeof raw?.text === "string" ? raw.text.replace(/\s+/g, " ").trim() : "";
+    if (
+      !Number.isFinite(start) || !Number.isFinite(end) ||
+      start < 0 || end <= start || start < previousStart ||
+      !value || value.length > 1600
+    ) {
+      throw new MediaTranscriptError(
+        "MEDIA_CLIENT_CAPTIONS_INVALID",
+        "Caption timestamps or text are invalid.",
+        422,
+        false
+      );
+    }
+    const startMs = Math.round(start);
+    const endMs = Math.round(end);
+    if (endMs > (this.options.maxDurationSeconds * 1000) + 1000) {
+      throw new MediaTranscriptError(
+        "MEDIA_DURATION_LIMIT",
+        `Closed beta videos are limited to ${this.options.maxDurationSeconds} seconds.`,
+        413,
+        false
+      );
+    }
+    totalCharacters += value.length;
+    if (totalCharacters > 1000000) {
+      throw new MediaTranscriptError(
+        "MEDIA_CLIENT_CAPTIONS_TOO_LARGE",
+        "The caption transcript exceeds the closed beta text limit.",
+        413,
+        false
+      );
+    }
+    segments.push({
+      index: segments.length,
+      start_ms: startMs,
+      end_ms: endMs,
+      text: value,
+      confidence: null
+    });
+    previousStart = startMs;
+    maximumEnd = Math.max(maximumEnd, endMs);
+  }
+
+  job.status = "COMPLETED";
+  job.client_upload_required = false;
+  job.transcript_source = "youtube_captions";
+  job.caption_type = input.caption_type;
+  job.provider = "youtube";
+  job.provider_model = null;
+  job.provider_data_deleted = null;
+  job.stt_seconds_charged = 0;
+  job.detected_language = language;
+  job.language_confidence = null;
+  job.transcript_text = segments.map((segment) => segment.text).join(" ");
+  job.segments = segments;
+  job.transcript_characters = job.transcript_text.length;
+  job.segment_count = segments.length;
+  job.media.duration_seconds = maximumEnd / 1000;
+  job.error = null;
+  this.activeJobs = Math.max(0, this.activeJobs - 1);
+  this.touch(job);
+  return this.publicJob(job);
+}
 
   acceptAudio(
     jobId: string,
@@ -574,6 +712,7 @@ export class MediaClientIngestService {
       ingress_mode: job.ingress_mode,
       client_upload_required: job.client_upload_required,
       transcript_source: job.transcript_source,
+      caption_type: job.caption_type,
       provider: job.provider,
       provider_model: job.provider_model,
       provider_data_deleted: job.provider_data_deleted,

@@ -136,3 +136,39 @@ test("browser upload rejects empty audio before background STT starts", () => {
       error.code === "MEDIA_CLIENT_AUDIO_SIZE_INVALID"
   );
 });
+
+
+test("browser captions complete a client job without STT quota charge", () => {
+  const ingest = service();
+  const started = ingest.start({
+    url: "https://www.youtube.com/watch?v=DZLzmQ2kwaA",
+    language_hint: "auto",
+    beta_access_code: CODE_A
+  });
+
+  const completed = ingest.acceptCaptions(
+    started.job.job_id,
+    CODE_A,
+    "https://www.youtube.com/watch?v=DZLzmQ2kwaA&t=10s",
+    {
+      language: "uk",
+      caption_type: "auto_generated",
+      segments: [
+        { start_ms: 1000, end_ms: 2500, text: "Pershyi testovyi sehment." },
+        { start_ms: 2500, end_ms: 4300, text: "Druhyi testovyi sehment." }
+      ]
+    }
+  );
+
+  assert.equal(completed.status, "COMPLETED");
+  assert.equal(completed.transcript_source, "youtube_captions");
+  assert.equal(completed.caption_type, "auto_generated");
+  assert.equal(completed.provider, "youtube");
+  assert.equal(completed.detected_language, "uk");
+  assert.equal(completed.stt_seconds_charged, 0);
+  assert.equal(completed.segment_count, 2);
+  assert.equal(completed.beta_quota.used_seconds, 0);
+  const page = ingest.page(started.job.job_id, 0, 20);
+  assert.equal(page?.segments.length, 2);
+  assert.equal(page?.segments[0]?.start_ms, 1000);
+});

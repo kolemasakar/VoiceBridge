@@ -4,11 +4,14 @@ const elements = {
   endpoint: document.getElementById("endpoint"),
   jobId: document.getElementById("jobId"),
   betaCode: document.getElementById("betaCode"),
+  captions: document.getElementById("captions"),
   start: document.getElementById("start"),
   stop: document.getElementById("stop"),
   status: document.getElementById("status"),
   message: document.getElementById("message"),
   stateJob: document.getElementById("stateJob"),
+  source: document.getElementById("source"),
+  captionType: document.getElementById("captionType"),
   language: document.getElementById("language"),
   segments: document.getElementById("segments"),
   sttSeconds: document.getElementById("sttSeconds"),
@@ -16,14 +19,11 @@ const elements = {
 };
 
 function send(message) {
-  return chrome.runtime.sendMessage({
-    target: "media_beta_service_worker",
-    ...message
-  });
+  return chrome.runtime.sendMessage({ target: "media_beta_service_worker", ...message });
 }
 
 function isBusy(status) {
-  return ["STARTING", "CAPTURING", "STOPPING", "UPLOADING", "TRANSCRIBING"].includes(status);
+  return ["STARTING", "CAPTURING", "STOPPING", "UPLOADING", "TRANSCRIBING", "FETCHING_CAPTIONS"].includes(status);
 }
 
 function render(state) {
@@ -31,15 +31,21 @@ function render(state) {
   elements.status.textContent = status;
   elements.message.textContent = state?.message || "Ready.";
   elements.stateJob.textContent = state?.jobId || "-";
+  elements.source.textContent = state?.transcriptSource || "-";
+  elements.captionType.textContent = state?.captionType || "-";
   elements.language.textContent = state?.detectedLanguage || "-";
   elements.segments.textContent = state?.segmentCount ?? "-";
   elements.sttSeconds.textContent = state?.sttSecondsCharged ?? "-";
-  elements.providerDeleted.textContent = state?.providerDataDeleted === true
-    ? "deleted"
-    : state?.providerDataDeleted === false
-      ? "delete failed"
-      : "-";
-  elements.start.disabled = isBusy(status);
+  elements.providerDeleted.textContent = state?.transcriptSource === "youtube_captions"
+    ? "not applicable"
+    : state?.providerDataDeleted === true
+      ? "deleted"
+      : state?.providerDataDeleted === false
+        ? "delete failed"
+        : "-";
+  const terminal = status === "COMPLETED";
+  elements.captions.disabled = isBusy(status) || terminal;
+  elements.start.disabled = isBusy(status) || terminal;
   elements.stop.disabled = status !== "CAPTURING";
 }
 
@@ -53,11 +59,8 @@ async function load() {
   elements.jobId.value = settings.media_beta_job_id || "";
   elements.betaCode.value = settings.media_beta_access_code || "";
   const response = await send({ type: "GET_STATE" });
-  if (response?.ok) {
-    render(response.state);
-  } else {
-    render({ status: "ERROR", message: response?.error || "Could not read helper state." });
-  }
+  if (response?.ok) render(response.state);
+  else render({ status: "ERROR", message: response?.error || "Could not read helper state." });
 }
 
 async function persist() {
@@ -68,19 +71,33 @@ async function persist() {
   });
 }
 
-async function start() {
-  elements.start.disabled = true;
-  elements.message.textContent = "Starting...";
+function input() {
+  return {
+    endpoint: elements.endpoint.value.trim(),
+    jobId: elements.jobId.value.trim(),
+    betaCode: elements.betaCode.value
+  };
+}
+
+async function captions() {
+  elements.captions.disabled = true;
+  elements.message.textContent = "Reading subtitles...";
   try {
     await persist();
-    const response = await send({
-      type: "START_CAPTURE",
-      data: {
-        endpoint: elements.endpoint.value.trim(),
-        jobId: elements.jobId.value.trim(),
-        betaCode: elements.betaCode.value
-      }
-    });
+    const response = await send({ type: "GET_CAPTIONS", data: input() });
+    if (!response?.ok) throw new Error(response?.error || "Subtitles could not be read.");
+    render(response.state);
+  } catch (error) {
+    render({ status: "ERROR", message: error.message });
+  }
+}
+
+async function start() {
+  elements.start.disabled = true;
+  elements.message.textContent = "Starting audio fallback...";
+  try {
+    await persist();
+    const response = await send({ type: "START_CAPTURE", data: input() });
     if (!response?.ok) throw new Error(response?.error || "Capture could not start.");
     render(response.state);
   } catch (error) {
@@ -100,6 +117,7 @@ async function stop() {
   }
 }
 
+elements.captions.addEventListener("click", captions);
 elements.start.addEventListener("click", start);
 elements.stop.addEventListener("click", stop);
 

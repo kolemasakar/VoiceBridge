@@ -56,9 +56,14 @@ button {
   font-weight: 600;
 }
 
-#start {
+#captions {
   background: #1d4ed8;
   color: white;
+}
+
+#start {
+  background: #dbeafe;
+  color: #1e3a8a;
 }
 
 #stop {

@@ -1,16 +1,14 @@
 # KRC MEDIA BETA Browser Helper
-Closed-beta Chrome/Edge helper for client-assisted YouTube ingestion.
+Closed-beta Chrome/Edge helper for captions-first YouTube ingestion with audio fallback.
 
-Version: 0.1.0
+Version: 0.2.0
 Status: A4.2 PREVIEW
 
 ## Purpose
 
 This helper is an isolated beta component. It does not replace or modify the validated VoiceBridge translation extension.
 
-It exists because YouTube blocks direct media acquisition from the current Render/datacenter IP path even when the current yt-dlp PO-token provider is wired correctly.
-
-The helper captures audio from the active YouTube tab through the tester's normal browser/network path and uploads that audio to the isolated MEDIA BETA backend.
+It uses the tester browser/network path because direct YouTube acquisition from the current Render/datacenter path is blocked. Version 0.2.0 prefers the caption track already available to the open YouTube player. Audio capture and AssemblyAI remain a fallback only when usable captions are unavailable.
 
 ## Beta flow
 
@@ -19,17 +17,13 @@ K-Research & Critic MEDIA BETA
  -> create KRCC_... job
  -> status AWAITING_CLIENT
  -> open the same YouTube video in Chrome/Edge
- -> enter KRCC job ID + tester beta code in this helper
- -> Start capture
- -> play video at normal speed
- -> Stop capture
- -> helper uploads compressed tab audio
- -> backend validates duration/quota
- -> AssemblyAI async multilingual STT
- -> provider delete request
- -> helper reports COMPLETED
- -> return to K-Research & Critic
- -> GPT fetches timestamped segments
+ -> enter KRCC job ID + tester beta code
+ -> Use subtitles
+    -> browser reads YouTube caption track + timestamps
+    -> backend validates source/timestamps
+    -> COMPLETED with stt_seconds_charged=0
+ -> if captions unavailable: Audio fallback
+    -> tab audio capture -> backend -> AssemblyAI STT
 ```
 
 ## Installation for closed beta
@@ -45,29 +39,28 @@ Do not publish this helper to an extension store during A4 beta validation.
 ## Usage
 
 - The active tab must be the same YouTube video used to create the `KRCC_...` job.
-- Play the video at normal speed while recording so STT timestamps remain aligned with source playback time.
+- Use `Use subtitles` first. The helper prefers the currently active caption language; otherwise it uses the job language hint and then a source caption track.
+- Manual captions are preferred over automatic captions when no active track determines the choice.
+- Caption ingestion does not consume AssemblyAI STT seconds.
+- Use `Audio fallback` only when the helper reports captions unavailable.
+- For audio fallback, play the video at normal speed so timestamps remain aligned.
 - Maximum beta duration is 60 minutes.
-- Audio is recorded as Opus at approximately 32 kbps and uploaded only after Stop.
 - The browser helper never receives or stores the server-side `KRC_MEDIA_ACTION_TOKEN`.
 - The tester beta access code is stored only in extension local storage for the beta workflow and is sent only to the dedicated beta backend.
 
-## Current A4.2 boundary
+## Current boundary
 
-Implemented now:
-- browser/residential audio acquisition;
-- job/source matching;
-- per-tester access-code ownership;
-- 32 MB upload guard;
-- 60-minute duration guard enforced by the backend;
-- client-ingest beta STT budget;
-- async UK/RU/EN/auto AssemblyAI path;
-- timestamped transcript segments;
-- provider transcript delete request;
+Implemented:
+- browser-side YouTube caption extraction with timestamps;
+- manual vs auto-generated caption metadata;
+- zero-STT caption completion path;
+- same-video matching and per-tester ownership;
+- browser/residential audio fallback;
+- 32 MB audio upload guard and 60-minute duration guard;
+- async UK/RU/EN/auto AssemblyAI fallback;
+- provider transcript delete request for AssemblyAI fallback;
 - client-side status polling.
 
-Not yet implemented in this helper:
-- client-side YouTube caption extraction;
-- automatic seeking or accelerated playback;
-- extension-store distribution.
-
-Caption-first client acquisition remains a later optimization. A4.2 first validates the residential/browser audio path that removes the confirmed cloud-IP ingress blocker.
+Not implemented:
+- extension-store distribution;
+- automatic seeking or accelerated audio playback.

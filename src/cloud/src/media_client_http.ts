@@ -5,7 +5,8 @@ import type { RequestContext } from "./identifiers.js";
 import { MediaBetaGate } from "./media_beta.js";
 import {
   MAX_CLIENT_AUDIO_BYTES,
-  MediaClientIngestService
+  MediaClientIngestService,
+  type MediaClientCaptionsInput
 } from "./media_client_ingest.js";
 import { parseMediaBetaTranscriptInput } from "./media_beta_service.js";
 import { MediaTranscriptError } from "./media_transcript.js";
@@ -14,6 +15,8 @@ const ROOT = "/api/v1/media/client-transcriptions";
 const JOB_PATH = /^\/api\/v1\/media\/client-transcriptions\/(KRCC_[A-Za-z0-9-]+)$/;
 const SEGMENTS_PATH = /^\/api\/v1\/media\/client-transcriptions\/(KRCC_[A-Za-z0-9-]+)\/segments$/;
 const AUDIO_PATH = /^\/api\/v1\/media\/client-transcriptions\/(KRCC_[A-Za-z0-9-]+)\/audio$/;
+const CAPTIONS_PATH = /^\/api\/v1\/media\/client-transcriptions\/(KRCC_[A-Za-z0-9-]+)\/captions$/;
+const MAX_CLIENT_CAPTIONS_BYTES = 2 * 1024 * 1024;
 const CLIENT_STATUS_PATH = /^\/api\/v1\/media\/client-transcriptions\/(KRCC_[A-Za-z0-9-]+)\/client-status$/;
 
 function setHeaders(
@@ -103,7 +106,7 @@ async function readBinaryBody(
     if (total > maximumBytes) {
       throw new MediaTranscriptError(
         "REQUEST_BODY_TOO_LARGE",
-        "The browser audio upload is too large.",
+        "The browser client upload is too large.",
         413,
         false
       );
@@ -126,6 +129,19 @@ function sourceUrl(request: IncomingMessage): string {
 function contentType(request: IncomingMessage): string {
   const value = request.headers["content-type"];
   return typeof value === "string" ? value : "application/octet-stream";
+}
+
+function parseCaptionsInput(value: unknown): MediaClientCaptionsInput | null {
+  if (!value || typeof value !== "object" || Array.isArray(value)) return null;
+  const record = value as Record<string, unknown>;
+  if (typeof record.language !== "string") return null;
+  if (record.caption_type !== "manual" && record.caption_type !== "auto_generated") return null;
+  if (!Array.isArray(record.segments)) return null;
+  return {
+    language: record.language,
+    caption_type: record.caption_type,
+    segments: record.segments as MediaClientCaptionsInput["segments"]
+  };
 }
 
 export function createMediaClientHttpHandler(config: AppConfig) {
@@ -158,7 +174,45 @@ export function createMediaClientHttpHandler(config: AppConfig) {
     if (path !== ROOT && !path.startsWith(`${ROOT}/`)) return false;
 
     try {
-      const audioMatch = AUDIO_PATH.exec(path);
+    const captionsMatch = CAPTIONS_PATH.exec(path);
+    if (method === "POST" && captionsMatch?.[1]) {
+      const code = betaCode(request);
+      const activeSourceUrl = sourceUrl(request);
+      if (!code || !activeSourceUrl) {
+        throw new MediaTranscriptError(
+          "MEDIA_CLIENT_HEADERS_REQUIRED",
+          "x-media-beta-code and x-media-source-url are required.",
+          400,
+          false
+        );
+      }
+      const body = await readJsonBody(request, MAX_CLIENT_CAPTIONS_BYTES);
+      const captions = parseCaptionsInput(body);
+      if (!captions) {
+        throw new MediaTranscriptError(
+          "MEDIA_CLIENT_CAPTIONS_INVALID",
+          "The browser caption payload is invalid.",
+          422,
+          false
+        );
+      }
+      const job = service.acceptCaptions(
+        captionsMatch[1],
+        code,
+        activeSourceUrl,
+        captions
+      );
+      sendJson(
+        response,
+        200,
+        { request_id: context.requestId, ...job },
+        context,
+        config.corsAllowedOrigin
+      );
+      return true;
+    }
+
+    const audioMatch = AUDIO_PATH.exec(path);
       if (method === "POST" && audioMatch?.[1]) {
         const code = betaCode(request);
         const activeSourceUrl = sourceUrl(request);
