@@ -58,8 +58,13 @@ jobs:
           node --check src/browser_extension/offscreen.js
           node --check src/browser_extension/popup.js
           node --check src/browser_extension/service_worker.js
-      - name: Validate browser manifest
-        run: node -e "JSON.parse(require('fs').readFileSync('src/browser_extension/manifest.json', 'utf8'))"
+          node --check src/media_beta_helper/offscreen.js
+          node --check src/media_beta_helper/popup.js
+          node --check src/media_beta_helper/service_worker.js
+      - name: Validate browser manifests
+        run: |
+          node -e "JSON.parse(require('fs').readFileSync('src/browser_extension/manifest.json', 'utf8'))"
+          node -e "JSON.parse(require('fs').readFileSync('src/media_beta_helper/manifest.json', 'utf8'))"
       - name: Package browser extension 0.6.2
         run: |
           rm -rf dist
@@ -76,6 +81,20 @@ jobs:
           cd dist
           zip -r VoiceBridge_Extension_0.6.2.zip extension
           sha256sum VoiceBridge_Extension_0.6.2.zip > VoiceBridge_Extension_0.6.2_SHA256.txt
+      - name: Package MEDIA BETA helper 0.1.0
+        run: |
+          mkdir -p dist/media_beta_helper
+          cp src/media_beta_helper/manifest.json dist/media_beta_helper/
+          cp src/media_beta_helper/offscreen.html dist/media_beta_helper/
+          cp src/media_beta_helper/offscreen.js dist/media_beta_helper/
+          cp src/media_beta_helper/popup.css dist/media_beta_helper/
+          cp src/media_beta_helper/popup.html dist/media_beta_helper/
+          cp src/media_beta_helper/popup.js dist/media_beta_helper/
+          cp src/media_beta_helper/service_worker.js dist/media_beta_helper/
+          cp src/media_beta_helper/README.md dist/media_beta_helper/
+          cd dist
+          zip -r KRC_MEDIA_BETA_Helper_0.1.0.zip media_beta_helper
+          sha256sum KRC_MEDIA_BETA_Helper_0.1.0.zip > KRC_MEDIA_BETA_Helper_0.1.0_SHA256.txt
       - name: Upload browser extension 0.6.2
         uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a
         with:
@@ -83,6 +102,14 @@ jobs:
           path: |
             dist/VoiceBridge_Extension_0.6.2.zip
             dist/VoiceBridge_Extension_0.6.2_SHA256.txt
+          if-no-files-found: error
+      - name: Upload MEDIA BETA helper 0.1.0
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a
+        with:
+          name: KRC_MEDIA_BETA_Helper_0.1.0
+          path: |
+            dist/KRC_MEDIA_BETA_Helper_0.1.0.zip
+            dist/KRC_MEDIA_BETA_Helper_0.1.0_SHA256.txt
           if-no-files-found: error
 
   repository-docs:
