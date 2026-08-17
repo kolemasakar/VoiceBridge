@@ -1,0 +1,153 @@
+name: MEDIA BETA Duration Fix
+
+on:
+  push:
+    branches:
+      - agent/krc-media-transcript
+    paths:
+      - .github/workflows/media-beta-duration-fix.yml
+
+permissions:
+  contents: write
+
+jobs:
+  patch:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: agent/krc-media-transcript
+          fetch-depth: 0
+
+      - name: Fix MediaRecorder WebM duration handling
+        shell: bash
+        run: |
+          set -euo pipefail
+          python - <<'PY'
+          from pathlib import Path
+
+          path = Path('src/cloud/src/media_client_ingest.ts')
+          text = path.read_text(encoding='utf-8')
+
+          old = '''      const sourcePath = join(directory, `client${extensionForContentType(contentType)}`);
+      await writeFile(sourcePath, audio);
+      const durationSeconds = await probeDurationSeconds(sourcePath);
+      if (durationSeconds > this.options.maxDurationSeconds) {
+        throw new MediaTranscriptError(
+          "MEDIA_DURATION_LIMIT",
+          `Closed beta videos are limited to ${this.options.maxDurationSeconds} seconds.`,
+          413,
+          false
+        );
+      }
+      job.media.duration_seconds = durationSeconds;
+
+      const reservation = this.options.betaGate.reserveSttSeconds(durationSeconds);
+      job.beta_quota = reservation.usage;
+      if (!reservation.allowed) {
+        throw new MediaTranscriptError(
+          "MEDIA_DAILY_STT_QUOTA_EXHAUSTED",
+          "The closed beta daily STT budget is exhausted.",
+          429,
+          true
+        );
+      }
+      job.stt_seconds_charged = Math.ceil(durationSeconds);
+
+      const sttPath = join(directory, "stt.mp3");
+      await runCommand("ffmpeg", [
+        "-y",
+        "-loglevel",
+        "error",
+        "-i",
+        sourcePath,
+        "-vn",
+        "-ac",
+        "1",
+        "-ar",
+        "16000",
+        "-b:a",
+        "32k",
+        sttPath
+      ]);
+      const sttInfo = await stat(sttPath);
+      if (!sttInfo.isFile() || sttInfo.size <= 0 || sttInfo.size > MAX_STT_MEDIA_BYTES) {
+        throw new MediaTranscriptError(
+          "MEDIA_FILE_TOO_LARGE",
+          "The STT audio exceeds the closed beta upload limit.",
+          413,
+          false
+        );
+      }
+'''
+
+          new = '''      const sourcePath = join(directory, `client${extensionForContentType(contentType)}`);
+      await writeFile(sourcePath, audio);
+
+      // MediaRecorder WebM/Opus blobs may omit a container-level duration.
+      // Normalize first, with a hard processing cap, then probe the normalized
+      // MP3 where duration metadata is reliable. Quota is reserved only after
+      // duration validation succeeds.
+      const sttPath = join(directory, "stt.mp3");
+      await runCommand("ffmpeg", [
+        "-y",
+        "-loglevel",
+        "error",
+        "-i",
+        sourcePath,
+        "-t",
+        String(this.options.maxDurationSeconds + 1),
+        "-vn",
+        "-ac",
+        "1",
+        "-ar",
+        "16000",
+        "-b:a",
+        "32k",
+        sttPath
+      ]);
+      const sttInfo = await stat(sttPath);
+      if (!sttInfo.isFile() || sttInfo.size <= 0 || sttInfo.size > MAX_STT_MEDIA_BYTES) {
+        throw new MediaTranscriptError(
+          "MEDIA_FILE_TOO_LARGE",
+          "The STT audio exceeds the closed beta upload limit.",
+          413,
+          false
+        );
+      }
+
+      const durationSeconds = await probeDurationSeconds(sttPath);
+      if (durationSeconds > this.options.maxDurationSeconds + 0.5) {
+        throw new MediaTranscriptError(
+          "MEDIA_DURATION_LIMIT",
+          `Closed beta videos are limited to ${this.options.maxDurationSeconds} seconds.`,
+          413,
+          false
+        );
+      }
+      job.media.duration_seconds = durationSeconds;
+
+      const reservation = this.options.betaGate.reserveSttSeconds(durationSeconds);
+      job.beta_quota = reservation.usage;
+      if (!reservation.allowed) {
+        throw new MediaTranscriptError(
+          "MEDIA_DAILY_STT_QUOTA_EXHAUSTED",
+          "The closed beta daily STT budget is exhausted.",
+          429,
+          true
+        );
+      }
+      job.stt_seconds_charged = Math.ceil(durationSeconds);
+'''
+
+          if old not in text:
+              raise SystemExit('target processAudio block not found')
+
+          path.write_text(text.replace(old, new, 1), encoding='utf-8')
+          PY
+
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git add src/cloud/src/media_client_ingest.ts
+          git commit -m "Fix browser WebM duration handling"
+          git push origin HEAD:agent/krc-media-transcript
