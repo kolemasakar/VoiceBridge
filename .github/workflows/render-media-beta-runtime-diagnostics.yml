@@ -1,0 +1,77 @@
+name: Render Media Beta Runtime Diagnostics
+
+on:
+  push:
+    branches:
+      - agent/krc-media-transcript
+    paths:
+      - .github/workflows/render-media-beta-runtime-diagnostics.yml
+
+permissions:
+  contents: read
+
+jobs:
+  diagnose:
+    runs-on: ubuntu-latest
+    env:
+      RENDER_API_KEY: ${{ secrets.RENDER_API_KEY }}
+      SERVICE_NAME: voicebridge-krc-media-beta-kolemasakar
+    steps:
+      - name: Resolve beta service and workspace
+        id: target
+        shell: bash
+        run: |
+          set -euo pipefail
+          test -n "${RENDER_API_KEY:-}" || { echo "RENDER_API_KEY missing" >&2; exit 1; }
+          tmp="$(mktemp)"
+          code="$(curl -sS --get -o "$tmp" -w '%{http_code}' \
+            'https://api.render.com/v1/services' \
+            --data-urlencode "name=${SERVICE_NAME}" \
+            --data-urlencode 'limit=20' \
+            -H 'Accept: application/json' \
+            -H "Authorization: Bearer ${RENDER_API_KEY}")"
+          [[ "$code" == 200 ]] || { echo "Render service lookup failed HTTP $code" >&2; exit 1; }
+          id="$(jq -r --arg n "$SERVICE_NAME" '[.[]|(.service//.)|select(.name==$n)]|first|(.id//empty)' "$tmp")"
+          owner="$(jq -r --arg n "$SERVICE_NAME" '[.[]|(.service//.)|select(.name==$n)]|first|(.ownerId//.owner_id//empty)' "$tmp")"
+          rm -f "$tmp"
+          [[ -n "$id" && -n "$owner" ]] || { echo "Could not resolve beta service/workspace" >&2; exit 1; }
+          echo "service_id=$id" >> "$GITHUB_OUTPUT"
+          echo "owner_id=$owner" >> "$GITHUB_OUTPUT"
+          echo "Resolved isolated beta service."
+
+      - name: Read recent beta runtime errors
+        env:
+          SERVICE_ID: ${{ steps.target.outputs.service_id }}
+          OWNER_ID: ${{ steps.target.outputs.owner_id }}
+        shell: bash
+        run: |
+          set -euo pipefail
+          start="$(date -u -d '45 minutes ago' +%Y-%m-%dT%H:%M:%SZ)"
+          end="$(date -u +%Y-%m-%dT%H:%M:%SZ)"
+          tmp="$(mktemp)"
+          code="$(curl -sS --get -o "$tmp" -w '%{http_code}' \
+            'https://api.render.com/v1/logs' \
+            --data-urlencode "ownerId=${OWNER_ID}" \
+            --data-urlencode "resource=${SERVICE_ID}" \
+            --data-urlencode 'type=app' \
+            --data-urlencode 'direction=backward' \
+            --data-urlencode 'limit=100' \
+            --data-urlencode "startTime=${start}" \
+            --data-urlencode "endTime=${end}" \
+            -H 'Accept: application/json' \
+            -H "Authorization: Bearer ${RENDER_API_KEY}")"
+          [[ "$code" == 200 ]] || { echo "Render logs lookup failed HTTP $code" >&2; rm -f "$tmp"; exit 1; }
+
+          # Print only likely startup/configuration errors. Do not print request bodies or env values.
+          jq -r '
+            (.logs // .items // .)[]?
+            | (.message // .text // .log // "") as $m
+            | select(($m|type)=="string")
+            | select($m | test("error|must |missing|invalid|failed|exception|uncaught|configuration"; "i"))
+            | [(.timestamp // .time // .createdAt // ""), (.level // ""), $m]
+            | @tsv
+          ' "$tmp" \
+          | sed -E 's/[A-Fa-f0-9]{32,}/[REDACTED_HEX]/g; s/[A-Za-z0-9_\-]{48,}/[REDACTED_TOKEN]/g' \
+          | head -80
+
+          rm -f "$tmp"
