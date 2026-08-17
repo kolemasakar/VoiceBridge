@@ -57,6 +57,7 @@ export interface MediaTranscriptJobView {
   language_confidence: number | null;
   provider: "assemblyai";
   provider_model: string;
+  provider_data_deleted: boolean | null;
   media: {
     platform: "youtube";
     title: string | null;
@@ -304,6 +305,7 @@ function publicJob(job: MediaTranscriptJob): MediaTranscriptJobView {
     language_confidence: job.language_confidence,
     provider: job.provider,
     provider_model: job.provider_model,
+    provider_data_deleted: job.provider_data_deleted,
     media: { ...job.media },
     transcript_characters: job.transcript_characters,
     segment_count: job.segment_count,
@@ -594,13 +596,19 @@ class AssemblyAiAsyncTranscriber {
       true
     );
   }
+
+  async delete(transcriptId: string): Promise<void> {
+    await this.request(`/v2/transcript/${transcriptId}`, {
+      method: "DELETE"
+    });
+  }
 }
 
 export interface MediaTranscriptServiceOptions {
   assemblyAiApiKey: string | null;
-  maxDurationSeconds?: number;
-  jobTtlSeconds?: number;
-  maxConcurrentJobs?: number;
+  maxDurationSeconds?: number | undefined;
+  jobTtlSeconds?: number | undefined;
+  maxConcurrentJobs?: number | undefined;
 }
 
 type NormalizedMediaTranscriptServiceOptions = {
@@ -676,6 +684,7 @@ export class MediaTranscriptService {
       language_confidence: null,
       provider: "assemblyai",
       provider_model: ASSEMBLYAI_ASYNC_MODEL,
+      provider_data_deleted: null,
       media: {
         platform: "youtube",
         title: null,
@@ -728,6 +737,8 @@ export class MediaTranscriptService {
 
   private async process(job: MediaTranscriptJob): Promise<void> {
     let temporaryDirectory: string | null = null;
+    let transcriber: AssemblyAiAsyncTranscriber | null = null;
+    let providerTranscriptId: string | null = null;
     try {
       job.status = "FETCHING_MEDIA";
       this.touch(job);
@@ -756,15 +767,18 @@ export class MediaTranscriptService {
       job.status = "UPLOADING";
       this.touch(job);
 
-      const transcriber = new AssemblyAiAsyncTranscriber(
-        this.options.assemblyAiApiKey
+      transcriber = new AssemblyAiAsyncTranscriber(
+        this.options.assemblyAiApiKey as string
       );
       const uploadUrl = await transcriber.upload(downloaded.path);
-      const transcriptId = await transcriber.submit(uploadUrl, job.language_hint);
+      providerTranscriptId = await transcriber.submit(
+        uploadUrl,
+        job.language_hint
+      );
       job.status = "TRANSCRIBING";
       this.touch(job);
 
-      const result = await transcriber.waitForCompletion(transcriptId);
+      const result = await transcriber.waitForCompletion(providerTranscriptId);
       const transcriptText = nullableString(result.text) || "";
       job.transcript_text = transcriptText;
       job.detected_language = nullableString(result.language_code);
@@ -772,6 +786,14 @@ export class MediaTranscriptService {
       job.segments = chunkTranscriptWords(result.words, transcriptText);
       job.transcript_characters = transcriptText.length;
       job.segment_count = job.segments.length;
+
+      try {
+        await transcriber.delete(providerTranscriptId);
+        job.provider_data_deleted = true;
+      } catch {
+        job.provider_data_deleted = false;
+      }
+
       job.status = "COMPLETED";
       job.error = null;
       this.touch(job);
@@ -792,6 +814,20 @@ export class MediaTranscriptService {
       };
       this.touch(job);
     } finally {
+      if (
+        job.status === "FAILED" &&
+        transcriber &&
+        providerTranscriptId &&
+        job.provider_data_deleted !== true
+      ) {
+        try {
+          await transcriber.delete(providerTranscriptId);
+          job.provider_data_deleted = true;
+        } catch {
+          job.provider_data_deleted = false;
+        }
+        this.touch(job);
+      }
       this.activeJobs = Math.max(0, this.activeJobs - 1);
       if (temporaryDirectory) {
         await rm(temporaryDirectory, { recursive: true, force: true });
