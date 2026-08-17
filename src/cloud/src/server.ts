@@ -3,6 +3,11 @@ import type { AddressInfo } from "node:net";
 import { authenticate } from "./auth.js";
 import type { AppConfig } from "./config.js";
 import { createRequestContext, type RequestContext } from "./identifiers.js";
+import {
+  MediaTranscriptError,
+  MediaTranscriptService,
+  parseMediaTranscriptInput
+} from "./media_transcript.js";
 import { FixedWindowRateLimiter } from "./rate_limit.js";
 import {
   InvalidSessionStateError,
@@ -26,12 +31,17 @@ import {
 } from "./tts_provider.js";
 
 const SERVICE_NAME = "voicebridge-cloud";
-const SERVICE_VERSION = "0.6.0";
+const SERVICE_VERSION = "0.7.0-beta.1";
 const SESSION_PATH = /^\/api\/v1\/sessions\/([A-Za-z0-9-]+)$/;
 const COMMAND_PATH =
   /^\/api\/v1\/sessions\/([A-Za-z0-9-]+)\/(start|pause|resume|stop)$/;
 const STREAM_TICKET_PATH =
   /^\/api\/v1\/sessions\/([A-Za-z0-9-]+)\/stream-ticket$/;
+const MEDIA_TRANSCRIPT_ROOT = "/api/v1/media/transcriptions";
+const MEDIA_TRANSCRIPT_PATH =
+  /^\/api\/v1\/media\/transcriptions\/(KRCM_[A-Za-z0-9-]+)$/;
+const MEDIA_TRANSCRIPT_SEGMENTS_PATH =
+  /^\/api\/v1\/media\/transcriptions\/(KRCM_[A-Za-z0-9-]+)\/segments$/;
 
 interface ApiError {
   error: {
@@ -214,6 +224,12 @@ export function createVoiceBridgeServer(
     azureSpeechKey: config.azureSpeechKey ?? null,
     azureSpeechRegion: config.azureSpeechRegion ?? "eastus",
     azureVoice: config.azureTtsVoice ?? "uk-UA-OstapNeural"
+  }),
+  mediaTranscriptService = new MediaTranscriptService({
+    assemblyAiApiKey: config.assemblyAiApiKey,
+    maxDurationSeconds: config.mediaMaxDurationSeconds,
+    jobTtlSeconds: config.mediaJobTtlSeconds,
+    maxConcurrentJobs: config.mediaMaxConcurrentJobs
   })
 ) {
   const rateLimiter = new FixedWindowRateLimiter(
@@ -233,7 +249,8 @@ export function createVoiceBridgeServer(
   const server = createServer(async (request, response) => {
     const context = createRequestContext(request);
     const method = request.method || "GET";
-    const path = new URL(request.url || "/", "http://voicebridge.local").pathname;
+    const requestUrl = new URL(request.url || "/", "http://voicebridge.local");
+    const path = requestUrl.pathname;
 
     if (method === "OPTIONS") {
       setCommonHeaders(response, context, config.corsAllowedOrigin);
@@ -270,6 +287,16 @@ export function createVoiceBridgeServer(
               provider: sttProvider.name,
               configured: sttProvider.configured
             },
+            media_transcript: {
+              provider: mediaTranscriptService.provider,
+              model: mediaTranscriptService.providerModel,
+              configured: Boolean(
+                config.mediaActionToken && mediaTranscriptService.configured
+              ),
+              platforms: ["youtube"],
+              language_hints: ["auto", "uk", "ru", "en"],
+              max_duration_seconds: config.mediaMaxDurationSeconds
+            },
             translation: {
               provider: translationProvider.name,
               configured: translationProvider.configured,
@@ -290,6 +317,182 @@ export function createVoiceBridgeServer(
           correlation_id: context.correlationId,
           timestamp: new Date().toISOString()
         },
+        context,
+        config.corsAllowedOrigin
+      );
+      return;
+    }
+
+    if (path === MEDIA_TRANSCRIPT_ROOT || path.startsWith(`${MEDIA_TRANSCRIPT_ROOT}/`)) {
+      if (!config.mediaActionToken) {
+        sendError(
+          response,
+          503,
+          "MEDIA_TRANSCRIPT_NOT_CONFIGURED",
+          "Media transcription is not configured.",
+          "MEDIA",
+          true,
+          context,
+          config.corsAllowedOrigin
+        );
+        return;
+      }
+
+      const authentication = authenticate(request, config.mediaActionToken);
+      if (!authentication.ok) {
+        sendError(
+          response,
+          401,
+          authentication.code,
+          authentication.code === "AUTHENTICATION_REQUIRED"
+            ? "A bearer token is required."
+            : "The bearer token is invalid or revoked.",
+          "AUTH",
+          false,
+          context,
+          config.corsAllowedOrigin
+        );
+        return;
+      }
+
+      if (method === "POST" && path === MEDIA_TRANSCRIPT_ROOT) {
+        try {
+          const body = await readJsonBody(request, config.maxRequestBodyBytes);
+          const input = parseMediaTranscriptInput(body);
+          if (!input) {
+            sendError(
+              response,
+              400,
+              "INVALID_REQUEST",
+              "The media transcription request is not valid.",
+              "VALIDATION",
+              false,
+              context,
+              config.corsAllowedOrigin
+            );
+            return;
+          }
+          const started = mediaTranscriptService.start(input);
+          sendJson(
+            response,
+            202,
+            {
+              request_id: context.requestId,
+              reused: started.reused,
+              ...started.job
+            },
+            context,
+            config.corsAllowedOrigin
+          );
+        } catch (error) {
+          if (error instanceof MediaTranscriptError) {
+            sendError(
+              response,
+              error.httpStatus,
+              error.code,
+              error.message,
+              "MEDIA",
+              error.retryable,
+              context,
+              config.corsAllowedOrigin
+            );
+            return;
+          }
+          const tooLarge =
+            error instanceof Error && error.message === "REQUEST_BODY_TOO_LARGE";
+          sendError(
+            response,
+            tooLarge ? 413 : 400,
+            tooLarge ? "REQUEST_BODY_TOO_LARGE" : "INVALID_REQUEST",
+            tooLarge
+              ? "The request body is too large."
+              : "The request body is not valid JSON.",
+            "VALIDATION",
+            false,
+            context,
+            config.corsAllowedOrigin
+          );
+        }
+        return;
+      }
+
+      const segmentsMatch = MEDIA_TRANSCRIPT_SEGMENTS_PATH.exec(path);
+      if (method === "GET" && segmentsMatch?.[1]) {
+        const cursor = Number(requestUrl.searchParams.get("cursor") || "0");
+        const limit = Number(requestUrl.searchParams.get("limit") || "20");
+        if (
+          !Number.isInteger(cursor) || cursor < 0 || cursor > 100000 ||
+          !Number.isInteger(limit) || limit < 1 || limit > 50
+        ) {
+          sendError(
+            response,
+            400,
+            "INVALID_PAGINATION",
+            "cursor must be a non-negative integer and limit must be 1..50.",
+            "VALIDATION",
+            false,
+            context,
+            config.corsAllowedOrigin
+          );
+          return;
+        }
+        const page = mediaTranscriptService.page(segmentsMatch[1], cursor, limit);
+        if (!page) {
+          sendError(
+            response,
+            404,
+            "MEDIA_TRANSCRIPT_NOT_FOUND",
+            "The media transcription job was not found or expired.",
+            "MEDIA",
+            false,
+            context,
+            config.corsAllowedOrigin
+          );
+          return;
+        }
+        sendJson(
+          response,
+          200,
+          { request_id: context.requestId, ...page },
+          context,
+          config.corsAllowedOrigin
+        );
+        return;
+      }
+
+      const mediaMatch = MEDIA_TRANSCRIPT_PATH.exec(path);
+      if (method === "GET" && mediaMatch?.[1]) {
+        const job = mediaTranscriptService.get(mediaMatch[1]);
+        if (!job) {
+          sendError(
+            response,
+            404,
+            "MEDIA_TRANSCRIPT_NOT_FOUND",
+            "The media transcription job was not found or expired.",
+            "MEDIA",
+            false,
+            context,
+            config.corsAllowedOrigin
+          );
+          return;
+        }
+        sendJson(
+          response,
+          200,
+          { request_id: context.requestId, ...job },
+          context,
+          config.corsAllowedOrigin
+        );
+        return;
+      }
+
+      sendError(
+        response,
+        404,
+        "NOT_FOUND",
+        "The requested media endpoint was not found.",
+        "ROUTING",
+        false,
         context,
         config.corsAllowedOrigin
       );
