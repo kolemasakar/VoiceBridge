@@ -31,7 +31,7 @@ import {
 } from "./tts_provider.js";
 
 const SERVICE_NAME = "voicebridge-cloud";
-const SERVICE_VERSION = "0.7.0-beta.1";
+const SERVICE_VERSION = "0.6.0";
 const SESSION_PATH = /^\/api\/v1\/sessions\/([A-Za-z0-9-]+)$/;
 const COMMAND_PATH =
   /^\/api\/v1\/sessions\/([A-Za-z0-9-]+)\/(start|pause|resume|stop)$/;
@@ -295,7 +295,7 @@ export function createVoiceBridgeServer(
               ),
               platforms: ["youtube"],
               language_hints: ["auto", "uk", "ru", "en"],
-              max_duration_seconds: config.mediaMaxDurationSeconds
+              max_duration_seconds: config.mediaMaxDurationSeconds ?? 7200
             },
             translation: {
               provider: translationProvider.name,
