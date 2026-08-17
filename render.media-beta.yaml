@@ -1,0 +1,35 @@
+services:
+  - type: web
+    name: voicebridge-krc-media-beta-kolemasakar
+    runtime: docker
+    plan: free
+    region: frankfurt
+    repo: https://github.com/kolemasakar/VoiceBridge
+    branch: agent/krc-media-transcript
+    autoDeployTrigger: checksPass
+    dockerfilePath: src/cloud/Dockerfile
+    dockerContext: src/cloud
+    healthCheckPath: /api/v1/health
+    envVars:
+      - key: TEST_ACCESS_TOKEN
+        generateValue: true
+      - key: KRC_MEDIA_ACTION_TOKEN
+        sync: false
+      - key: KRC_MEDIA_BETA_CODES
+        sync: false
+      - key: ASSEMBLYAI_API_KEY
+        sync: false
+      - key: MEDIA_MAX_DURATION_SECONDS
+        value: "3600"
+      - key: MEDIA_MAX_CONCURRENT_JOBS
+        value: "1"
+      - key: MEDIA_DAILY_STT_SECONDS
+        value: "7200"
+      - key: MEDIA_JOB_TTL_SECONDS
+        value: "3600"
+      - key: RATE_LIMIT_REQUESTS_PER_MINUTE
+        value: "120"
+      - key: MAX_REQUEST_BODY_BYTES
+        value: "32768"
+      - key: CORS_ALLOWED_ORIGIN
+        value: "*"
