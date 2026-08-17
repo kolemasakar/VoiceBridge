@@ -1,3 +1,5 @@
+import { parseMediaBetaCodes } from "./media_beta.js";
+
 export type TranslationProviderName = "gemini" | "azure";
 export type TranslationFallbackProviderName = "gemini" | "none";
 export type TtsProviderName = "gemini" | "azure";
@@ -7,6 +9,8 @@ export interface AppConfig {
   port: number;
   testAccessToken: string;
   mediaActionToken?: string | null;
+  mediaBetaCodes?: string[];
+  mediaDailySttSeconds?: number;
   assemblyAiApiKey: string | null;
   geminiApiKey: string | null;
   geminiTranslationModel: string;
@@ -115,6 +119,14 @@ export function loadConfig(
     port: parseInteger(environment.PORT, 8080, "PORT", 1, 65535),
     testAccessToken,
     mediaActionToken,
+    mediaBetaCodes: parseMediaBetaCodes(environment.KRC_MEDIA_BETA_CODES),
+    mediaDailySttSeconds: parseInteger(
+      environment.MEDIA_DAILY_STT_SECONDS,
+      7200,
+      "MEDIA_DAILY_STT_SECONDS",
+      60,
+      86400
+    ),
     assemblyAiApiKey: environment.ASSEMBLYAI_API_KEY || null,
     geminiApiKey: environment.GEMINI_API_KEY || null,
     geminiTranslationModel: parseIdentifier(
@@ -189,7 +201,7 @@ export function loadConfig(
     ),
     mediaMaxDurationSeconds: parseInteger(
       environment.MEDIA_MAX_DURATION_SECONDS,
-      7200,
+      3600,
       "MEDIA_MAX_DURATION_SECONDS",
       60,
       21600
@@ -203,7 +215,7 @@ export function loadConfig(
     ),
     mediaMaxConcurrentJobs: parseInteger(
       environment.MEDIA_MAX_CONCURRENT_JOBS,
-      2,
+      1,
       "MEDIA_MAX_CONCURRENT_JOBS",
       1,
       20
