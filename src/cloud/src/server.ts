@@ -3,11 +3,12 @@ import type { AddressInfo } from "node:net";
 import { authenticate } from "./auth.js";
 import type { AppConfig } from "./config.js";
 import { createRequestContext, type RequestContext } from "./identifiers.js";
+import { MediaBetaGate } from "./media_beta.js";
 import {
-  MediaTranscriptError,
-  MediaTranscriptService,
-  parseMediaTranscriptInput
-} from "./media_transcript.js";
+  MediaBetaTranscriptService,
+  parseMediaBetaTranscriptInput
+} from "./media_beta_service.js";
+import { MediaTranscriptError } from "./media_transcript.js";
 import { FixedWindowRateLimiter } from "./rate_limit.js";
 import {
   InvalidSessionStateError,
@@ -39,9 +40,9 @@ const STREAM_TICKET_PATH =
   /^\/api\/v1\/sessions\/([A-Za-z0-9-]+)\/stream-ticket$/;
 const MEDIA_TRANSCRIPT_ROOT = "/api/v1/media/transcriptions";
 const MEDIA_TRANSCRIPT_PATH =
-  /^\/api\/v1\/media\/transcriptions\/(KRCM_[A-Za-z0-9-]+)$/;
+  /^\/api\/v1\/media\/transcriptions\/(KRCB_[A-Za-z0-9-]+)$/;
 const MEDIA_TRANSCRIPT_SEGMENTS_PATH =
-  /^\/api\/v1\/media\/transcriptions\/(KRCM_[A-Za-z0-9-]+)\/segments$/;
+  /^\/api\/v1\/media\/transcriptions\/(KRCB_[A-Za-z0-9-]+)\/segments$/;
 
 interface ApiError {
   error: {
@@ -225,11 +226,15 @@ export function createVoiceBridgeServer(
     azureSpeechRegion: config.azureSpeechRegion ?? "eastus",
     azureVoice: config.azureTtsVoice ?? "uk-UA-OstapNeural"
   }),
-  mediaTranscriptService = new MediaTranscriptService({
+  mediaTranscriptService = new MediaBetaTranscriptService({
     assemblyAiApiKey: config.assemblyAiApiKey,
-    maxDurationSeconds: config.mediaMaxDurationSeconds,
-    jobTtlSeconds: config.mediaJobTtlSeconds,
-    maxConcurrentJobs: config.mediaMaxConcurrentJobs
+    betaGate: new MediaBetaGate(
+      config.mediaBetaCodes ?? [],
+      config.mediaDailySttSeconds ?? 7200
+    ),
+    maxDurationSeconds: config.mediaMaxDurationSeconds ?? 3600,
+    jobTtlSeconds: config.mediaJobTtlSeconds ?? 3600,
+    maxConcurrentJobs: config.mediaMaxConcurrentJobs ?? 1
   })
 ) {
   const rateLimiter = new FixedWindowRateLimiter(
@@ -288,14 +293,17 @@ export function createVoiceBridgeServer(
               configured: sttProvider.configured
             },
             media_transcript: {
-              provider: mediaTranscriptService.provider,
-              model: mediaTranscriptService.providerModel,
+              mode: mediaTranscriptService.mode,
+              providers: mediaTranscriptService.providers,
               configured: Boolean(
                 config.mediaActionToken && mediaTranscriptService.configured
               ),
               platforms: ["youtube"],
               language_hints: ["auto", "uk", "ru", "en"],
-              max_duration_seconds: config.mediaMaxDurationSeconds ?? 7200
+              subtitle_first: true,
+              max_duration_seconds: config.mediaMaxDurationSeconds ?? 3600,
+              max_concurrent_jobs: config.mediaMaxConcurrentJobs ?? 1,
+              daily_stt_seconds: config.mediaDailySttSeconds ?? 7200
             },
             translation: {
               provider: translationProvider.name,
@@ -358,13 +366,13 @@ export function createVoiceBridgeServer(
       if (method === "POST" && path === MEDIA_TRANSCRIPT_ROOT) {
         try {
           const body = await readJsonBody(request, config.maxRequestBodyBytes);
-          const input = parseMediaTranscriptInput(body);
+          const input = parseMediaBetaTranscriptInput(body);
           if (!input) {
             sendError(
               response,
               400,
               "INVALID_REQUEST",
-              "The media transcription request is not valid.",
+              "The closed media beta request is not valid.",
               "VALIDATION",
               false,
               context,
