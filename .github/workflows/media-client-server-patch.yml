@@ -1,0 +1,64 @@
+name: MEDIA CLIENT Server Integration Patch
+
+on:
+  push:
+    branches:
+      - agent/krc-media-transcript
+    paths:
+      - .github/workflows/media-client-server-patch.yml
+
+permissions:
+  contents: write
+
+jobs:
+  patch:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: agent/krc-media-transcript
+          fetch-depth: 0
+
+      - name: Integrate client-assisted routes
+        shell: bash
+        run: |
+          set -euo pipefail
+          python - <<'PY'
+          from pathlib import Path
+
+          path = Path('src/cloud/src/server.ts')
+          text = path.read_text()
+
+          old = 'import { createRequestContext, type RequestContext } from "./identifiers.js";\nimport { MediaBetaGate } from "./media_beta.js";'
+          new = 'import { createRequestContext, type RequestContext } from "./identifiers.js";\nimport { createMediaClientHttpHandler } from "./media_client_http.js";\nimport { MediaBetaGate } from "./media_beta.js";'
+          assert old in text
+          text = text.replace(old, new, 1)
+
+          old = '    "authorization, content-type, x-request-id, x-correlation-id"\n'
+          new = '    "authorization, content-type, x-request-id, x-correlation-id, x-media-beta-code, x-media-source-url"\n'
+          assert old in text
+          text = text.replace(old, new, 1)
+
+          old = '  const streamTickets = new StreamTicketStore();\n  const selectedTtsVoice = ttsProvider.name === "azure"'
+          new = '  const streamTickets = new StreamTicketStore();\n  const mediaClientHttp = createMediaClientHttpHandler(config);\n  const selectedTtsVoice = ttsProvider.name === "azure"'
+          assert old in text
+          text = text.replace(old, new, 1)
+
+          old = '''            media_transcript: {\n              mode: mediaTranscriptService.mode,\n              providers: mediaTranscriptService.providers,\n              configured: Boolean(\n                config.mediaActionToken && mediaTranscriptService.configured\n              ),\n              platforms: ["youtube"],\n              language_hints: ["auto", "uk", "ru", "en"],\n              subtitle_first: true,\n              max_duration_seconds: config.mediaMaxDurationSeconds ?? 3600,\n              max_concurrent_jobs: config.mediaMaxConcurrentJobs ?? 1,\n              daily_stt_seconds: config.mediaDailySttSeconds ?? 7200\n            },\n            translation: {'''
+          new = '''            media_transcript: {\n              mode: mediaTranscriptService.mode,\n              providers: mediaTranscriptService.providers,\n              configured: Boolean(\n                config.mediaActionToken && mediaTranscriptService.configured\n              ),\n              platforms: ["youtube"],\n              language_hints: ["auto", "uk", "ru", "en"],\n              subtitle_first: true,\n              max_duration_seconds: config.mediaMaxDurationSeconds ?? 3600,\n              max_concurrent_jobs: config.mediaMaxConcurrentJobs ?? 1,\n              daily_stt_seconds: config.mediaDailySttSeconds ?? 7200\n            },\n            media_client_ingest: mediaClientHttp.capability,\n            translation: {'''
+          assert old in text
+          text = text.replace(old, new, 1)
+
+          old = '''      return;\n    }\n\n    if (path === MEDIA_TRANSCRIPT_ROOT || path.startsWith(`${MEDIA_TRANSCRIPT_ROOT}/`)) {'''
+          new = '''      return;\n    }\n\n    if (await mediaClientHttp.handle(request, response, context)) {\n      return;\n    }\n\n    if (path === MEDIA_TRANSCRIPT_ROOT || path.startsWith(`${MEDIA_TRANSCRIPT_ROOT}/`)) {'''
+          assert old in text
+          text = text.replace(old, new, 1)
+
+          path.write_text(text)
+          PY
+
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git add src/cloud/src/server.ts
+          git commit -m "Integrate client-assisted media routes"
+          git push origin HEAD:agent/krc-media-transcript
