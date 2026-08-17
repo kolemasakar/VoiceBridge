@@ -1,5 +1,6 @@
 name: MEDIA BETA PO Provider Diagnostic
 
+# One-shot beta diagnostic. No secrets required.
 on:
   push:
     branches:
