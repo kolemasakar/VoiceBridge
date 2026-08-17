@@ -1,0 +1,25 @@
+{
+  "manifest_version": 3,
+  "name": "KRC MEDIA BETA Helper",
+  "description": "Closed-beta helper that captures audio from the active YouTube tab and sends it to the isolated K-Research & Critic media backend.",
+  "version": "0.1.0",
+  "minimum_chrome_version": "116",
+  "permissions": [
+    "activeTab",
+    "offscreen",
+    "storage",
+    "tabCapture"
+  ],
+  "host_permissions": [
+    "https://voicebridge-krc-media-beta-kolemasakar.onrender.com/*",
+    "http://127.0.0.1/*",
+    "http://localhost/*"
+  ],
+  "background": {
+    "service_worker": "service_worker.js"
+  },
+  "action": {
+    "default_title": "KRC MEDIA BETA",
+    "default_popup": "popup.html"
+  }
+}
