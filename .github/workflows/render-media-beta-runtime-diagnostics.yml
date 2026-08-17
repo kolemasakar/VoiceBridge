@@ -39,39 +39,39 @@ jobs:
           echo "owner_id=$owner" >> "$GITHUB_OUTPUT"
           echo "Resolved isolated beta service."
 
-      - name: Read recent beta runtime errors
+      - name: Read recent beta runtime log tail
         env:
           SERVICE_ID: ${{ steps.target.outputs.service_id }}
           OWNER_ID: ${{ steps.target.outputs.owner_id }}
         shell: bash
         run: |
           set -euo pipefail
-          start="$(date -u -d '45 minutes ago' +%Y-%m-%dT%H:%M:%SZ)"
+          start="$(date -u -d '60 minutes ago' +%Y-%m-%dT%H:%M:%SZ)"
           end="$(date -u +%Y-%m-%dT%H:%M:%SZ)"
           tmp="$(mktemp)"
           code="$(curl -sS --get -o "$tmp" -w '%{http_code}' \
             'https://api.render.com/v1/logs' \
             --data-urlencode "ownerId=${OWNER_ID}" \
             --data-urlencode "resource=${SERVICE_ID}" \
-            --data-urlencode 'type=app' \
             --data-urlencode 'direction=backward' \
-            --data-urlencode 'limit=100' \
+            --data-urlencode 'limit=200' \
             --data-urlencode "startTime=${start}" \
             --data-urlencode "endTime=${end}" \
             -H 'Accept: application/json' \
             -H "Authorization: Bearer ${RENDER_API_KEY}")"
           [[ "$code" == 200 ]] || { echo "Render logs lookup failed HTTP $code" >&2; rm -f "$tmp"; exit 1; }
 
-          # Print only likely startup/configuration errors. Do not print request bodies or env values.
           jq -r '
             (.logs // .items // .)[]?
             | (.message // .text // .log // "") as $m
-            | select(($m|type)=="string")
-            | select($m | test("error|must |missing|invalid|failed|exception|uncaught|configuration"; "i"))
+            | select(($m|type)=="string" and ($m|length)>0)
             | [(.timestamp // .time // .createdAt // ""), (.level // ""), $m]
             | @tsv
           ' "$tmp" \
-          | sed -E 's/[A-Fa-f0-9]{32,}/[REDACTED_HEX]/g; s/[A-Za-z0-9_\-]{48,}/[REDACTED_TOKEN]/g' \
-          | head -80
+          | sed -E \
+              -e 's/[A-Fa-f0-9]{32,}/[REDACTED_HEX]/g' \
+              -e 's/[A-Za-z0-9_\-]{40,}/[REDACTED_TOKEN]/g' \
+              -e 's/(ASSEMBLYAI_API_KEY|KRC_MEDIA_ACTION_TOKEN|KRC_MEDIA_BETA_CODES)=([^[:space:]]+)/\1=[REDACTED]/g' \
+          | head -120
 
           rm -f "$tmp"
