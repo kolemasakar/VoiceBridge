@@ -6,7 +6,7 @@ export interface AppConfig {
   host: string;
   port: number;
   testAccessToken: string;
-  mediaActionToken: string | null;
+  mediaActionToken?: string | null;
   assemblyAiApiKey: string | null;
   geminiApiKey: string | null;
   geminiTranslationModel: string;
@@ -24,9 +24,9 @@ export interface AppConfig {
   corsAllowedOrigin: string;
   maxRequestBodyBytes: number;
   rateLimitRequestsPerMinute: number;
-  mediaMaxDurationSeconds: number;
-  mediaJobTtlSeconds: number;
-  mediaMaxConcurrentJobs: number;
+  mediaMaxDurationSeconds?: number;
+  mediaJobTtlSeconds?: number;
+  mediaMaxConcurrentJobs?: number;
 }
 
 function parseInteger(
