@@ -16,6 +16,7 @@ jobs:
     env:
       RENDER_API_KEY: ${{ secrets.RENDER_API_KEY }}
       SERVICE_NAME: voicebridge-krc-media-beta-kolemasakar
+      RENDER_CLI_VERSION: v2.22.0
     steps:
       - name: Resolve beta service and workspace
         id: target
@@ -37,41 +38,40 @@ jobs:
           [[ -n "$id" && -n "$owner" ]] || { echo "Could not resolve beta service/workspace" >&2; exit 1; }
           echo "service_id=$id" >> "$GITHUB_OUTPUT"
           echo "owner_id=$owner" >> "$GITHUB_OUTPUT"
-          echo "Resolved isolated beta service."
 
-      - name: Read recent beta runtime log tail
+      - name: Install pinned Render CLI
+        shell: bash
+        run: |
+          set -euo pipefail
+          v="${RENDER_CLI_VERSION#v}"
+          curl -sSfL "https://github.com/render-oss/cli/releases/download/${RENDER_CLI_VERSION}/cli_${v}_linux_amd64.zip" -o /tmp/render.zip
+          echo '6cdcd11897b7bd7e673317e6f4aaf041b654d818444f3b1efec7240a835f79ec  /tmp/render.zip' | sha256sum -c -
+          unzip -q /tmp/render.zip -d /tmp/render-cli
+          bin="$(find /tmp/render-cli -type f -perm -u+x | head -1)"
+          sudo install -m 0755 "$bin" /usr/local/bin/render
+
+      - name: Read sanitized recent runtime logs
         env:
           SERVICE_ID: ${{ steps.target.outputs.service_id }}
           OWNER_ID: ${{ steps.target.outputs.owner_id }}
         shell: bash
         run: |
           set -euo pipefail
+          render workspace set "$OWNER_ID" -o text >/dev/null
           start="$(date -u -d '60 minutes ago' +%Y-%m-%dT%H:%M:%SZ)"
           end="$(date -u +%Y-%m-%dT%H:%M:%SZ)"
-          tmp="$(mktemp)"
-          code="$(curl -sS --get -o "$tmp" -w '%{http_code}' \
-            'https://api.render.com/v1/logs' \
-            --data-urlencode "ownerId=${OWNER_ID}" \
-            --data-urlencode "resource=${SERVICE_ID}" \
-            --data-urlencode 'direction=backward' \
-            --data-urlencode 'limit=200' \
-            --data-urlencode "startTime=${start}" \
-            --data-urlencode "endTime=${end}" \
-            -H 'Accept: application/json' \
-            -H "Authorization: Bearer ${RENDER_API_KEY}")"
-          [[ "$code" == 200 ]] || { echo "Render logs lookup failed HTTP $code" >&2; rm -f "$tmp"; exit 1; }
-
+          render logs --resources "$SERVICE_ID" --start "$start" --end "$end" --direction backward --limit 200 --output json > /tmp/render-logs.json
           jq -r '
-            (.logs // .items // .)[]?
-            | (.message // .text // .log // "") as $m
+            if type=="array" then .[]
+            elif (.logs? | type)=="array" then .logs[]
+            else empty end
+            | (.message // .text // .log // .msg // "") as $m
             | select(($m|type)=="string" and ($m|length)>0)
             | [(.timestamp // .time // .createdAt // ""), (.level // ""), $m]
             | @tsv
-          ' "$tmp" \
+          ' /tmp/render-logs.json \
           | sed -E \
               -e 's/[A-Fa-f0-9]{32,}/[REDACTED_HEX]/g' \
               -e 's/[A-Za-z0-9_\-]{40,}/[REDACTED_TOKEN]/g' \
               -e 's/(ASSEMBLYAI_API_KEY|KRC_MEDIA_ACTION_TOKEN|KRC_MEDIA_BETA_CODES)=([^[:space:]]+)/\1=[REDACTED]/g' \
           | head -120
-
-          rm -f "$tmp"
