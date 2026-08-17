@@ -603,8 +603,41 @@ export class MediaClientIngestService {
       directory = await mkdtemp(join(tmpdir(), "voicebridge-krc-client-"));
       const sourcePath = join(directory, `client${extensionForContentType(contentType)}`);
       await writeFile(sourcePath, audio);
-      const durationSeconds = await probeDurationSeconds(sourcePath);
-      if (durationSeconds > this.options.maxDurationSeconds) {
+
+      // MediaRecorder WebM/Opus blobs may omit a container-level duration.
+      // Normalize first with a hard processing cap, then probe the normalized
+      // MP3 where duration metadata is reliable. Reserve quota only after
+      // duration validation succeeds.
+      const sttPath = join(directory, "stt.mp3");
+      await runCommand("ffmpeg", [
+        "-y",
+        "-loglevel",
+        "error",
+        "-i",
+        sourcePath,
+        "-t",
+        String(this.options.maxDurationSeconds + 1),
+        "-vn",
+        "-ac",
+        "1",
+        "-ar",
+        "16000",
+        "-b:a",
+        "32k",
+        sttPath
+      ]);
+      const sttInfo = await stat(sttPath);
+      if (!sttInfo.isFile() || sttInfo.size <= 0 || sttInfo.size > MAX_STT_MEDIA_BYTES) {
+        throw new MediaTranscriptError(
+          "MEDIA_FILE_TOO_LARGE",
+          "The STT audio exceeds the closed beta upload limit.",
+          413,
+          false
+        );
+      }
+
+      const durationSeconds = await probeDurationSeconds(sttPath);
+      if (durationSeconds > this.options.maxDurationSeconds + 0.5) {
         throw new MediaTranscriptError(
           "MEDIA_DURATION_LIMIT",
           `Closed beta videos are limited to ${this.options.maxDurationSeconds} seconds.`,
@@ -625,32 +658,6 @@ export class MediaClientIngestService {
         );
       }
       job.stt_seconds_charged = Math.ceil(durationSeconds);
-
-      const sttPath = join(directory, "stt.mp3");
-      await runCommand("ffmpeg", [
-        "-y",
-        "-loglevel",
-        "error",
-        "-i",
-        sourcePath,
-        "-vn",
-        "-ac",
-        "1",
-        "-ar",
-        "16000",
-        "-b:a",
-        "32k",
-        sttPath
-      ]);
-      const sttInfo = await stat(sttPath);
-      if (!sttInfo.isFile() || sttInfo.size <= 0 || sttInfo.size > MAX_STT_MEDIA_BYTES) {
-        throw new MediaTranscriptError(
-          "MEDIA_FILE_TOO_LARGE",
-          "The STT audio exceeds the closed beta upload limit.",
-          413,
-          false
-        );
-      }
 
       if (!this.options.assemblyAiApiKey) {
         throw new MediaTranscriptError(
