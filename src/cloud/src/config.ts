@@ -6,6 +6,7 @@ export interface AppConfig {
   host: string;
   port: number;
   testAccessToken: string;
+  mediaActionToken: string | null;
   assemblyAiApiKey: string | null;
   geminiApiKey: string | null;
   geminiTranslationModel: string;
@@ -23,6 +24,9 @@ export interface AppConfig {
   corsAllowedOrigin: string;
   maxRequestBodyBytes: number;
   rateLimitRequestsPerMinute: number;
+  mediaMaxDurationSeconds: number;
+  mediaJobTtlSeconds: number;
+  mediaMaxConcurrentJobs: number;
 }
 
 function parseInteger(
@@ -99,10 +103,18 @@ export function loadConfig(
     );
   }
 
+  const mediaActionToken = environment.KRC_MEDIA_ACTION_TOKEN || null;
+  if (mediaActionToken !== null && mediaActionToken.length < 24) {
+    throw new Error(
+      "KRC_MEDIA_ACTION_TOKEN must contain at least 24 characters when configured."
+    );
+  }
+
   return {
     host: environment.HOST || "0.0.0.0",
     port: parseInteger(environment.PORT, 8080, "PORT", 1, 65535),
     testAccessToken,
+    mediaActionToken,
     assemblyAiApiKey: environment.ASSEMBLYAI_API_KEY || null,
     geminiApiKey: environment.GEMINI_API_KEY || null,
     geminiTranslationModel: parseIdentifier(
@@ -174,6 +186,27 @@ export function loadConfig(
       "RATE_LIMIT_REQUESTS_PER_MINUTE",
       1,
       100000
+    ),
+    mediaMaxDurationSeconds: parseInteger(
+      environment.MEDIA_MAX_DURATION_SECONDS,
+      7200,
+      "MEDIA_MAX_DURATION_SECONDS",
+      60,
+      21600
+    ),
+    mediaJobTtlSeconds: parseInteger(
+      environment.MEDIA_JOB_TTL_SECONDS,
+      3600,
+      "MEDIA_JOB_TTL_SECONDS",
+      300,
+      86400
+    ),
+    mediaMaxConcurrentJobs: parseInteger(
+      environment.MEDIA_MAX_CONCURRENT_JOBS,
+      2,
+      "MEDIA_MAX_CONCURRENT_JOBS",
+      1,
+      20
     )
   };
 }
