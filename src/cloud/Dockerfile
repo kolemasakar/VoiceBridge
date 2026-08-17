@@ -15,6 +15,8 @@ FROM node:24-alpine AS runtime
 ENV NODE_ENV=production
 WORKDIR /app
 
+RUN apk add --no-cache yt-dlp
+
 COPY package.json package-lock.json ./
 RUN npm ci --omit=dev
 
