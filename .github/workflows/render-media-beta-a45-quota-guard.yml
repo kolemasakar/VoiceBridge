@@ -1,5 +1,5 @@
 name: Render MEDIA BETA A4.5 Quota Guard
-# Temporary isolated-beta quota limit for live negative-path acceptance.
+# Temporary isolated-beta quota limit for live negative-path acceptance. Trigger: 2026-08-18T04:04Z.
 
 on:
   push:
