@@ -9,6 +9,8 @@ on:
 
 permissions:
   contents: read
+  pull-requests: write
+  issues: write
 
 concurrency:
   group: render-media-beta-postgres-durability
@@ -221,3 +223,13 @@ jobs:
           ' /tmp/health.json >/dev/null
           jq -c '{status,media_client_ingest:.capabilities.media_client_ingest}' /tmp/health.json
           echo 'MEDIA BETA durable store health: PASS'
+
+      - name: Report durability workflow to draft PR
+        if: always()
+        env:
+          GH_TOKEN: ${{ github.token }}
+          WORKFLOW_STATUS: ${{ job.status }}
+        shell: bash
+        run: |
+          set -euo pipefail
+          gh pr comment 28 --repo kolemasakar/VoiceBridge --body "MEDIA BETA A4.4 durability workflow: **${WORKFLOW_STATUS^^}**. Isolated target: \`voicebridge-krc-media-beta-kolemasakar\`. Commit: \`${GITHUB_SHA}\`. No production target was modified."
