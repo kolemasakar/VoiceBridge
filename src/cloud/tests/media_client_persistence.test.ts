@@ -1,4 +1,6 @@
 import assert from "node:assert/strict";
+import { readFile } from "node:fs/promises";
+import { join } from "node:path";
 import test from "node:test";
 import {
   MediaClientPersistentStore,
@@ -38,4 +40,15 @@ test("durable store is a no-op when no database URL is configured", async () => 
   assert.equal(await store.hasOtherActiveJob("x".repeat(64)), false);
   assert.equal(await store.sumSttCharges("2026-08-18"), 0);
   await store.purgeExpired();
+});
+
+test("durable SQL is streamed to psql stdin instead of one command-line argument", async () => {
+  const source = await readFile(
+    join(process.cwd(), "src", "media_client_persistence.ts"),
+    "utf8"
+  );
+
+  assert.match(source, /stdio:\s*\["pipe",\s*"pipe",\s*"pipe"\]/);
+  assert.match(source, /child\.stdin\.end\(sql\)/);
+  assert.doesNotMatch(source, /"-c",\s*sql/);
 });
