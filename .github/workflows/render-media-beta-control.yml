@@ -4,12 +4,13 @@ on:
   workflow_dispatch:
     inputs:
       operation:
-        description: "Read-only inspect or trigger a deploy of the isolated MEDIA BETA service"
+        description: "Inspect, restart, or deploy the isolated MEDIA BETA service"
         required: true
         default: inspect
         type: choice
         options:
           - inspect
+          - restart
           - deploy
       clear_cache:
         description: "Clear Render build cache for a manual deploy"
@@ -50,7 +51,7 @@ jobs:
             operation='inspect'
           fi
           case "$operation" in
-            inspect|deploy) ;;
+            inspect|restart|deploy) ;;
             *) echo "Unsupported operation." >&2; exit 2 ;;
           esac
           echo "value=$operation" >> "$GITHUB_OUTPUT"
@@ -143,25 +144,51 @@ jobs:
               "Latest deploy: none"
             else
               (.[0].deploy // .[0]) as $d
-              | "Latest deploy ID: \($d.id // "unknown")\nLatest deploy status: \($d.status // "unknown")\nLatest deploy commit: \($d.commit.id // $d.commitId // "unknown")"
+              | "Latest deploy ID: \($d.id // \"unknown\")\nLatest deploy status: \($d.status // \"unknown\")\nLatest deploy commit: \($d.commit.id // $d.commitId // \"unknown\")"
             end
           ' "$response_file"
           rm -f "$response_file"
 
-      - name: Enforce deploy isolation boundary
-        if: steps.operation.outputs.value == 'deploy'
+      - name: Enforce mutation isolation boundary
+        if: steps.operation.outputs.value == 'restart' || steps.operation.outputs.value == 'deploy'
         shell: bash
         run: |
           set -euo pipefail
           if [[ "${GITHUB_REF_NAME}" != "${REQUIRED_DEPLOY_BRANCH}" ]]; then
-            echo "Deploy refused: workflow must run from ${REQUIRED_DEPLOY_BRANCH}." >&2
+            echo "Mutation refused: workflow must run from ${REQUIRED_DEPLOY_BRANCH}." >&2
             exit 1
           fi
           if [[ "${{ steps.service.outputs.found }}" != "true" ]]; then
-            echo "Deploy refused: isolated MEDIA BETA service does not exist yet." >&2
+            echo "Mutation refused: isolated MEDIA BETA service does not exist." >&2
             exit 1
           fi
-          echo "Isolation boundary verified: only ${RENDER_SERVICE_NAME} may be deployed."
+          echo "Isolation boundary verified: only ${RENDER_SERVICE_NAME} may be mutated."
+
+      - name: Restart isolated beta service
+        if: steps.operation.outputs.value == 'restart' && steps.service.outputs.found == 'true'
+        env:
+          RENDER_API_KEY: ${{ secrets.RENDER_API_KEY }}
+          SERVICE_ID: ${{ steps.service.outputs.service_id }}
+        shell: bash
+        run: |
+          set -euo pipefail
+          response_file="$(mktemp)"
+          http_status="$({ curl -sS \
+            --request POST \
+            --output "$response_file" \
+            --write-out '%{http_code}' \
+            --url "${RENDER_API_BASE}/services/${SERVICE_ID}/restart" \
+            --header 'Accept: application/json' \
+            --header "Authorization: Bearer ${RENDER_API_KEY}"; } 2>/dev/null)"
+
+          if [[ "$http_status" != "200" ]]; then
+            echo "Render restart request failed with HTTP ${http_status}." >&2
+            rm -f "$response_file"
+            exit 1
+          fi
+
+          rm -f "$response_file"
+          echo "Restart request accepted for isolated MEDIA BETA service."
 
       - name: Trigger isolated beta deploy
         if: steps.operation.outputs.value == 'deploy' && steps.service.outputs.found == 'true'
@@ -199,7 +226,7 @@ jobs:
           fi
 
           deploy_id="$(jq -r '(.deploy // .).id // empty' "$response_file")"
-          deploy_status="$(jq -r '(.deploy // .).status // "queued"' "$response_file")"
+          deploy_status="$(jq -r '(.deploy // .).status // \"queued\"' "$response_file")"
           rm -f "$response_file"
 
           echo "Deploy request accepted."
@@ -218,5 +245,5 @@ jobs:
           if [[ "$http_status" == "200" ]]; then
             jq -c '{status,service,version,media_transcript:(.capabilities.media_transcript // null)}' /tmp/media-beta-health.json 2>/dev/null || true
           else
-            echo "Health endpoint is not ready yet; this is expected before the dedicated beta service is created/deployed."
+            echo "Health endpoint is not ready yet; this is expected during restart/deploy replacement."
           fi
