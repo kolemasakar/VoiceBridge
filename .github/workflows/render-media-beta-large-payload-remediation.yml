@@ -1,0 +1,105 @@
+name: Render MEDIA BETA Large Payload Remediation
+
+on:
+  push:
+    branches:
+      - agent/krc-media-transcript
+    paths:
+      - .github/workflows/render-media-beta-large-payload-remediation.yml
+
+permissions:
+  contents: read
+  pull-requests: write
+  issues: write
+
+concurrency:
+  group: render-media-beta-large-payload-remediation
+  cancel-in-progress: false
+
+env:
+  RENDER_API_BASE: https://api.render.com/v1
+  SERVICE_ID: srv-da1kic5bedkc73d6fk60
+  SERVICE_NAME: voicebridge-krc-media-beta-kolemasakar
+  HEALTH_URL: https://voicebridge-krc-media-beta-kolemasakar.onrender.com/api/v1/health
+  CODE_SHA: 8962a323abd2d549ad372c51a054f9f5371e9ada
+
+jobs:
+  deploy:
+    runs-on: ubuntu-latest
+    env:
+      RENDER_API_KEY: ${{ secrets.RENDER_API_KEY }}
+    steps:
+      - name: Verify isolated target
+        shell: bash
+        run: |
+          set -euo pipefail
+          test -n "${RENDER_API_KEY:-}"
+          tmp="$(mktemp)"
+          code="$(curl -sS -o "$tmp" -w '%{http_code}' \
+            "${RENDER_API_BASE}/services/${SERVICE_ID}" \
+            -H 'Accept: application/json' \
+            -H "Authorization: Bearer ${RENDER_API_KEY}")"
+          [[ "$code" == 200 ]]
+          name="$(jq -r '.name // empty' "$tmp")"
+          rm -f "$tmp"
+          [[ "$name" == "$SERVICE_NAME" ]]
+
+      - name: Deploy validated code to isolated beta
+        id: deploy
+        shell: bash
+        run: |
+          set -euo pipefail
+          payload="$(jq -nc --arg commitId "$CODE_SHA" '{commitId:$commitId,clearCache:"do_not_clear"}')"
+          tmp="$(mktemp)"
+          code="$(curl -sS -o "$tmp" -w '%{http_code}' \
+            -X POST "${RENDER_API_BASE}/services/${SERVICE_ID}/deploys" \
+            -H 'Accept: application/json' \
+            -H 'Content-Type: application/json' \
+            -H "Authorization: Bearer ${RENDER_API_KEY}" \
+            --data "$payload")"
+          [[ "$code" == 201 || "$code" == 202 ]]
+          id="$(jq -r '(.deploy // .).id // empty' "$tmp")"
+          rm -f "$tmp"
+          test -n "$id"
+          echo "deploy_id=$id" >> "$GITHUB_OUTPUT"
+
+      - name: Wait for isolated deploy
+        env:
+          DEPLOY_ID: ${{ steps.deploy.outputs.deploy_id }}
+        shell: bash
+        run: |
+          set -euo pipefail
+          for i in $(seq 1 72); do
+            tmp="$(mktemp)"
+            code="$(curl -sS -o "$tmp" -w '%{http_code}' \
+              "${RENDER_API_BASE}/services/${SERVICE_ID}/deploys/${DEPLOY_ID}" \
+              -H 'Accept: application/json' \
+              -H "Authorization: Bearer ${RENDER_API_KEY}")"
+            [[ "$code" == 200 ]]
+            status="$(jq -r '(.deploy // .).status // "unknown"' "$tmp")"
+            rm -f "$tmp"
+            case "$status" in
+              live) exit 0 ;;
+              build_failed|update_failed|canceled|deactivated) exit 1 ;;
+            esac
+            sleep 5
+          done
+          exit 1
+
+      - name: Verify isolated beta health
+        shell: bash
+        run: |
+          set -euo pipefail
+          code="$(curl -sS --retry 5 --retry-delay 3 --max-time 90 -o /tmp/health.json -w '%{http_code}' "$HEALTH_URL")"
+          [[ "$code" == 200 ]]
+          jq -e '.status == "ok" and .capabilities.media_client_ingest.durable_store == "postgres"' /tmp/health.json >/dev/null
+
+      - name: Report isolated deployment
+        if: always()
+        env:
+          GH_TOKEN: ${{ github.token }}
+          WORKFLOW_STATUS: ${{ job.status }}
+        shell: bash
+        run: |
+          set -euo pipefail
+          gh pr comment 28 --repo kolemasakar/VoiceBridge --body "MEDIA BETA large-payload persistence remediation deploy: **${WORKFLOW_STATUS^^}**. Validated code commit: \`${CODE_SHA}\`. Target: \`${SERVICE_NAME}\`. Production was not targeted."
