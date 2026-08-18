@@ -1,0 +1,223 @@
+name: Render MEDIA BETA Postgres Durability
+
+on:
+  push:
+    branches:
+      - agent/krc-media-transcript
+    paths:
+      - .github/workflows/render-media-beta-postgres-durability.yml
+
+permissions:
+  contents: read
+
+concurrency:
+  group: render-media-beta-postgres-durability
+  cancel-in-progress: false
+
+env:
+  SERVICE_ID: srv-da1kic5bedkc73d6fk60
+  SERVICE_NAME: voicebridge-krc-media-beta-kolemasakar
+  DB_NAME: voicebridge-krc-media-beta-db
+  HEALTH_URL: https://voicebridge-krc-media-beta-kolemasakar.onrender.com/api/v1/health
+  RENDER_API_BASE: https://api.render.com/v1
+
+jobs:
+  provision:
+    runs-on: ubuntu-latest
+    env:
+      RENDER_API_KEY: ${{ secrets.RENDER_API_KEY }}
+    steps:
+      - name: Verify Render credential
+        shell: bash
+        run: |
+          set -euo pipefail
+          test -n "${RENDER_API_KEY:-}" || { echo 'RENDER_API_KEY missing' >&2; exit 1; }
+          echo 'Render credential configured.'
+
+      - name: Resolve beta workspace
+        id: workspace
+        shell: bash
+        run: |
+          set -euo pipefail
+          tmp="$(mktemp)"
+          code="$(curl -sS -o "$tmp" -w '%{http_code}' \
+            "${RENDER_API_BASE}/services/${SERVICE_ID}" \
+            -H 'Accept: application/json' \
+            -H "Authorization: Bearer ${RENDER_API_KEY}")"
+          [[ "$code" == 200 ]] || { echo "Service lookup failed HTTP $code" >&2; rm -f "$tmp"; exit 1; }
+          owner="$(jq -r '.ownerId // .owner_id // .owner.id // empty' "$tmp")"
+          name="$(jq -r '.name // empty' "$tmp")"
+          rm -f "$tmp"
+          [[ "$name" == "$SERVICE_NAME" ]] || { echo "Isolation guard failed: unexpected service $name" >&2; exit 1; }
+          test -n "$owner" || { echo 'Workspace id missing.' >&2; exit 1; }
+          echo "owner_id=$owner" >> "$GITHUB_OUTPUT"
+          echo 'Isolated beta service/workspace verified.'
+
+      - name: Find or create Free Postgres
+        id: database
+        env:
+          OWNER_ID: ${{ steps.workspace.outputs.owner_id }}
+        shell: bash
+        run: |
+          set -euo pipefail
+          tmp="$(mktemp)"
+          code="$(curl -sS --get -o "$tmp" -w '%{http_code}' \
+            "${RENDER_API_BASE}/postgres" \
+            --data-urlencode "name=${DB_NAME}" \
+            --data-urlencode "ownerId=${OWNER_ID}" \
+            --data-urlencode 'limit=20' \
+            -H 'Accept: application/json' \
+            -H "Authorization: Bearer ${RENDER_API_KEY}")"
+          [[ "$code" == 200 ]] || { echo "Postgres lookup failed HTTP $code" >&2; rm -f "$tmp"; exit 1; }
+          db_id="$(jq -r --arg n "$DB_NAME" '[.[] | (.postgres // .) | select(.name==$n)] | first | (.id // empty)' "$tmp")"
+          rm -f "$tmp"
+
+          if [[ -z "$db_id" ]]; then
+            payload="$(jq -nc \
+              --arg name "$DB_NAME" \
+              --arg owner "$OWNER_ID" \
+              '{name:$name,ownerId:$owner,plan:"free",region:"frankfurt"}')"
+            tmp="$(mktemp)"
+            code="$(curl -sS -o "$tmp" -w '%{http_code}' \
+              -X POST "${RENDER_API_BASE}/postgres" \
+              -H 'Accept: application/json' \
+              -H 'Content-Type: application/json' \
+              -H "Authorization: Bearer ${RENDER_API_KEY}" \
+              --data "$payload")"
+            [[ "$code" == 201 || "$code" == 202 ]] || { echo "Postgres create failed HTTP $code" >&2; cat "$tmp" | jq -c '{id,message}' 2>/dev/null || true; rm -f "$tmp"; exit 1; }
+            db_id="$(jq -r '(.postgres // .).id // empty' "$tmp")"
+            rm -f "$tmp"
+            test -n "$db_id" || { echo 'Created Postgres id missing.' >&2; exit 1; }
+            echo "Created isolated Free Postgres: $db_id"
+          else
+            echo "Reusing isolated Free Postgres: $db_id"
+          fi
+          echo "db_id=$db_id" >> "$GITHUB_OUTPUT"
+
+      - name: Wait for Postgres availability
+        env:
+          DB_ID: ${{ steps.database.outputs.db_id }}
+        shell: bash
+        run: |
+          set -euo pipefail
+          for i in $(seq 1 72); do
+            tmp="$(mktemp)"
+            code="$(curl -sS -o "$tmp" -w '%{http_code}' \
+              "${RENDER_API_BASE}/postgres/${DB_ID}" \
+              -H 'Accept: application/json' \
+              -H "Authorization: Bearer ${RENDER_API_KEY}")"
+            [[ "$code" == 200 ]] || { rm -f "$tmp"; echo "Postgres status HTTP $code" >&2; exit 1; }
+            status="$(jq -r '(.postgres // .).status // "unknown"' "$tmp")"
+            plan="$(jq -r '(.postgres // .).plan // "unknown"' "$tmp")"
+            region="$(jq -r '(.postgres // .).region // "unknown"' "$tmp")"
+            expires="$(jq -r '(.postgres // .).expiresAt // ""' "$tmp")"
+            rm -f "$tmp"
+            echo "Postgres status: $status / plan=$plan / region=$region"
+            case "$status" in
+              available)
+                [[ "$plan" == free ]] || { echo "Unexpected Postgres plan: $plan" >&2; exit 1; }
+                [[ "$region" == frankfurt ]] || { echo "Unexpected Postgres region: $region" >&2; exit 1; }
+                echo "Free Postgres expiry: ${expires:-unknown}"
+                exit 0
+                ;;
+              failed|suspended)
+                exit 1
+                ;;
+            esac
+            sleep 5
+          done
+          echo 'Timed out waiting for Postgres.' >&2
+          exit 1
+
+      - name: Attach internal database URL to isolated beta service
+        env:
+          DB_ID: ${{ steps.database.outputs.db_id }}
+        shell: bash
+        run: |
+          set -euo pipefail
+          tmp="$(mktemp)"
+          code="$(curl -sS -o "$tmp" -w '%{http_code}' \
+            "${RENDER_API_BASE}/postgres/${DB_ID}/connection-info" \
+            -H 'Accept: application/json' \
+            -H "Authorization: Bearer ${RENDER_API_KEY}")"
+          [[ "$code" == 200 ]] || { echo "Connection-info failed HTTP $code" >&2; rm -f "$tmp"; exit 1; }
+          database_url="$(jq -r '.internalConnectionString // empty' "$tmp")"
+          rm -f "$tmp"
+          test -n "$database_url" || { echo 'Internal Postgres connection string missing.' >&2; exit 1; }
+          echo "::add-mask::$database_url"
+
+          payload="$(jq -nc --arg value "$database_url" '{value:$value}')"
+          tmp="$(mktemp)"
+          code="$(curl -sS -o "$tmp" -w '%{http_code}' \
+            -X PUT "${RENDER_API_BASE}/services/${SERVICE_ID}/env-vars/KRC_MEDIA_DATABASE_URL" \
+            -H 'Accept: application/json' \
+            -H 'Content-Type: application/json' \
+            -H "Authorization: Bearer ${RENDER_API_KEY}" \
+            --data "$payload")"
+          rm -f "$tmp"
+          [[ "$code" == 200 ]] || { echo "Database env-var update failed HTTP $code" >&2; exit 1; }
+          echo 'KRC_MEDIA_DATABASE_URL attached to isolated beta service.'
+
+      - name: Deploy isolated beta at this commit
+        id: deploy
+        shell: bash
+        run: |
+          set -euo pipefail
+          payload="$(jq -nc --arg commitId "$GITHUB_SHA" '{commitId:$commitId,clearCache:"do_not_clear"}')"
+          tmp="$(mktemp)"
+          code="$(curl -sS -o "$tmp" -w '%{http_code}' \
+            -X POST "${RENDER_API_BASE}/services/${SERVICE_ID}/deploys" \
+            -H 'Accept: application/json' \
+            -H 'Content-Type: application/json' \
+            -H "Authorization: Bearer ${RENDER_API_KEY}" \
+            --data "$payload")"
+          [[ "$code" == 201 || "$code" == 202 ]] || { echo "Deploy request failed HTTP $code" >&2; rm -f "$tmp"; exit 1; }
+          deploy_id="$(jq -r '(.deploy // .).id // empty' "$tmp")"
+          rm -f "$tmp"
+          test -n "$deploy_id" || { echo 'Deploy id missing.' >&2; exit 1; }
+          echo "deploy_id=$deploy_id" >> "$GITHUB_OUTPUT"
+          echo "Beta deploy accepted: $deploy_id"
+          echo "Commit: $GITHUB_SHA"
+
+      - name: Wait for isolated beta deploy
+        env:
+          DEPLOY_ID: ${{ steps.deploy.outputs.deploy_id }}
+        shell: bash
+        run: |
+          set -euo pipefail
+          for i in $(seq 1 60); do
+            tmp="$(mktemp)"
+            code="$(curl -sS -o "$tmp" -w '%{http_code}' \
+              "${RENDER_API_BASE}/services/${SERVICE_ID}/deploys/${DEPLOY_ID}" \
+              -H 'Accept: application/json' \
+              -H "Authorization: Bearer ${RENDER_API_KEY}")"
+            [[ "$code" == 200 ]] || { rm -f "$tmp"; echo "Deploy status HTTP $code" >&2; exit 1; }
+            status="$(jq -r '(.deploy // .).status // "unknown"' "$tmp")"
+            rm -f "$tmp"
+            echo "Deploy status: $status"
+            case "$status" in
+              live) exit 0 ;;
+              build_failed|update_failed|canceled|deactivated) exit 1 ;;
+            esac
+            sleep 5
+          done
+          echo 'Timed out waiting for beta deploy.' >&2
+          exit 1
+
+      - name: Verify durable MEDIA BETA health
+        shell: bash
+        run: |
+          set -euo pipefail
+          code="$(curl -sS --retry 4 --retry-delay 3 --max-time 90 -o /tmp/health.json -w '%{http_code}' "$HEALTH_URL")"
+          echo "Beta health HTTP: $code"
+          [[ "$code" == 200 ]]
+          jq -e '
+            .status == "ok" and
+            .capabilities.media_client_ingest.mode == "client_assisted" and
+            .capabilities.media_client_ingest.configured == true and
+            .capabilities.media_client_ingest.durable_store == "postgres" and
+            .capabilities.media_client_ingest.restart_resilient_waiting_jobs == true and
+            .capabilities.media_client_ingest.durable_quota_ledger == true
+          ' /tmp/health.json >/dev/null
+          jq -c '{status,media_client_ingest:.capabilities.media_client_ingest}' /tmp/health.json
+          echo 'MEDIA BETA durable store health: PASS'
