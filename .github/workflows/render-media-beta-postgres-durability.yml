@@ -1,3 +1,4 @@
+# Live restart acceptance trigger: 2026-08-18T02:56Z
 name: Render MEDIA BETA Postgres Durability
 
 on:
