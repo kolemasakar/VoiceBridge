@@ -47,7 +47,7 @@ jobs:
           if [[ "${GITHUB_EVENT_NAME}" == "workflow_dispatch" ]]; then
             operation='${{ inputs.operation }}'
           else
-            operation='deploy'
+            operation='inspect'
           fi
           case "$operation" in
             inspect|deploy) ;;
