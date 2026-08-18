@@ -26,27 +26,49 @@ function isBusy(status) {
   return ["STARTING", "CAPTURING", "STOPPING", "UPLOADING", "TRANSCRIBING", "FETCHING_CAPTIONS"].includes(status);
 }
 
+function currentInputJobId() {
+  return elements.jobId.value.trim();
+}
+
+function stateMatchesInput(state) {
+  const inputJobId = currentInputJobId();
+  const stateJobId = String(state?.jobId || "").trim();
+  return !inputJobId || !stateJobId || inputJobId === stateJobId;
+}
+
 function render(state) {
-  const status = state?.status || "IDLE";
+  const rawStatus = state?.status || "IDLE";
+  const sameJob = stateMatchesInput(state);
+  const staleTerminal = rawStatus === "COMPLETED" && !sameJob;
+  const status = staleTerminal ? "READY" : rawStatus;
+
   elements.status.textContent = status;
-  elements.message.textContent = state?.message || "Ready.";
-  elements.stateJob.textContent = state?.jobId || "-";
-  elements.source.textContent = state?.transcriptSource || "-";
-  elements.captionType.textContent = state?.captionType || "-";
-  elements.language.textContent = state?.detectedLanguage || "-";
-  elements.segments.textContent = state?.segmentCount ?? "-";
-  elements.sttSeconds.textContent = state?.sttSecondsCharged ?? "-";
-  elements.providerDeleted.textContent = state?.transcriptSource === "youtube_captions"
-    ? "not applicable"
-    : state?.providerDataDeleted === true
-      ? "deleted"
-      : state?.providerDataDeleted === false
-        ? "delete failed"
-        : "-";
-  const terminal = status === "COMPLETED";
-  elements.captions.disabled = isBusy(status) || terminal;
-  elements.start.disabled = isBusy(status) || terminal;
-  elements.stop.disabled = status !== "CAPTURING";
+  elements.message.textContent = staleTerminal
+    ? "New Job ID entered. Choose Use subtitles or Audio fallback."
+    : state?.message || "Ready.";
+  elements.stateJob.textContent = staleTerminal
+    ? currentInputJobId() || "-"
+    : state?.jobId || "-";
+  elements.source.textContent = staleTerminal ? "-" : state?.transcriptSource || "-";
+  elements.captionType.textContent = staleTerminal ? "-" : state?.captionType || "-";
+  elements.language.textContent = staleTerminal ? "-" : state?.detectedLanguage || "-";
+  elements.segments.textContent = staleTerminal ? "-" : state?.segmentCount ?? "-";
+  elements.sttSeconds.textContent = staleTerminal ? "-" : state?.sttSecondsCharged ?? "-";
+  elements.providerDeleted.textContent = staleTerminal
+    ? "-"
+    : state?.transcriptSource === "youtube_captions"
+      ? "not applicable"
+      : state?.providerDataDeleted === true
+        ? "deleted"
+        : state?.providerDataDeleted === false
+          ? "delete failed"
+          : "-";
+
+  const terminal = rawStatus === "COMPLETED" && sameJob;
+  const busy = isBusy(rawStatus) && sameJob;
+  elements.captions.disabled = busy || terminal;
+  elements.start.disabled = busy || terminal;
+  elements.stop.disabled = !(rawStatus === "CAPTURING" && sameJob);
 }
 
 async function load() {
@@ -71,6 +93,12 @@ async function persist() {
   });
 }
 
+async function persistJobIdAndRefresh() {
+  await chrome.storage.local.set({ media_beta_job_id: currentInputJobId() });
+  const response = await send({ type: "GET_STATE" });
+  if (response?.ok) render(response.state);
+}
+
 function input() {
   return {
     endpoint: elements.endpoint.value.trim(),
@@ -88,7 +116,7 @@ async function captions() {
     if (!response?.ok) throw new Error(response?.error || "Subtitles could not be read.");
     render(response.state);
   } catch (error) {
-    render({ status: "ERROR", message: error.message });
+    render({ status: "ERROR", jobId: currentInputJobId(), message: error.message });
   }
 }
 
@@ -101,7 +129,7 @@ async function start() {
     if (!response?.ok) throw new Error(response?.error || "Capture could not start.");
     render(response.state);
   } catch (error) {
-    render({ status: "ERROR", message: error.message });
+    render({ status: "ERROR", jobId: currentInputJobId(), message: error.message });
   }
 }
 
@@ -113,13 +141,16 @@ async function stop() {
     if (!response?.ok) throw new Error(response?.error || "Capture could not stop.");
     render(response.state);
   } catch (error) {
-    render({ status: "ERROR", message: error.message });
+    render({ status: "ERROR", jobId: currentInputJobId(), message: error.message });
   }
 }
 
 elements.captions.addEventListener("click", captions);
 elements.start.addEventListener("click", start);
 elements.stop.addEventListener("click", stop);
+elements.jobId.addEventListener("input", () => {
+  persistJobIdAndRefresh().catch(() => {});
+});
 
 setInterval(async () => {
   try {
