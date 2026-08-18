@@ -149,7 +149,7 @@ jobs:
             -H 'Accept: application/json' \
             -H "Authorization: Bearer ${RENDER_API_KEY}")"
           [[ "$code" == 200 ]] || { echo "A44_DIAG=connection_info_http_${code}" >> "$GITHUB_ENV"; rm -f "$tmp"; exit 1; }
-          database_url="$(jq -r '[.. | strings | select(test("^postgres(ql)?://")) | select(contains("internal"))] | first // empty' "$tmp")"
+          database_url="$(jq -r '.internalConnectionString // .internal_connection_string // empty' "$tmp")"
           rm -f "$tmp"
           test -n "$database_url" || { echo 'A44_DIAG=internal_connection_string_missing' >> "$GITHUB_ENV"; exit 1; }
           echo "::add-mask::$database_url"
