@@ -33,7 +33,7 @@ WORKDIR /app
 
 RUN apt-get update \
   && apt-get install -y --no-install-recommends \
-    ca-certificates python3 python3-venv ffmpeg \
+    ca-certificates python3 python3-venv ffmpeg postgresql-client \
     libcairo2 libpango-1.0-0 libjpeg62-turbo libgif7 librsvg2-2 \
   && rm -rf /var/lib/apt/lists/* \
   && python3 -m venv /opt/ytdlp \
