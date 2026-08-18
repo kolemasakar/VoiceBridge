@@ -22,7 +22,6 @@ env:
   DB_NAME: voicebridge-krc-media-beta-db
   HEALTH_URL: https://voicebridge-krc-media-beta-kolemasakar.onrender.com/api/v1/health
   RENDER_API_BASE: https://api.render.com/v1
-  RENDER_CLI_VERSION: v2.22.0
 
 jobs:
   provision:
@@ -37,13 +36,14 @@ jobs:
         shell: bash
         run: |
           set -euo pipefail
-          test -n "${RENDER_API_KEY:-}" || { echo 'RENDER_API_KEY missing' >&2; exit 1; }
+          echo 'A44_STAGE=workspace_lookup' >> "$GITHUB_ENV"
+          test -n "${RENDER_API_KEY:-}" || { echo 'A44_DIAG=render_api_key_missing' >> "$GITHUB_ENV"; exit 1; }
           tmp="$(mktemp)"
           code="$(curl -sS -o "$tmp" -w '%{http_code}' \
             "${RENDER_API_BASE}/services/${SERVICE_ID}" \
             -H 'Accept: application/json' \
             -H "Authorization: Bearer ${RENDER_API_KEY}")"
-          [[ "$code" == 200 ]] || { echo "A44_DIAG=service_http_${code}" >> "$GITHUB_ENV"; exit 1; }
+          [[ "$code" == 200 ]] || { echo "A44_DIAG=service_http_${code}" >> "$GITHUB_ENV"; rm -f "$tmp"; exit 1; }
           owner="$(jq -r '.ownerId // .owner_id // .owner.id // empty' "$tmp")"
           name="$(jq -r '.name // empty' "$tmp")"
           rm -f "$tmp"
@@ -51,19 +51,6 @@ jobs:
           test -n "$owner" || { echo 'A44_DIAG=workspace_id_missing' >> "$GITHUB_ENV"; exit 1; }
           echo "owner_id=$owner" >> "$GITHUB_OUTPUT"
           echo 'A44_STAGE=workspace_verified' >> "$GITHUB_ENV"
-          echo 'Isolated beta target verified.'
-
-      - name: Install pinned Render CLI
-        shell: bash
-        run: |
-          set -euo pipefail
-          v="${RENDER_CLI_VERSION#v}"
-          curl -sSfL "https://github.com/render-oss/cli/releases/download/${RENDER_CLI_VERSION}/cli_${v}_linux_amd64.zip" -o /tmp/render.zip
-          echo '6cdcd11897b7bd7e673317e6f4aaf041b654d818444f3b1efec7240a835f79ec  /tmp/render.zip' | sha256sum -c -
-          unzip -q /tmp/render.zip -d /tmp/render-cli
-          bin="$(find /tmp/render-cli -type f -perm -u+x | head -1)"
-          sudo install -m 0755 "$bin" /usr/local/bin/render
-          render --version
 
       - name: Find or create isolated Free Postgres
         id: database
@@ -72,74 +59,108 @@ jobs:
         shell: bash
         run: |
           set -euo pipefail
-          export RENDER_CLI_CONFIG_PATH=/tmp/render-cli-config.yaml
-          render workspace set "$OWNER_ID" -o text >/dev/null
-          render pg list --output json > /tmp/postgres-list.json
+          echo 'A44_STAGE=postgres_resolve' >> "$GITHUB_ENV"
+          tmp="$(mktemp)"
+          code="$(curl -sS --get -o "$tmp" -w '%{http_code}' \
+            "${RENDER_API_BASE}/postgres" \
+            --data-urlencode "ownerId=${OWNER_ID}" \
+            --data-urlencode 'limit=100' \
+            -H 'Accept: application/json' \
+            -H "Authorization: Bearer ${RENDER_API_KEY}")"
+          [[ "$code" == 200 ]] || { echo "A44_DIAG=postgres_list_http_${code}" >> "$GITHUB_ENV"; rm -f "$tmp"; exit 1; }
 
-          db_id="$(jq -r --arg n "$DB_NAME" '[.[] | select(.name==$n)] | first | (.id // empty)' /tmp/postgres-list.json)"
+          db_id="$(jq -r --arg n "$DB_NAME" '[.[] | (.postgres // .) | select(.name==$n)] | first | (.id // empty)' "$tmp")"
           if [[ -z "$db_id" ]]; then
-            other_free="$(jq -r --arg n "$DB_NAME" '[.[] | select(.plan=="free" and .name!=$n)] | first | (.name // empty)' /tmp/postgres-list.json)"
+            other_free="$(jq -r --arg n "$DB_NAME" '[.[] | (.postgres // .) | select(.plan=="free" and .name!=$n)] | first | (.name // empty)' "$tmp")"
             if [[ -n "$other_free" ]]; then
+              rm -f "$tmp"
               echo 'A44_DIAG=workspace_already_has_other_free_postgres' >> "$GITHUB_ENV"
-              echo "Another Free Postgres already exists in this workspace; refusing to attach an unrelated database." >&2
               exit 1
             fi
+            rm -f "$tmp"
 
-            set +e
-            render pg create --confirm --output json \
-              --name "$DB_NAME" \
-              --plan free \
-              --region frankfurt \
-              --version 18 > /tmp/postgres-create.json 2>/tmp/postgres-create.err
-            status=$?
-            set -e
-            if [[ $status -ne 0 ]]; then
-              echo 'A44_DIAG=postgres_create_failed' >> "$GITHUB_ENV"
-              sed -E 's/[A-Za-z0-9_\-]{40,}/[REDACTED]/g' /tmp/postgres-create.err | head -10 >&2 || true
-              exit $status
+            payload="$(jq -nc \
+              --arg name "$DB_NAME" \
+              --arg owner "$OWNER_ID" \
+              '{name:$name,ownerId:$owner,plan:"free",region:"frankfurt",version:"18"}')"
+            tmp="$(mktemp)"
+            code="$(curl -sS -o "$tmp" -w '%{http_code}' \
+              -X POST "${RENDER_API_BASE}/postgres" \
+              -H 'Accept: application/json' \
+              -H 'Content-Type: application/json' \
+              -H "Authorization: Bearer ${RENDER_API_KEY}" \
+              --data "$payload")"
+            if [[ "$code" != 201 && "$code" != 202 ]]; then
+              diag="$(jq -r '.message // .error // .id // "unknown"' "$tmp" 2>/dev/null | tr -cd '[:alnum:] _.-' | head -c 120)"
+              rm -f "$tmp"
+              echo "A44_DIAG=postgres_create_http_${code}_${diag:-unknown}" >> "$GITHUB_ENV"
+              exit 1
             fi
-            db_id="$(jq -r '.id // empty' /tmp/postgres-create.json)"
+            db_id="$(jq -r '(.postgres // .).id // empty' "$tmp")"
+            rm -f "$tmp"
             test -n "$db_id" || { echo 'A44_DIAG=created_postgres_id_missing' >> "$GITHUB_ENV"; exit 1; }
-            echo "Created isolated Free Postgres: $db_id"
           else
-            echo "Reusing isolated Free Postgres: $db_id"
+            rm -f "$tmp"
           fi
           echo "db_id=$db_id" >> "$GITHUB_OUTPUT"
           echo 'A44_STAGE=postgres_resolved' >> "$GITHUB_ENV"
 
-      - name: Wait for Postgres and obtain internal connection
-        id: connection
+      - name: Wait for Postgres availability
         env:
-          OWNER_ID: ${{ steps.workspace.outputs.owner_id }}
           DB_ID: ${{ steps.database.outputs.db_id }}
         shell: bash
         run: |
           set -euo pipefail
-          export RENDER_CLI_CONFIG_PATH=/tmp/render-cli-config.yaml
-          render workspace set "$OWNER_ID" -o text >/dev/null
+          echo 'A44_STAGE=postgres_wait' >> "$GITHUB_ENV"
           for i in $(seq 1 72); do
-            set +e
-            render pg get "$DB_ID" --include-sensitive-connection-info --output json > /tmp/postgres-get.json 2>/dev/null
-            status=$?
-            set -e
-            if [[ $status -eq 0 ]]; then
-              database_url="$(jq -r '[.. | strings | select(test("^postgres(ql)?://")) | select(contains("internal"))] | first // empty' /tmp/postgres-get.json)"
-              if [[ -n "$database_url" ]]; then
-                echo "::add-mask::$database_url"
-                printf '%s' "$database_url" > /tmp/krc-media-db-url
+            tmp="$(mktemp)"
+            code="$(curl -sS -o "$tmp" -w '%{http_code}' \
+              "${RENDER_API_BASE}/postgres/${DB_ID}" \
+              -H 'Accept: application/json' \
+              -H "Authorization: Bearer ${RENDER_API_KEY}")"
+            [[ "$code" == 200 ]] || { echo "A44_DIAG=postgres_status_http_${code}" >> "$GITHUB_ENV"; rm -f "$tmp"; exit 1; }
+            status="$(jq -r '(.postgres // .).status // "unknown"' "$tmp")"
+            rm -f "$tmp"
+            case "$status" in
+              available)
                 echo 'A44_STAGE=postgres_available' >> "$GITHUB_ENV"
                 exit 0
-              fi
-            fi
+                ;;
+              failed|suspended)
+                echo "A44_DIAG=postgres_${status}" >> "$GITHUB_ENV"
+                exit 1
+                ;;
+            esac
             sleep 5
           done
-          echo 'A44_DIAG=postgres_connection_timeout' >> "$GITHUB_ENV"
+          echo 'A44_DIAG=postgres_wait_timeout' >> "$GITHUB_ENV"
           exit 1
+
+      - name: Obtain internal Postgres connection
+        env:
+          DB_ID: ${{ steps.database.outputs.db_id }}
+        shell: bash
+        run: |
+          set -euo pipefail
+          echo 'A44_STAGE=postgres_connection' >> "$GITHUB_ENV"
+          tmp="$(mktemp)"
+          code="$(curl -sS -o "$tmp" -w '%{http_code}' \
+            "${RENDER_API_BASE}/postgres/${DB_ID}/connection-info" \
+            -H 'Accept: application/json' \
+            -H "Authorization: Bearer ${RENDER_API_KEY}")"
+          [[ "$code" == 200 ]] || { echo "A44_DIAG=connection_info_http_${code}" >> "$GITHUB_ENV"; rm -f "$tmp"; exit 1; }
+          database_url="$(jq -r '[.. | strings | select(test("^postgres(ql)?://")) | select(contains("internal"))] | first // empty' "$tmp")"
+          rm -f "$tmp"
+          test -n "$database_url" || { echo 'A44_DIAG=internal_connection_string_missing' >> "$GITHUB_ENV"; exit 1; }
+          echo "::add-mask::$database_url"
+          printf '%s' "$database_url" > /tmp/krc-media-db-url
+          echo 'A44_STAGE=postgres_connection_ready' >> "$GITHUB_ENV"
 
       - name: Attach database only to isolated beta service
         shell: bash
         run: |
           set -euo pipefail
+          echo 'A44_STAGE=database_attach' >> "$GITHUB_ENV"
           database_url="$(cat /tmp/krc-media-db-url)"
           echo "::add-mask::$database_url"
           payload="$(jq -nc --arg value "$database_url" '{value:$value}')"
@@ -153,13 +174,13 @@ jobs:
           rm -f "$tmp"
           [[ "$code" == 200 ]] || { echo "A44_DIAG=env_var_http_${code}" >> "$GITHUB_ENV"; exit 1; }
           echo 'A44_STAGE=database_attached' >> "$GITHUB_ENV"
-          echo 'Durable database attached to isolated MEDIA BETA service.'
 
       - name: Deploy isolated beta at current commit
         id: deploy
         shell: bash
         run: |
           set -euo pipefail
+          echo 'A44_STAGE=deploy_request' >> "$GITHUB_ENV"
           payload="$(jq -nc --arg commitId "$GITHUB_SHA" '{commitId:$commitId,clearCache:"do_not_clear"}')"
           tmp="$(mktemp)"
           code="$(curl -sS -o "$tmp" -w '%{http_code}' \
@@ -181,6 +202,7 @@ jobs:
         shell: bash
         run: |
           set -euo pipefail
+          echo 'A44_STAGE=deploy_wait' >> "$GITHUB_ENV"
           for i in $(seq 1 72); do
             tmp="$(mktemp)"
             code="$(curl -sS -o "$tmp" -w '%{http_code}' \
@@ -209,6 +231,7 @@ jobs:
         shell: bash
         run: |
           set -euo pipefail
+          echo 'A44_STAGE=health_verify' >> "$GITHUB_ENV"
           code="$(curl -sS --retry 5 --retry-delay 3 --max-time 90 -o /tmp/health.json -w '%{http_code}' "$HEALTH_URL")"
           [[ "$code" == 200 ]] || { echo "A44_DIAG=health_http_${code}" >> "$GITHUB_ENV"; exit 1; }
           jq -e '
