@@ -107,6 +107,163 @@ async function readClientJob(input) {
 }
 
 async function extractYouTubeCaptions(languageHint) {
+  const sleep = (ms) => new Promise((resolve) => setTimeout(resolve, ms));
+  const baseLanguage = (value) => String(value || "").toLowerCase().split("-")[0];
+  const parseTimestampMs = (value) => {
+    const text = String(value || "").trim();
+    const parts = text.split(":").map((part) => Number(part.trim()));
+    if (!parts.length || parts.some((part) => !Number.isFinite(part))) return null;
+    let seconds = 0;
+    for (const part of parts) seconds = seconds * 60 + part;
+    return Math.round(seconds * 1000);
+  };
+  const visible = (element) => {
+    if (!element) return false;
+    const style = window.getComputedStyle(element);
+    const rect = element.getBoundingClientRect();
+    return style.display !== "none" && style.visibility !== "hidden" && rect.width >= 0 && rect.height >= 0;
+  };
+  const segmentNodes = () => {
+    const selectors = [
+      "ytd-transcript-segment-renderer",
+      "ytd-transcript-segment-view-model",
+      "#segments-container > ytd-transcript-segment-renderer",
+      "#segments-container > ytd-transcript-segment-view-model"
+    ];
+    const found = [];
+    const seen = new Set();
+    for (const selector of selectors) {
+      for (const node of document.querySelectorAll(selector)) {
+        if (!seen.has(node)) {
+          seen.add(node);
+          found.push(node);
+        }
+      }
+    }
+    return found;
+  };
+  const parsePanelSegments = () => {
+    const nodes = segmentNodes();
+    const parsed = [];
+    for (const node of nodes) {
+      const timestampNode = node.querySelector(
+        ".segment-timestamp, [class*='segment-timestamp'], [class*='timestamp']"
+      );
+      const textNode = node.querySelector(
+        ".segment-text, [class*='segment-text'], yt-formatted-string.segment-text"
+      );
+      const lines = String(node.innerText || "")
+        .split(/\n+/)
+        .map((line) => line.replace(/\s+/g, " ").trim())
+        .filter(Boolean);
+      const timestampText = String(timestampNode?.textContent || lines[0] || "").trim();
+      const startMs = parseTimestampMs(timestampText);
+      if (startMs === null) continue;
+      let text = String(textNode?.textContent || "").replace(/\s+/g, " ").trim();
+      if (!text && lines.length > 1) text = lines.slice(1).join(" ").trim();
+      if (!text) {
+        const formatted = [...node.querySelectorAll("yt-formatted-string")]
+          .map((item) => String(item.textContent || "").replace(/\s+/g, " ").trim())
+          .filter(Boolean)
+          .filter((item) => item !== timestampText);
+        text = formatted.join(" ").trim();
+      }
+      if (!text) continue;
+      parsed.push({ start_ms: startMs, text });
+    }
+    parsed.sort((left, right) => left.start_ms - right.start_ms);
+    const deduped = [];
+    for (const item of parsed) {
+      const previous = deduped[deduped.length - 1];
+      if (previous && previous.start_ms === item.start_ms && previous.text === item.text) continue;
+      deduped.push(item);
+    }
+    return deduped.map((item, index) => {
+      const next = deduped[index + 1];
+      const endMs = next && next.start_ms > item.start_ms
+        ? next.start_ms
+        : item.start_ms + 5000;
+      return { start_ms: item.start_ms, end_ms: endMs, text: item.text };
+    });
+  };
+  const openTranscriptPanel = async () => {
+    if (segmentNodes().length) return true;
+
+    const expandSelectors = [
+      "ytd-text-inline-expander #expand",
+      "#description-inline-expander #expand",
+      "#description #expand"
+    ];
+    for (const selector of expandSelectors) {
+      const button = document.querySelector(selector);
+      if (button && visible(button)) {
+        try { button.click(); } catch {}
+        await sleep(350);
+        break;
+      }
+    }
+
+    const directSelectors = [
+      "ytd-video-description-transcript-section-renderer button",
+      "ytd-video-description-transcript-section-renderer yt-button-shape button",
+      "ytd-video-description-transcript-section-renderer tp-yt-paper-button"
+    ];
+    for (const selector of directSelectors) {
+      const button = document.querySelector(selector);
+      if (button) {
+        try { button.click(); } catch {}
+        for (let attempt = 0; attempt < 25; attempt += 1) {
+          await sleep(200);
+          if (segmentNodes().length) return true;
+        }
+      }
+    }
+
+    const transcriptPattern = /show transcript|transcript|показати текст|текст відео|транскрипт|показать текст|текст видео|расшифровк/i;
+    const buttonCandidates = [
+      ...document.querySelectorAll("button, tp-yt-paper-button, yt-button-shape button")
+    ];
+    const transcriptButton = buttonCandidates.find((button) => {
+      const label = `${button.getAttribute("aria-label") || ""} ${button.textContent || ""}`;
+      return transcriptPattern.test(label) && visible(button);
+    });
+    if (transcriptButton) {
+      try { transcriptButton.click(); } catch {}
+      for (let attempt = 0; attempt < 25; attempt += 1) {
+        await sleep(200);
+        if (segmentNodes().length) return true;
+      }
+    }
+
+    const menuButtons = [
+      ...document.querySelectorAll(
+        "ytd-watch-metadata #menu button, #actions button, ytd-menu-renderer button"
+      )
+    ].filter(visible);
+    for (const menuButton of menuButtons) {
+      try { menuButton.click(); } catch {}
+      await sleep(350);
+      const menuItems = [
+        ...document.querySelectorAll(
+          "ytd-menu-service-item-renderer, tp-yt-paper-item, ytd-menu-navigation-item-renderer"
+        )
+      ];
+      const transcriptItem = menuItems.find((item) =>
+        transcriptPattern.test(String(item.textContent || ""))
+      );
+      if (transcriptItem) {
+        try { transcriptItem.click(); } catch {}
+        for (let attempt = 0; attempt < 25; attempt += 1) {
+          await sleep(200);
+          if (segmentNodes().length) return true;
+        }
+      } else {
+        document.dispatchEvent(new KeyboardEvent("keydown", { key: "Escape", bubbles: true }));
+      }
+    }
+    return segmentNodes().length > 0;
+  };
+
   try {
     const player = document.getElementById("movie_player");
     let response = window.ytInitialPlayerResponse || null;
@@ -125,7 +282,6 @@ async function extractYouTubeCaptions(languageHint) {
       return { ok: false, reason: "CAPTIONS_NOT_AVAILABLE" };
     }
 
-    const baseLanguage = (value) => String(value || "").toLowerCase().split("-")[0];
     const requested = String(languageHint || "auto").toLowerCase();
     let eligible = tracks.filter((track) => typeof track?.baseUrl === "string" && track.baseUrl);
     if (requested !== "auto") {
@@ -156,39 +312,84 @@ async function extractYouTubeCaptions(languageHint) {
       return { ok: false, reason: "CAPTIONS_NOT_AVAILABLE" };
     }
 
-    const timedTextUrl = new URL(track.baseUrl, location.href);
-    timedTextUrl.searchParams.set("fmt", "json3");
-    const timedText = await fetch(timedTextUrl.toString(), {
-      credentials: "include",
-      cache: "no-store"
-    });
-    if (!timedText.ok) {
-      return { ok: false, reason: `CAPTIONS_FETCH_${timedText.status}` };
-    }
-    const data = await timedText.json();
-    const events = Array.isArray(data?.events) ? data.events : [];
-    const segments = [];
-    for (const event of events) {
-      const start = Number(event?.tStartMs);
-      const duration = Number(event?.dDurationMs);
-      if (!Number.isFinite(start) || !Number.isFinite(duration) || duration <= 0) continue;
-      const pieces = Array.isArray(event?.segs) ? event.segs : [];
-      const text = pieces
-        .map((piece) => typeof piece?.utf8 === "string" ? piece.utf8 : "")
-        .join("")
-        .replace(/[\u200b\u200e\u200f]/g, "")
-        .replace(/\s+/g, " ")
-        .trim();
-      if (!text) continue;
-      segments.push({
-        start_ms: Math.max(0, Math.round(start)),
-        end_ms: Math.max(1, Math.round(start + duration)),
-        text
+    let directFailure = null;
+    try {
+      const timedTextUrl = new URL(track.baseUrl, location.href);
+      timedTextUrl.searchParams.set("fmt", "json3");
+      const timedText = await fetch(timedTextUrl.toString(), {
+        credentials: "include",
+        cache: "no-store"
       });
+      if (timedText.ok) {
+        const rawBody = await timedText.text();
+        if (rawBody.trim()) {
+          const data = JSON.parse(rawBody);
+          const events = Array.isArray(data?.events) ? data.events : [];
+          const segments = [];
+          for (const event of events) {
+            const start = Number(event?.tStartMs);
+            const duration = Number(event?.dDurationMs);
+            if (!Number.isFinite(start) || !Number.isFinite(duration) || duration <= 0) continue;
+            const pieces = Array.isArray(event?.segs) ? event.segs : [];
+            const text = pieces
+              .map((piece) => typeof piece?.utf8 === "string" ? piece.utf8 : "")
+              .join("")
+              .replace(/[\u200b\u200e\u200f]/g, "")
+              .replace(/\s+/g, " ")
+              .trim();
+            if (!text) continue;
+            segments.push({
+              start_ms: Math.max(0, Math.round(start)),
+              end_ms: Math.max(1, Math.round(start + duration)),
+              text
+            });
+          }
+          if (segments.length) {
+            const name = track?.name?.simpleText ||
+              (Array.isArray(track?.name?.runs) ? track.name.runs.map((run) => run?.text || "").join("") : "");
+            return {
+              ok: true,
+              language: String(track.languageCode || "und").toLowerCase(),
+              captionType: track.kind === "asr" ? "auto_generated" : "manual",
+              trackName: name || null,
+              extractionMethod: "timedtext_json3",
+              segments
+            };
+          }
+          directFailure = "CAPTIONS_DIRECT_EMPTY_EVENTS";
+        } else {
+          directFailure = "CAPTIONS_DIRECT_EMPTY_HTTP_200";
+        }
+      } else {
+        directFailure = `CAPTIONS_DIRECT_HTTP_${timedText.status}`;
+      }
+    } catch (error) {
+      directFailure = `CAPTIONS_DIRECT_FAILED:${String(error?.message || error)}`;
     }
-    if (!segments.length) {
-      return { ok: false, reason: "CAPTIONS_EMPTY" };
+
+    const panelOpened = await openTranscriptPanel();
+    if (!panelOpened) {
+      return {
+        ok: false,
+        reason: "CAPTIONS_PANEL_UNAVAILABLE",
+        detail: directFailure || null
+      };
     }
+
+    let panelSegments = [];
+    for (let attempt = 0; attempt < 20; attempt += 1) {
+      panelSegments = parsePanelSegments();
+      if (panelSegments.length) break;
+      await sleep(200);
+    }
+    if (!panelSegments.length) {
+      return {
+        ok: false,
+        reason: "CAPTIONS_PANEL_EMPTY",
+        detail: directFailure || null
+      };
+    }
+
     const name = track?.name?.simpleText ||
       (Array.isArray(track?.name?.runs) ? track.name.runs.map((run) => run?.text || "").join("") : "");
     return {
@@ -196,10 +397,16 @@ async function extractYouTubeCaptions(languageHint) {
       language: String(track.languageCode || "und").toLowerCase(),
       captionType: track.kind === "asr" ? "auto_generated" : "manual",
       trackName: name || null,
-      segments
+      extractionMethod: "transcript_panel",
+      directFailure,
+      segments: panelSegments
     };
   } catch (error) {
-    return { ok: false, reason: "CAPTIONS_EXTRACTION_FAILED", detail: String(error?.message || error) };
+    return {
+      ok: false,
+      reason: "CAPTIONS_EXTRACTION_FAILED",
+      detail: String(error?.message || error)
+    };
   }
 }
 
@@ -214,7 +421,7 @@ async function getCaptions(rawInput) {
     status: "FETCHING_CAPTIONS",
     jobId: input.jobId,
     sourceUrl: tab.url,
-    message: "Reading YouTube caption track..."
+    message: "Reading YouTube captions..."
   });
   try {
     const job = await readClientJob(input);
@@ -229,11 +436,12 @@ async function getCaptions(rawInput) {
     });
     const result = injected?.[0]?.result;
     if (!result?.ok) {
+      const diagnostic = [result?.reason, result?.detail].filter(Boolean).join("; ") || "unknown";
       const state = {
         status: "CAPTIONS_UNAVAILABLE",
         jobId: input.jobId,
         sourceUrl: tab.url,
-        message: `No usable YouTube captions (${result?.reason || "unknown"}). Use Audio fallback.`
+        message: `No usable YouTube captions (${diagnostic}). Use Audio fallback.`
       };
       await setState(state);
       return state;
@@ -259,11 +467,14 @@ async function getCaptions(rawInput) {
     if (!response.ok) {
       throw new Error(payload?.error?.message || `Caption upload failed (${response.status}).`);
     }
+    const method = result.extractionMethod === "transcript_panel"
+      ? "YouTube transcript panel"
+      : "YouTube caption track";
     const state = {
       status: payload.status,
       jobId: payload.job_id,
       sourceUrl: tab.url,
-      message: `Transcript loaded from YouTube captions (${result.captionType}, ${result.language}).`,
+      message: `Transcript loaded from ${method} (${result.captionType}, ${result.language}).`,
       transcriptSource: payload.transcript_source,
       captionType: payload.caption_type,
       detectedLanguage: payload.detected_language,
