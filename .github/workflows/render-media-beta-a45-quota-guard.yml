@@ -1,5 +1,5 @@
 name: Render MEDIA BETA A4.5 Quota Guard
-# Temporary isolated-beta quota limit for live negative-path acceptance. Trigger: 2026-08-18T04:04Z.
+# Restore isolated-beta quota after live negative-path acceptance. Trigger: 2026-08-18T04:12Z.
 
 on:
   push:
@@ -22,10 +22,10 @@ env:
   SERVICE_ID: srv-da1kic5bedkc73d6fk60
   SERVICE_NAME: voicebridge-krc-media-beta-kolemasakar
   HEALTH_URL: https://voicebridge-krc-media-beta-kolemasakar.onrender.com/api/v1/health
-  TEMP_DAILY_STT_SECONDS: "60"
+  NORMAL_DAILY_STT_SECONDS: "7200"
 
 jobs:
-  configure-deploy:
+  restore-deploy:
     runs-on: ubuntu-latest
     env:
       RENDER_API_KEY: ${{ secrets.RENDER_API_KEY }}
@@ -44,13 +44,12 @@ jobs:
           name="$(jq -r '.name // empty' "$tmp")"
           rm -f "$tmp"
           [[ "$name" == "$SERVICE_NAME" ]] || { echo 'Isolation guard failed' >&2; exit 1; }
-          echo "Isolated target verified: $SERVICE_NAME"
 
-      - name: Set temporary daily STT limit to 60 seconds
+      - name: Restore daily STT limit to 7200 seconds
         shell: bash
         run: |
           set -euo pipefail
-          payload="$(jq -nc --arg value "$TEMP_DAILY_STT_SECONDS" '{value:$value}')"
+          payload="$(jq -nc --arg value "$NORMAL_DAILY_STT_SECONDS" '{value:$value}')"
           tmp="$(mktemp)"
           code="$(curl -sS -o "$tmp" -w '%{http_code}' \
             -X PUT "${RENDER_API_BASE}/services/${SERVICE_ID}/env-vars/MEDIA_DAILY_STT_SECONDS" \
@@ -60,7 +59,7 @@ jobs:
             --data "$payload")"
           rm -f "$tmp"
           [[ "$code" == 200 ]] || { echo "Env update HTTP $code" >&2; exit 1; }
-          echo 'Temporary MEDIA_DAILY_STT_SECONDS=60 applied to isolated beta.'
+          echo 'MEDIA_DAILY_STT_SECONDS=7200 restored on isolated beta.'
 
       - name: Deploy isolated beta
         id: deploy
@@ -75,10 +74,10 @@ jobs:
             -H 'Content-Type: application/json' \
             -H "Authorization: Bearer ${RENDER_API_KEY}" \
             --data "$payload")"
-          [[ "$code" == 201 || "$code" == 202 ]] || { cat "$tmp" >&2; rm -f "$tmp"; echo "Deploy HTTP $code" >&2; exit 1; }
+          [[ "$code" == 201 || "$code" == 202 ]] || { cat "$tmp" >&2; rm -f "$tmp"; exit 1; }
           id="$(jq -r '(.deploy // .).id // empty' "$tmp")"
           rm -f "$tmp"
-          test -n "$id" || { echo 'Deploy id missing' >&2; exit 1; }
+          test -n "$id"
           echo "deploy_id=$id" >> "$GITHUB_OUTPUT"
 
       - name: Wait for deploy
@@ -112,9 +111,8 @@ jobs:
           code="$(curl -sS --retry 5 --retry-delay 3 --max-time 90 -o /tmp/health.json -w '%{http_code}' "$HEALTH_URL")"
           [[ "$code" == 200 ]]
           jq -e '.status == "ok" and .capabilities.media_client_ingest.durable_store == "postgres"' /tmp/health.json >/dev/null
-          echo 'Isolated beta health PASS.'
 
-      - name: Report to draft PR
+      - name: Report restore to draft PR
         if: always()
         env:
           GH_TOKEN: ${{ github.token }}
@@ -122,4 +120,4 @@ jobs:
         shell: bash
         run: |
           set -euo pipefail
-          gh pr comment 28 --repo kolemasakar/VoiceBridge --body "MEDIA BETA A4.5 temporary quota guard setup: **${WORKFLOW_STATUS^^}**. \`MEDIA_DAILY_STT_SECONDS=60\` on isolated target \`voicebridge-krc-media-beta-kolemasakar\`. Production was not targeted. Commit: \`${GITHUB_SHA}\`."
+          gh pr comment 28 --repo kolemasakar/VoiceBridge --body "MEDIA BETA A4.5 quota restore: **${WORKFLOW_STATUS^^}**. \`MEDIA_DAILY_STT_SECONDS=7200\` on isolated target \`voicebridge-krc-media-beta-kolemasakar\`. Production was not targeted. Commit: \`${GITHUB_SHA}\`."
