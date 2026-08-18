@@ -293,7 +293,10 @@ export function createMediaClientHttpHandler(config: AppConfig) {
     liveJob: MediaClientTranscriptJobView,
     record: PersistedMediaClientJob
   ): Promise<MediaClientTranscriptJobView> => {
-    const externalJob = externalizeJob(liveJob, externalJobId);
+    const externalJob = {
+      ...externalizeJob(liveJob, externalJobId),
+      created_at: record.job.created_at
+    };
     const segments = externalJob.status === "COMPLETED"
       ? liveSegments(liveJobId)
       : record.segments;
@@ -480,7 +483,12 @@ export function createMediaClientHttpHandler(config: AppConfig) {
           }
         }
 
-        const externalJob = externalizeJob(job, externalJobId);
+        const externalJob = record
+          ? {
+              ...externalizeJob(job, externalJobId),
+              created_at: record.job.created_at
+            }
+          : externalizeJob(job, externalJobId);
         if (record) {
           await saveRecord({
             ...record,
@@ -545,7 +553,12 @@ export function createMediaClientHttpHandler(config: AppConfig) {
           }
         }
 
-        const externalJob = externalizeJob(job, externalJobId);
+        const externalJob = record
+          ? {
+              ...externalizeJob(job, externalJobId),
+              created_at: record.job.created_at
+            }
+          : externalizeJob(job, externalJobId);
         if (record) {
           await saveRecord({
             ...record,
