@@ -1,5 +1,5 @@
 name: Render MEDIA BETA A4 Remediation Deploy
-# A4 remediation: preserve external created_at in live HTTP projections.
+# A4 remediation: final created_at continuity restart regression.
 
 on:
   push:
