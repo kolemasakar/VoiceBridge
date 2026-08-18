@@ -1,5 +1,5 @@
 name: Render MEDIA BETA A4 Remediation Deploy
-# A4 remediation trigger: durability created_at continuity fix + PR evidence.
+# A4 remediation trigger: live created_at continuity restart test.
 
 on:
   push:
