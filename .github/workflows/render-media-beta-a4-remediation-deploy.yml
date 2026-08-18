@@ -1,5 +1,5 @@
 name: Render MEDIA BETA A4 Remediation Deploy
-# A4 remediation trigger: durability created_at continuity fix.
+# A4 remediation trigger: durability created_at continuity fix + PR evidence.
 
 on:
   push:
@@ -10,6 +10,8 @@ on:
 
 permissions:
   contents: read
+  pull-requests: write
+  issues: write
 
 jobs:
   deploy:
@@ -75,3 +77,13 @@ jobs:
           [[ "$code" == 200 ]]
           jq -e '.status == "ok" and .capabilities.media_transcript.configured == true' /tmp/health.json >/dev/null
           echo 'Beta health/configuration: PASS'
+
+      - name: Report isolated deploy to draft PR
+        if: always()
+        env:
+          GH_TOKEN: ${{ github.token }}
+          WORKFLOW_STATUS: ${{ job.status }}
+        shell: bash
+        run: |
+          set -euo pipefail
+          gh pr comment 28 --repo kolemasakar/VoiceBridge --body "MEDIA BETA A4 created_at continuity deploy: **${WORKFLOW_STATUS^^}**. Commit: \`${GITHUB_SHA}\`. Target: \`voicebridge-krc-media-beta-kolemasakar\`. Production was not targeted."
