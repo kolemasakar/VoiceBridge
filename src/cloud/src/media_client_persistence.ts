@@ -296,11 +296,10 @@ CREATE INDEX IF NOT EXISTS krc_media_stt_charges_day_idx
           "-A",
           "-t",
           "-F", "\t",
-          "--dbname", databaseUrl,
-          "-c", sql
+          "--dbname", databaseUrl
         ],
         {
-          stdio: ["ignore", "pipe", "pipe"],
+          stdio: ["pipe", "pipe", "pipe"],
           env: {
             ...process.env,
             PGCONNECT_TIMEOUT: "5"
@@ -333,6 +332,7 @@ CREATE INDEX IF NOT EXISTS krc_media_stt_charges_day_idx
         }
         resolve(Buffer.concat(stdout).toString("utf8"));
       });
+      child.stdin.end(sql);
     });
   }
 }
