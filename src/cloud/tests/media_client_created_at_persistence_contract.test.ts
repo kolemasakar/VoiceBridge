@@ -4,7 +4,7 @@ import { test } from "node:test";
 
 test("durable job upsert preserves the original created_at", async () => {
   const source = await readFile(
-    new URL("../src/media_client_persistence.ts", import.meta.url),
+    new URL("../../src/media_client_persistence.ts", import.meta.url),
     "utf8"
   );
 
