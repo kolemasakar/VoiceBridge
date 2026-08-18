@@ -43,6 +43,23 @@ test("media beta daily STT quota reserves conservatively and resets by UTC day",
   assert.equal(nextDay.usage.used_seconds, 60);
 });
 
+test("media beta daily STT quota can restore durable usage", () => {
+  const gate = new MediaBetaGate(["abcdefghijkl"], 120);
+  gate.restoreUsage("2026-08-18", 98);
+
+  const restored = gate.usage(new Date("2026-08-18T02:00:00Z"));
+  assert.equal(restored.used_seconds, 98);
+  assert.equal(restored.remaining_seconds, 22);
+
+  const blocked = gate.reserveSttSeconds(23, new Date("2026-08-18T02:00:01Z"));
+  assert.equal(blocked.allowed, false);
+  assert.equal(blocked.usage.used_seconds, 98);
+
+  const allowed = gate.reserveSttSeconds(22, new Date("2026-08-18T02:00:02Z"));
+  assert.equal(allowed.allowed, true);
+  assert.equal(allowed.usage.used_seconds, 120);
+});
+
 test("closed beta request requires access code and supported language", () => {
   const parsed = parseMediaBetaTranscriptInput({
     url: "https://youtu.be/abc123",
