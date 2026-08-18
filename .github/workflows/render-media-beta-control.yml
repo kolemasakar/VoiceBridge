@@ -143,7 +143,7 @@ jobs:
               "Latest deploy: none"
             else
               (.[0].deploy // .[0]) as $d
-              | "Latest deploy ID: \($d.id // \"unknown\")\nLatest deploy status: \($d.status // \"unknown\")\nLatest deploy commit: \($d.commit.id // $d.commitId // \"unknown\")"
+              | "Latest deploy ID: \($d.id // "unknown")\nLatest deploy status: \($d.status // "unknown")\nLatest deploy commit: \($d.commit.id // $d.commitId // "unknown")"
             end
           ' "$response_file"
           rm -f "$response_file"
@@ -199,7 +199,7 @@ jobs:
           fi
 
           deploy_id="$(jq -r '(.deploy // .).id // empty' "$response_file")"
-          deploy_status="$(jq -r '(.deploy // .).status // \"queued\"' "$response_file")"
+          deploy_status="$(jq -r '(.deploy // .).status // "queued"' "$response_file")"
           rm -f "$response_file"
 
           echo "Deploy request accepted."
