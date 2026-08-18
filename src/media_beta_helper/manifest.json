@@ -2,7 +2,7 @@
   "manifest_version": 3,
   "name": "KRC MEDIA BETA Helper",
   "description": "Closed-beta helper that prefers YouTube captions and falls back to active-tab audio for the isolated K-Research & Critic media backend.",
-  "version": "0.2.1",
+  "version": "0.2.2",
   "minimum_chrome_version": "116",
   "permissions": [
     "activeTab",
