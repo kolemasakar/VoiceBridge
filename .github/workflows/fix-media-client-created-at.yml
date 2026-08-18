@@ -1,5 +1,6 @@
 name: Fix MEDIA BETA created_at continuity
 
+# Retrigger marker: 2026-08-18 A4.4 metadata continuity
 on:
   push:
     branches:
