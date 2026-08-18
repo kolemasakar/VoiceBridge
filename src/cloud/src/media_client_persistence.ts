@@ -116,7 +116,12 @@ ON CONFLICT (job_id) DO UPDATE SET
   access_code_digest = EXCLUDED.access_code_digest,
   internal_job_id = EXCLUDED.internal_job_id,
   status = EXCLUDED.status,
-  payload = EXCLUDED.payload,
+  payload = jsonb_set(
+    EXCLUDED.payload,
+    '{created_at}',
+    krc_media_client_jobs.payload->'created_at',
+    true
+  ),
   segments = EXCLUDED.segments,
   expires_at = EXCLUDED.expires_at,
   updated_at = EXCLUDED.updated_at;
