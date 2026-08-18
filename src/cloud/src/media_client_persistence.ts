@@ -280,7 +280,8 @@ CREATE INDEX IF NOT EXISTS krc_media_stt_charges_day_idx
   }
 
   private async run(sql: string): Promise<string> {
-    if (!this.databaseUrl) return "";
+    const databaseUrl = this.databaseUrl;
+    if (!databaseUrl) return "";
     return new Promise((resolve, reject) => {
       const child = spawn(
         "psql",
@@ -290,7 +291,7 @@ CREATE INDEX IF NOT EXISTS krc_media_stt_charges_day_idx
           "-A",
           "-t",
           "-F", "\t",
-          "--dbname", this.databaseUrl,
+          "--dbname", databaseUrl,
           "-c", sql
         ],
         {
