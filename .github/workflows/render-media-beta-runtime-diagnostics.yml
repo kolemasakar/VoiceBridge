@@ -1,4 +1,5 @@
 name: Render Media Beta Runtime Diagnostics
+# Trigger: 2026-08-18T04:28Z Russian captions HTTP 500 diagnostic.
 
 on:
   push:
