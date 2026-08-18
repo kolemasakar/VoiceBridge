@@ -1,14 +1,16 @@
 # KRC MEDIA BETA Browser Helper
 Closed-beta Chrome/Edge helper for captions-first YouTube ingestion with audio fallback.
 
-Version: 0.2.1
+Version: 0.2.2
 Status: A4.2 PREVIEW
 
 ## Purpose
 
 This helper is an isolated beta component. It does not replace or modify the validated VoiceBridge translation extension.
 
-It uses the tester browser/network path because direct YouTube acquisition from the current Render/datacenter path is blocked. Version 0.2.1 uses a layered captions-first strategy: first try the current YouTube caption track, then fall back to YouTube's own transcript panel if direct timed-text fetch is empty/blocked. Audio capture and AssemblyAI remain a fallback only when both caption paths are unavailable.
+It uses the tester browser/network path because direct YouTube acquisition from the current Render/datacenter path is blocked. Version 0.2.2 uses a layered captions-first strategy: first try the current YouTube caption track, then fall back to YouTube's own transcript panel if direct timed-text fetch is empty/blocked. Audio capture and AssemblyAI remain a fallback only when both caption paths are unavailable.
+
+Version 0.2.2 also fixes switching from a completed job to a newly created KRCC job. Editing the Job ID now persists immediately and stale terminal UI state no longer disables the captions/audio buttons for the new job.
 
 ## Beta flow
 
@@ -42,10 +44,11 @@ Do not publish this helper to an extension store during A4 beta validation.
 - The active tab must be the same YouTube video used to create the `KRCC_...` job.
 - Use `Use subtitles` first.
 - Manual captions are preferred over automatic captions when no active track determines the choice.
-- Direct signed `timedtext` may return HTTP 200 with an empty body under current YouTube behavior; Helper 0.2.1 treats that as a fallback condition rather than a terminal error.
+- Direct signed `timedtext` may return HTTP 200 with an empty body under current YouTube behavior; Helper 0.2.2 treats that as a fallback condition rather than a terminal error.
 - If direct caption fetch is unavailable, the helper opens/reads YouTube's own transcript panel in the active tab and derives timestamped segments from the rendered transcript.
 - Caption ingestion does not consume AssemblyAI STT seconds.
-- Use `Audio fallback` only when the helper reports both caption paths unavailable.
+- A newly entered Job ID immediately replaces the stored Job ID and is not blocked by a previous job's COMPLETED state.
+- Use `Audio fallback` only when the helper reports both caption paths unavailable, except during an explicit controlled fallback acceptance test.
 - For audio fallback, play the video at normal speed so timestamps remain aligned.
 - Maximum beta duration is 60 minutes.
 - The browser helper never receives or stores the server-side `KRC_MEDIA_ACTION_TOKEN`.
@@ -59,6 +62,7 @@ Implemented:
 - manual vs auto-generated caption metadata;
 - zero-STT caption completion path;
 - same-video matching and per-tester ownership;
+- completed-job to fresh-job UI switching;
 - browser/residential audio fallback;
 - 32 MB audio upload guard and 60-minute duration guard;
 - async UK/RU/EN/auto AssemblyAI fallback;
