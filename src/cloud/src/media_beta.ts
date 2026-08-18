@@ -73,6 +73,20 @@ export class MediaBetaGate {
     );
   }
 
+  restoreUsage(dayUtc: string, usedSeconds: number): void {
+    if (!/^\d{4}-\d{2}-\d{2}$/.test(dayUtc)) {
+      throw new Error("MEDIA BETA durable usage day must use YYYY-MM-DD.");
+    }
+    if (!Number.isFinite(usedSeconds) || usedSeconds < 0) {
+      throw new Error("MEDIA BETA durable usage must be a non-negative number.");
+    }
+    this.usageDayUtc = dayUtc;
+    this.usedSeconds = Math.min(
+      this.dailySttSeconds,
+      Math.max(0, Math.floor(usedSeconds))
+    );
+  }
+
   reserveSttSeconds(
     requestedSeconds: number,
     now = new Date()
