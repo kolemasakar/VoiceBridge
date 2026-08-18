@@ -229,7 +229,10 @@ jobs:
         env:
           GH_TOKEN: ${{ github.token }}
           WORKFLOW_STATUS: ${{ job.status }}
+          WORKSPACE_OUTCOME: ${{ steps.workspace.outcome }}
+          DATABASE_OUTCOME: ${{ steps.database.outcome }}
+          DEPLOY_OUTCOME: ${{ steps.deploy.outcome }}
         shell: bash
         run: |
           set -euo pipefail
-          gh pr comment 28 --repo kolemasakar/VoiceBridge --body "MEDIA BETA A4.4 durability workflow: **${WORKFLOW_STATUS^^}**. Isolated target: \`voicebridge-krc-media-beta-kolemasakar\`. Commit: \`${GITHUB_SHA}\`. No production target was modified."
+          gh pr comment 28 --repo kolemasakar/VoiceBridge --body "MEDIA BETA A4.4 durability workflow: **${WORKFLOW_STATUS^^}**. Stages: workspace=\`${WORKSPACE_OUTCOME}\`, database=\`${DATABASE_OUTCOME}\`, deploy=\`${DEPLOY_OUTCOME}\`. Isolated target: \`voicebridge-krc-media-beta-kolemasakar\`. Commit: \`${GITHUB_SHA}\`. No production target was modified."
