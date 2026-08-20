@@ -1,0 +1,185 @@
+name: Render MEDIA BETA Supadata Config
+
+on:
+  push:
+    branches:
+      - agent/krc-media-transcript
+    paths:
+      - .github/workflows/render-media-beta-supadata-config.yml
+  workflow_dispatch:
+
+permissions:
+  contents: read
+  issues: write
+  pull-requests: write
+
+concurrency:
+  group: render-media-beta-supadata-config
+  cancel-in-progress: false
+
+env:
+  RENDER_API_BASE: https://api.render.com/v1
+  SERVICE_ID: srv-da1kic5bedkc73d6fk60
+  SERVICE_NAME: voicebridge-krc-media-beta-kolemasakar
+  REQUIRED_BRANCH: agent/krc-media-transcript
+  BETA_BASE_URL: https://voicebridge-krc-media-beta-kolemasakar.onrender.com
+
+jobs:
+  configure:
+    runs-on: ubuntu-latest
+    env:
+      RENDER_API_KEY: ${{ secrets.RENDER_API_KEY }}
+      SUPADATA_API_KEY: ${{ secrets.SUPADATA_API_KEY }}
+    steps:
+      - name: Resolve Supadata secret availability
+        id: secret
+        shell: bash
+        run: |
+          set -euo pipefail
+          if [[ -z "${SUPADATA_API_KEY:-}" ]]; then
+            echo "configured=false" >> "$GITHUB_OUTPUT"
+            echo "SUPADATA_API_KEY is not configured in GitHub Actions Secrets. No Render mutation will run."
+          else
+            echo "::add-mask::$SUPADATA_API_KEY"
+            echo "configured=true" >> "$GITHUB_OUTPUT"
+            echo "SUPADATA_API_KEY is configured and masked."
+          fi
+
+      - name: Verify isolated Render target
+        if: steps.secret.outputs.configured == 'true'
+        shell: bash
+        run: |
+          set -euo pipefail
+          test -n "${RENDER_API_KEY:-}" || { echo "RENDER_API_KEY missing" >&2; exit 1; }
+          [[ "${GITHUB_REF_NAME}" == "$REQUIRED_BRANCH" ]] || { echo "Unexpected branch" >&2; exit 1; }
+          tmp="$(mktemp)"
+          code="$(curl -sS -o "$tmp" -w '%{http_code}' \
+            "${RENDER_API_BASE}/services/${SERVICE_ID}" \
+            -H 'Accept: application/json' \
+            -H "Authorization: Bearer ${RENDER_API_KEY}")"
+          [[ "$code" == 200 ]] || { echo "Service lookup failed HTTP $code" >&2; rm -f "$tmp"; exit 1; }
+          name="$(jq -r '.name // empty' "$tmp")"
+          branch="$(jq -r '.branch // empty' "$tmp")"
+          rm -f "$tmp"
+          [[ "$name" == "$SERVICE_NAME" ]] || { echo "Isolation guard failed" >&2; exit 1; }
+          [[ "$branch" == "$REQUIRED_BRANCH" ]] || { echo "Source branch guard failed" >&2; exit 1; }
+          echo "Isolated target verified: $name / $branch"
+
+      - name: Attach Supadata key only to isolated MEDIA BETA
+        if: steps.secret.outputs.configured == 'true'
+        shell: bash
+        run: |
+          set -euo pipefail
+          echo "::add-mask::$SUPADATA_API_KEY"
+          payload="$(jq -nc --arg value "$SUPADATA_API_KEY" '{value:$value}')"
+          tmp="$(mktemp)"
+          code="$(curl -sS -o "$tmp" -w '%{http_code}' \
+            -X PUT "${RENDER_API_BASE}/services/${SERVICE_ID}/env-vars/SUPADATA_API_KEY" \
+            -H 'Accept: application/json' \
+            -H 'Content-Type: application/json' \
+            -H "Authorization: Bearer ${RENDER_API_KEY}" \
+            --data "$payload")"
+          rm -f "$tmp"
+          [[ "$code" == 200 ]] || { echo "Render env update failed HTTP $code" >&2; exit 1; }
+          echo "SUPADATA_API_KEY attached to isolated MEDIA BETA. Value not printed."
+
+      - name: Deploy exact feature-branch commit to isolated MEDIA BETA
+        if: steps.secret.outputs.configured == 'true'
+        id: deploy
+        shell: bash
+        run: |
+          set -euo pipefail
+          payload="$(jq -nc --arg commitId "$GITHUB_SHA" '{commitId:$commitId,clearCache:"do_not_clear"}')"
+          tmp="$(mktemp)"
+          code="$(curl -sS -o "$tmp" -w '%{http_code}' \
+            -X POST "${RENDER_API_BASE}/services/${SERVICE_ID}/deploys" \
+            -H 'Accept: application/json' \
+            -H 'Content-Type: application/json' \
+            -H "Authorization: Bearer ${RENDER_API_KEY}" \
+            --data "$payload")"
+          [[ "$code" == 201 || "$code" == 202 ]] || { echo "Deploy request failed HTTP $code" >&2; rm -f "$tmp"; exit 1; }
+          deploy_id="$(jq -r '(.deploy // .).id // empty' "$tmp")"
+          rm -f "$tmp"
+          test -n "$deploy_id" || { echo "Deploy ID missing" >&2; exit 1; }
+          echo "deploy_id=$deploy_id" >> "$GITHUB_OUTPUT"
+          echo "Isolated deploy accepted: $deploy_id / commit=$GITHUB_SHA"
+
+      - name: Wait for isolated deploy
+        if: steps.secret.outputs.configured == 'true'
+        env:
+          DEPLOY_ID: ${{ steps.deploy.outputs.deploy_id }}
+        shell: bash
+        run: |
+          set -euo pipefail
+          for i in $(seq 1 72); do
+            tmp="$(mktemp)"
+            code="$(curl -sS -o "$tmp" -w '%{http_code}' \
+              "${RENDER_API_BASE}/services/${SERVICE_ID}/deploys/${DEPLOY_ID}" \
+              -H 'Accept: application/json' \
+              -H "Authorization: Bearer ${RENDER_API_KEY}")"
+            [[ "$code" == 200 ]] || { echo "Deploy status failed HTTP $code" >&2; rm -f "$tmp"; exit 1; }
+            status="$(jq -r '(.deploy // .).status // "unknown"' "$tmp")"
+            rm -f "$tmp"
+            case "$status" in
+              live)
+                echo "Isolated deploy is live."
+                exit 0
+                ;;
+              build_failed|update_failed|canceled|deactivated)
+                echo "Isolated deploy failed: $status" >&2
+                exit 1
+                ;;
+            esac
+            sleep 5
+          done
+          echo "Isolated deploy timeout" >&2
+          exit 1
+
+      - name: Verify managed capability without spending transcript credits
+        if: steps.secret.outputs.configured == 'true'
+        shell: bash
+        run: |
+          set -euo pipefail
+          tmp="$(mktemp)"
+          code="$(curl -sS -o "$tmp" -w '%{http_code}' \
+            "${RENDER_API_BASE}/services/${SERVICE_ID}/env-vars/KRC_MEDIA_ACTION_TOKEN" \
+            -H 'Accept: application/json' \
+            -H "Authorization: Bearer ${RENDER_API_KEY}")"
+          [[ "$code" == 200 ]] || { echo "Action token lookup failed HTTP $code" >&2; rm -f "$tmp"; exit 1; }
+          action_token="$(jq -r '(.envVar.value // .value // empty)' "$tmp")"
+          rm -f "$tmp"
+          test -n "$action_token" || { echo "KRC_MEDIA_ACTION_TOKEN missing" >&2; exit 1; }
+          echo "::add-mask::$action_token"
+          code="$(curl -sS --retry 5 --retry-delay 3 --max-time 90 \
+            -o /tmp/capability.json -w '%{http_code}' \
+            "${BETA_BASE_URL}/api/v1/media/managed" \
+            -H 'Accept: application/json' \
+            -H "Authorization: Bearer ${action_token}")"
+          [[ "$code" == 200 ]] || { echo "Managed capability HTTP $code" >&2; exit 1; }
+          jq -e '
+            .mode == "zero_client_managed_beta" and
+            .provider == "supadata" and
+            .configured == true and
+            .native_transcript_credits == 1 and
+            .credit_preflight_required == true and
+            .explicit_user_consent_required == true and
+            .automatic_ai_fallback == false
+          ' /tmp/capability.json >/dev/null
+          jq -c '{mode,provider,configured,native_transcript_credits,credit_preflight_required,explicit_user_consent_required,automatic_ai_fallback}' /tmp/capability.json
+          echo "Managed capability: PASS / zero transcript credits spent"
+
+      - name: Report isolated Supadata configuration state
+        if: always()
+        env:
+          GH_TOKEN: ${{ github.token }}
+          SECRET_CONFIGURED: ${{ steps.secret.outputs.configured }}
+          WORKFLOW_STATUS: ${{ job.status }}
+        shell: bash
+        run: |
+          set -euo pipefail
+          if [[ "$SECRET_CONFIGURED" == "true" ]]; then
+            body="A9.2R isolated Supadata configuration: **${WORKFLOW_STATUS^^}**. Commit: \`${GITHUB_SHA}\`. Target: \`${SERVICE_NAME}\` only. Managed capability was checked without starting a transcript request. Production was not targeted."
+          else
+            body="A9.2R isolated Supadata configuration: **PENDING SECRET**. \`SUPADATA_API_KEY\` is not configured in GitHub Actions Secrets; no Render mutation, deploy, or provider request was performed."
+          fi
+          gh pr comment 28 --repo kolemasakar/VoiceBridge --body "$body"
