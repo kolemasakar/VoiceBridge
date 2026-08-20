@@ -884,7 +884,7 @@ export class MediaClientIngestService {
       if (now - reference <= ttlMs) continue;
       this.jobs.delete(jobId);
       if (this.requestKeys.get(job.request_key) === jobId) {
-        this.requestKeys.delete(jobId);
+        this.requestKeys.delete(job.request_key);
       }
       if (waiting) {
         this.activeJobs = Math.max(0, this.activeJobs - 1);
