@@ -12,6 +12,7 @@ export interface AppConfig {
   mediaBetaCodes?: string[];
   mediaDailySttSeconds?: number;
   assemblyAiApiKey: string | null;
+  supadataApiKey: string | null;
   geminiApiKey: string | null;
   geminiTranslationModel: string;
   translationProvider?: TranslationProviderName;
@@ -128,6 +129,7 @@ export function loadConfig(
       86400
     ),
     assemblyAiApiKey: environment.ASSEMBLYAI_API_KEY || null,
+    supadataApiKey: environment.SUPADATA_API_KEY || null,
     geminiApiKey: environment.GEMINI_API_KEY || null,
     geminiTranslationModel: parseIdentifier(
       environment.GEMINI_TRANSLATION_MODEL,
