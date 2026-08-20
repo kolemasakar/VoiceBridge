@@ -11,6 +11,7 @@ import {
   type ManagedMediaStoreReservation,
   type ManagedNativeTranscriptProvider
 } from "../src/managed_media_service.js";
+import { normalizeMediaUrl } from "../src/media_transcript.js";
 
 const ACCESS_CODE = "abcdefghijkl";
 const URL = "https://youtu.be/durable123";
@@ -201,7 +202,7 @@ test("concurrent duplicate start has a single provider winner", async () => {
 test("persisted processing reservation is not replayed after restart", async () => {
   const store = new SharedStore();
   const provider = new CountingProvider();
-  const sourceUrl = "https://www.youtube.com/watch?v=durable123";
+  const sourceUrl = normalizeMediaUrl(URL);
   const now = new Date().toISOString();
   const record: ManagedMediaStoredRecord = {
     job: {
