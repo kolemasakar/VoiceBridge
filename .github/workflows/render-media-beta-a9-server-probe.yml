@@ -1,0 +1,220 @@
+name: Render MEDIA BETA A9 Server Probe
+
+on:
+  push:
+    branches:
+      - agent/krc-media-transcript
+    paths:
+      - .github/workflows/render-media-beta-a9-server-probe.yml
+
+permissions:
+  contents: read
+
+concurrency:
+  group: render-media-beta-a9-server-probe
+  cancel-in-progress: false
+
+env:
+  RENDER_API_BASE: https://api.render.com/v1
+  SERVICE_ID: srv-da1kic5bedkc73d6fk60
+  SERVICE_NAME: voicebridge-krc-media-beta-kolemasakar
+  REQUIRED_BRANCH: agent/krc-media-transcript
+  BETA_BASE_URL: https://voicebridge-krc-media-beta-kolemasakar.onrender.com
+  PROBE_URL: https://www.youtube.com/watch?v=IzYyKRx7Qwg
+
+jobs:
+  probe:
+    runs-on: ubuntu-latest
+    env:
+      RENDER_API_KEY: ${{ secrets.RENDER_API_KEY }}
+    steps:
+      - name: Verify isolated runtime identity
+        shell: bash
+        run: |
+          set -euo pipefail
+          test -n "${RENDER_API_KEY:-}" || { echo "RENDER_API_KEY missing" >&2; exit 1; }
+          tmp="$(mktemp)"
+          code="$(curl -sS -o "$tmp" -w '%{http_code}' \
+            "${RENDER_API_BASE}/services/${SERVICE_ID}" \
+            -H 'Accept: application/json' \
+            -H "Authorization: Bearer ${RENDER_API_KEY}")"
+          [[ "$code" == 200 ]] || { echo "Service lookup failed HTTP $code" >&2; rm -f "$tmp"; exit 1; }
+          name="$(jq -r '.name // empty' "$tmp")"
+          branch="$(jq -r '.branch // empty' "$tmp")"
+          rm -f "$tmp"
+          [[ "$name" == "$SERVICE_NAME" ]] || { echo "Unexpected service identity" >&2; exit 1; }
+          [[ "$branch" == "$REQUIRED_BRANCH" ]] || { echo "Unexpected service branch: $branch" >&2; exit 1; }
+          echo "Runtime identity: PASS / service=$name / branch=$branch"
+
+      - name: Inspect current deployed commit
+        shell: bash
+        run: |
+          set -euo pipefail
+          tmp="$(mktemp)"
+          code="$(curl -sS --get -o "$tmp" -w '%{http_code}' \
+            "${RENDER_API_BASE}/services/${SERVICE_ID}/deploys" \
+            --data-urlencode 'limit=1' \
+            -H 'Accept: application/json' \
+            -H "Authorization: Bearer ${RENDER_API_KEY}")"
+          [[ "$code" == 200 ]] || { echo "Deploy lookup failed HTTP $code" >&2; rm -f "$tmp"; exit 1; }
+          status="$(jq -r '((.[0].deploy // .[0]).status // "unknown")' "$tmp")"
+          commit="$(jq -r '((.[0].deploy // .[0]).commit.id // (.[0].deploy // .[0]).commitId // "unknown")' "$tmp")"
+          deploy_id="$(jq -r '((.[0].deploy // .[0]).id // "unknown")' "$tmp")"
+          rm -f "$tmp"
+          [[ "$status" == "live" ]] || { echo "Latest isolated deploy is not live: $status" >&2; exit 1; }
+          echo "Runtime deploy: id=$deploy_id / status=$status / commit=$commit"
+
+      - name: Verify EU AssemblyAI runtime configuration
+        shell: bash
+        run: |
+          set -euo pipefail
+          tmp="$(mktemp)"
+          code="$(curl -sS -o "$tmp" -w '%{http_code}' \
+            "${RENDER_API_BASE}/services/${SERVICE_ID}/env-vars/KRC_MEDIA_ASSEMBLYAI_BASE_URL" \
+            -H 'Accept: application/json' \
+            -H "Authorization: Bearer ${RENDER_API_KEY}")"
+          [[ "$code" == 200 ]] || { echo "AssemblyAI base URL lookup failed HTTP $code" >&2; rm -f "$tmp"; exit 1; }
+          value="$(jq -r '(.envVar.value // .value // empty)' "$tmp")"
+          rm -f "$tmp"
+          [[ "$value" == "https://api.eu.assemblyai.com" ]] || { echo "AssemblyAI EU runtime configuration mismatch" >&2; exit 1; }
+          echo "AssemblyAI runtime base URL: EU_CONFIRMED"
+
+      - name: Verify isolated beta health
+        shell: bash
+        run: |
+          set -euo pipefail
+          code="$(curl -sS --retry 5 --retry-delay 3 --max-time 90 -o /tmp/health.json -w '%{http_code}' \
+            "${BETA_BASE_URL}/api/v1/health")"
+          [[ "$code" == 200 ]] || { echo "Beta health failed HTTP $code" >&2; exit 1; }
+          jq -e '
+            .status == "ok" and
+            .capabilities.media_transcript.mode == "closed_beta" and
+            .capabilities.media_transcript.configured == true and
+            (.capabilities.media_transcript.platforms | index("youtube")) != null and
+            .capabilities.media_transcript.subtitle_first == true
+          ' /tmp/health.json >/dev/null
+          jq -c '{status,service,version,media_transcript:.capabilities.media_transcript}' /tmp/health.json
+
+      - name: Load masked beta credentials from isolated Render service
+        id: credentials
+        shell: bash
+        run: |
+          set -euo pipefail
+          get_env_value() {
+            key="$1"
+            tmp="$(mktemp)"
+            code="$(curl -sS -o "$tmp" -w '%{http_code}' \
+              "${RENDER_API_BASE}/services/${SERVICE_ID}/env-vars/${key}" \
+              -H 'Accept: application/json' \
+              -H "Authorization: Bearer ${RENDER_API_KEY}")"
+            [[ "$code" == 200 ]] || { echo "Required runtime credential lookup failed for $key: HTTP $code" >&2; rm -f "$tmp"; return 1; }
+            jq -r '(.envVar.value // .value // empty)' "$tmp"
+            rm -f "$tmp"
+          }
+
+          action_token="$(get_env_value KRC_MEDIA_ACTION_TOKEN)"
+          beta_codes="$(get_env_value KRC_MEDIA_BETA_CODES)"
+          test -n "$action_token" || { echo "KRC_MEDIA_ACTION_TOKEN missing" >&2; exit 1; }
+          test -n "$beta_codes" || { echo "KRC_MEDIA_BETA_CODES missing" >&2; exit 1; }
+          beta_code="${beta_codes%%,*}"
+          beta_code="$(printf '%s' "$beta_code" | sed 's/^[[:space:]]*//;s/[[:space:]]*$//')"
+          test -n "$beta_code" || { echo "No beta code resolved" >&2; exit 1; }
+          echo "::add-mask::$action_token"
+          echo "::add-mask::$beta_codes"
+          echo "::add-mask::$beta_code"
+          printf '%s' "$action_token" > /tmp/krc-action-token
+          printf '%s' "$beta_code" > /tmp/krc-beta-code
+          echo "Masked runtime credentials: READY"
+
+      - name: Start prerecorded YouTube server-side job
+        id: start
+        shell: bash
+        run: |
+          set -euo pipefail
+          action_token="$(cat /tmp/krc-action-token)"
+          beta_code="$(cat /tmp/krc-beta-code)"
+          payload="$(jq -nc --arg url "$PROBE_URL" --arg code "$beta_code" \
+            '{url:$url,language_hint:"auto",beta_access_code:$code}')"
+          http_status="$(curl -sS --max-time 90 -o /tmp/start.json -w '%{http_code}' \
+            -X POST "${BETA_BASE_URL}/api/v1/media/transcriptions" \
+            -H 'Accept: application/json' \
+            -H 'Content-Type: application/json' \
+            -H "Authorization: Bearer ${action_token}" \
+            --data "$payload")"
+          [[ "$http_status" == 202 ]] || {
+            echo "Server-side job start failed HTTP $http_status" >&2
+            jq -c '{error:(.error // null)}' /tmp/start.json 2>/dev/null || true
+            exit 1
+          }
+          job_id="$(jq -r '.job_id // empty' /tmp/start.json)"
+          test -n "$job_id" || { echo "No KRCB job ID returned" >&2; exit 1; }
+          [[ "$job_id" == KRCB_* ]] || { echo "Unexpected job prefix" >&2; exit 1; }
+          echo "job_id=$job_id" >> "$GITHUB_OUTPUT"
+          jq -c '{job_id,status,reused,stt_seconds_charged,segment_count}' /tmp/start.json
+
+      - name: Wait for captions-first completion
+        id: wait
+        env:
+          JOB_ID: ${{ steps.start.outputs.job_id }}
+        shell: bash
+        run: |
+          set -euo pipefail
+          action_token="$(cat /tmp/krc-action-token)"
+          for i in $(seq 1 60); do
+            http_status="$(curl -sS --max-time 30 -o /tmp/status.json -w '%{http_code}' \
+              "${BETA_BASE_URL}/api/v1/media/transcriptions/${JOB_ID}" \
+              -H 'Accept: application/json' \
+              -H "Authorization: Bearer ${action_token}")"
+            [[ "$http_status" == 200 ]] || { echo "Status read failed HTTP $http_status" >&2; exit 1; }
+            status="$(jq -r '.status // "unknown"' /tmp/status.json)"
+            case "$status" in
+              COMPLETED)
+                cp /tmp/status.json /tmp/final.json
+                break
+                ;;
+              FAILED)
+                echo "Server-side probe failed"
+                jq -c '{job_id,status,error,stt_seconds_charged,media}' /tmp/status.json
+                exit 1
+                ;;
+            esac
+            sleep 5
+          done
+          test -f /tmp/final.json || { echo "Server-side probe timed out" >&2; exit 1; }
+          jq -e '
+            .status == "COMPLETED" and
+            .transcript_source == "youtube_captions" and
+            .stt_seconds_charged == 0 and
+            (.segment_count > 0) and
+            .error == null
+          ' /tmp/final.json >/dev/null || {
+            echo "Probe completed outside captions-first acceptance contract" >&2
+            jq -c '{job_id,status,transcript_source,stt_seconds_charged,segment_count,error,media}' /tmp/final.json
+            exit 1
+          }
+          jq -c '{job_id,status,transcript_source,detected_language,stt_seconds_charged,segment_count,media}' /tmp/final.json
+
+      - name: Verify timestamped transcript segments
+        env:
+          JOB_ID: ${{ steps.start.outputs.job_id }}
+        shell: bash
+        run: |
+          set -euo pipefail
+          action_token="$(cat /tmp/krc-action-token)"
+          http_status="$(curl -sS --max-time 30 -o /tmp/segments.json -w '%{http_code}' \
+            "${BETA_BASE_URL}/api/v1/media/transcriptions/${JOB_ID}/segments?cursor=0&limit=20" \
+            -H 'Accept: application/json' \
+            -H "Authorization: Bearer ${action_token}")"
+          [[ "$http_status" == 200 ]] || { echo "Segment read failed HTTP $http_status" >&2; exit 1; }
+          jq -e '
+            .status == "COMPLETED" and
+            (.segments | length) > 0 and
+            all(.segments[];
+              (.start_ms | type) == "number" and
+              (.end_ms | type) == "number" and
+              (.text | type) == "string" and
+              (.text | length) > 0
+            )
+          ' /tmp/segments.json >/dev/null
+          jq -c '{job_id,status,cursor,next_cursor,returned_segments:(.segments|length)}' /tmp/segments.json
+          echo "A9.2 prerecorded YouTube captions-first probe: PASS"
