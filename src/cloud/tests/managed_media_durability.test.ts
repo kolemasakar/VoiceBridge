@@ -199,7 +199,7 @@ test("concurrent duplicate start has a single provider winner", async () => {
   assert.equal(provider.transcriptCalls, 1);
 });
 
-test("persisted processing reservation is not replayed after restart", async () => {
+test("persisted processing reservation is terminally blocked after restart and never replayed", async () => {
   const store = new SharedStore();
   const provider = new CountingProvider();
   const sourceUrl = normalizeMediaUrl(URL);
@@ -240,9 +240,20 @@ test("persisted processing reservation is not replayed after restart", async () 
   );
   const duplicate = await restarted.startNative(input());
   assert.equal(duplicate.job_id, record.job.job_id);
-  assert.equal(duplicate.status, "PROCESSING");
+  assert.equal(duplicate.status, "FAILED");
   assert.equal(duplicate.reused, true);
   assert.equal(duplicate.credit_charge_uncertain, true);
+  assert.equal(
+    duplicate.error?.code,
+    "MANAGED_PROVIDER_RESULT_UNCERTAIN_RETRY_BLOCKED"
+  );
+  assert.equal(duplicate.error?.retryable, false);
+  assert.equal(provider.transcriptCalls, 0);
+  assert.equal(provider.quoteCalls, 0);
+
+  const recovered = await restarted.get(record.job.job_id);
+  assert.equal(recovered?.status, "FAILED");
+  assert.equal(recovered?.error?.retryable, false);
   assert.equal(provider.transcriptCalls, 0);
   assert.equal(provider.quoteCalls, 0);
 });
