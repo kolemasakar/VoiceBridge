@@ -85,4 +85,4 @@ jobs:
           set -euo pipefail
           gh pr comment 28 --repo kolemasakar/VoiceBridge --body "A9.3 post-failure credit balance check: **${STATUS^^}**. Isolated target: \`${SERVICE_NAME}\` only. Supadata plan: \`${PLAN:-unknown}\`; available credits: \`${AVAILABLE:-unknown}\`. This workflow used preflight only and did not start a transcript request; production was not targeted."
 
-# rerun 2026-08-20 after clean-url HTTP 500
+# rerun 2026-08-21 after reservation-fix final acceptance checkpoint
