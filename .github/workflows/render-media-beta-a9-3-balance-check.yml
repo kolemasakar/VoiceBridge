@@ -1,0 +1,86 @@
+name: Render MEDIA BETA A9.3 Balance Check
+
+on:
+  push:
+    branches:
+      - agent/krc-media-transcript
+    paths:
+      - .github/workflows/render-media-beta-a9-3-balance-check.yml
+
+permissions:
+  contents: read
+  issues: write
+  pull-requests: write
+
+env:
+  RENDER_API_BASE: https://api.render.com/v1
+  SERVICE_ID: srv-da1kic5bedkc73d6fk60
+  SERVICE_NAME: voicebridge-krc-media-beta-kolemasakar
+  REQUIRED_BRANCH: agent/krc-media-transcript
+  BETA_BASE_URL: https://voicebridge-krc-media-beta-kolemasakar.onrender.com
+  PROBE_URL: https://www.youtube.com/watch?v=IzYyKRx7Qwg&krc_a93=balance_check
+
+jobs:
+  check:
+    runs-on: ubuntu-latest
+    env:
+      RENDER_API_KEY: ${{ secrets.RENDER_API_KEY }}
+    steps:
+      - name: Verify isolated target and read masked request credentials
+        shell: bash
+        run: |
+          set -euo pipefail
+          test -n "${RENDER_API_KEY:-}" || { echo "RENDER_API_KEY missing" >&2; exit 1; }
+          echo "::add-mask::$RENDER_API_KEY"
+          [[ "$GITHUB_REF_NAME" == "$REQUIRED_BRANCH" ]] || exit 1
+          tmp="$(mktemp)"
+          code="$(curl -sS -o "$tmp" -w '%{http_code}' "${RENDER_API_BASE}/services/${SERVICE_ID}" -H 'Accept: application/json' -H "Authorization: Bearer ${RENDER_API_KEY}")"
+          [[ "$code" == 200 ]] || { rm -f "$tmp"; exit 1; }
+          [[ "$(jq -r '.name // empty' "$tmp")" == "$SERVICE_NAME" ]] || { rm -f "$tmp"; exit 1; }
+          [[ "$(jq -r '.branch // empty' "$tmp")" == "$REQUIRED_BRANCH" ]] || { rm -f "$tmp"; exit 1; }
+          rm -f "$tmp"
+          get_env_value() {
+            key="$1"
+            tmp="$(mktemp)"
+            code="$(curl -sS -o "$tmp" -w '%{http_code}' "${RENDER_API_BASE}/services/${SERVICE_ID}/env-vars/${key}" -H 'Accept: application/json' -H "Authorization: Bearer ${RENDER_API_KEY}")"
+            [[ "$code" == 200 ]] || { rm -f "$tmp"; return 1; }
+            jq -r '(.envVar.value // .value // empty)' "$tmp"
+            rm -f "$tmp"
+          }
+          action_token="$(get_env_value KRC_MEDIA_ACTION_TOKEN)"
+          beta_codes="$(get_env_value KRC_MEDIA_BETA_CODES)"
+          beta_code="${beta_codes%%,*}"
+          beta_code="$(printf '%s' "$beta_code" | sed 's/^[[:space:]]*//;s/[[:space:]]*$//')"
+          test -n "$action_token" && test -n "$beta_code"
+          echo "::add-mask::$action_token"
+          echo "::add-mask::$beta_code"
+          printf '%s' "$action_token" > /tmp/krc-action-token
+          printf '%s' "$beta_code" > /tmp/krc-beta-code
+
+      - name: Read Supadata credit balance without starting transcript
+        id: balance
+        shell: bash
+        run: |
+          set -euo pipefail
+          action_token="$(cat /tmp/krc-action-token)"
+          beta_code="$(cat /tmp/krc-beta-code)"
+          payload="$(jq -nc --arg url "$PROBE_URL" --arg code "$beta_code" '{url:$url,language_hint:"auto",beta_access_code:$code}')"
+          http_status="$(curl -sS --max-time 90 -o /tmp/preflight.json -w '%{http_code}' -X POST "${BETA_BASE_URL}/api/v1/media/managed/preflight" -H 'Accept: application/json' -H 'Content-Type: application/json' -H "Authorization: Bearer ${action_token}" --data "$payload")"
+          [[ "$http_status" == 200 ]] || { echo "Preflight failed HTTP $http_status" >&2; exit 1; }
+          available="$(jq -r '.credits_available' /tmp/preflight.json)"
+          plan="$(jq -r '.plan // "unknown"' /tmp/preflight.json)"
+          echo "available=$available" >> "$GITHUB_OUTPUT"
+          echo "plan=$plan" >> "$GITHUB_OUTPUT"
+          echo "Balance check: available=$available / no transcript request started"
+
+      - name: Report sanitized balance
+        if: always()
+        env:
+          GH_TOKEN: ${{ github.token }}
+          STATUS: ${{ job.status }}
+          AVAILABLE: ${{ steps.balance.outputs.available }}
+          PLAN: ${{ steps.balance.outputs.plan }}
+        shell: bash
+        run: |
+          set -euo pipefail
+          gh pr comment 28 --repo kolemasakar/VoiceBridge --body "A9.3 post-failure credit balance check: **${STATUS^^}**. Isolated target: \`${SERVICE_NAME}\` only. Supadata plan: \`${PLAN:-unknown}\`; available credits: \`${AVAILABLE:-unknown}\`. This workflow used preflight only and did not start a transcript request; production was not targeted."
