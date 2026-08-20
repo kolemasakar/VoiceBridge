@@ -25,18 +25,25 @@ jobs:
     runs-on: ubuntu-latest
     env:
       RENDER_API_KEY: ${{ secrets.RENDER_API_KEY }}
+      SUPADATA_API_KEY: ${{ secrets.SUPADATA_API_KEY }}
       GH_TOKEN: ${{ github.token }}
     steps:
-      - name: Read current managed preflight only
+      - name: Read current isolated runtime state only
         shell: bash
         run: |
           set +e
           status="FAILURE"
           available="unknown"
           http_status="unknown"
+          live_commit="unknown"
+          deploy_status="unknown"
+          provider_key_match="unknown"
           test -n "${RENDER_API_KEY:-}" || exit 1
+          test -n "${SUPADATA_API_KEY:-}" || exit 1
           echo "::add-mask::$RENDER_API_KEY"
+          echo "::add-mask::$SUPADATA_API_KEY"
           [[ "$GITHUB_REF_NAME" == "$REQUIRED_BRANCH" ]] || exit 1
+
           get_env() {
             key="$1"
             tmp="$(mktemp)"
@@ -45,6 +52,23 @@ jobs:
             jq -r '(.envVar.value // .value // empty)' "$tmp"
             rm -f "$tmp"
           }
+
+          tmp="$(mktemp)"
+          code="$(curl -sS --get -o "$tmp" -w '%{http_code}' "${RENDER_API_BASE}/services/${SERVICE_ID}/deploys" --data-urlencode 'limit=1' -H 'Accept: application/json' -H "Authorization: Bearer ${RENDER_API_KEY}")"
+          if [[ "$code" == 200 ]]; then
+            deploy_status="$(jq -r '((.[0].deploy // .[0]).status // "unknown")' "$tmp")"
+            live_commit="$(jq -r '((.[0].deploy // .[0]).commit.id // (.[0].deploy // .[0]).commitId // "unknown")' "$tmp")"
+          fi
+          rm -f "$tmp"
+
+          render_supadata="$(get_env SUPADATA_API_KEY)"
+          echo "::add-mask::$render_supadata"
+          if [[ -n "$render_supadata" && "$render_supadata" == "$SUPADATA_API_KEY" ]]; then
+            provider_key_match="true"
+          else
+            provider_key_match="false"
+          fi
+
           action_token="$(get_env KRC_MEDIA_ACTION_TOKEN)"
           beta_codes="$(get_env KRC_MEDIA_BETA_CODES)"
           beta_code="${beta_codes%%,*}"
@@ -57,7 +81,8 @@ jobs:
             available="$(jq -r '.credits_available // "unknown"' /tmp/observer.json)"
             status="SUCCESS"
           fi
-          gh pr comment 28 --repo kolemasakar/VoiceBridge --body "A9.3 read-only observer: **${status}**. Preflight HTTP: \`${http_status}\`; available credits: \`${available}\`. Observer did not deploy, mutate configuration, or start a transcript request."
+
+          gh pr comment 28 --repo kolemasakar/VoiceBridge --body "A9.3 read-only observer: **${status}**. Latest deploy status: \`${deploy_status}\`; live commit: \`${live_commit}\`; runtime provider key matches repository secret: \`${provider_key_match}\`; preflight HTTP: \`${http_status}\`; available credits: \`${available}\`. Observer did not deploy, mutate configuration, or start a transcript request."
           [[ "$status" == SUCCESS ]]
 
-# trigger after first creation
+# trigger runtime-state observer
