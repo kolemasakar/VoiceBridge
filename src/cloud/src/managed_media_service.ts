@@ -1,4 +1,4 @@
-import { randomUUID } from "node:crypto";
+import { createHash, randomUUID } from "node:crypto";
 import { MediaBetaGate } from "./media_beta.js";
 import {
   MediaTranscriptError,
@@ -44,6 +44,7 @@ export interface ManagedMediaCreditPreflight {
 }
 
 export type ManagedMediaStatus =
+  | "PROCESSING"
   | "COMPLETED"
   | "AWAITING_AI_CONSENT"
   | "FAILED";
@@ -61,6 +62,8 @@ export interface ManagedMediaJobView {
   available_languages: string[];
   credits_charged: number;
   credits_remaining_estimate: number;
+  credit_charge_uncertain: boolean;
+  reused: boolean;
   segment_count: number;
   transcript_characters: number;
   ai_fallback_requires_new_consent: boolean;
@@ -71,8 +74,27 @@ export interface ManagedMediaJobView {
   };
 }
 
-interface ManagedMediaJob extends ManagedMediaJobView {
+export interface ManagedMediaStoredRecord {
+  job: ManagedMediaJobView;
+  requestKey: string;
+  accessCodeDigest: string;
   segments: MediaTranscriptSegment[];
+  expiresAt: string;
+}
+
+export interface ManagedMediaStoreReservation {
+  created: boolean;
+  record: ManagedMediaStoredRecord;
+}
+
+export interface ManagedMediaJobStore {
+  readonly durable: boolean;
+  readonly kind: "memory" | "postgres";
+  ready(): Promise<void>;
+  purgeExpired(): Promise<void>;
+  reserve(record: ManagedMediaStoredRecord): Promise<ManagedMediaStoreReservation>;
+  put(record: ManagedMediaStoredRecord): Promise<void>;
+  get(jobId: string): Promise<ManagedMediaStoredRecord | null>;
 }
 
 export interface ManagedMediaPage {
@@ -89,6 +111,89 @@ export interface ManagedNativeTranscriptProvider {
     url: string,
     languageHint: MediaLanguageHint
   ): Promise<SupadataNativeTranscriptResult>;
+}
+
+export interface ManagedMediaServiceOptions {
+  store?: ManagedMediaJobStore;
+  jobTtlSeconds?: number;
+}
+
+function cloneRecord(record: ManagedMediaStoredRecord): ManagedMediaStoredRecord {
+  return {
+    job: {
+      ...record.job,
+      available_languages: [...record.job.available_languages],
+      error: record.job.error ? { ...record.job.error } : null
+    },
+    requestKey: record.requestKey,
+    accessCodeDigest: record.accessCodeDigest,
+    segments: record.segments.map((segment) => ({ ...segment })),
+    expiresAt: record.expiresAt
+  };
+}
+
+class ManagedMediaMemoryStore implements ManagedMediaJobStore {
+  readonly durable = false;
+  readonly kind = "memory" as const;
+  private readonly byJobId = new Map<string, ManagedMediaStoredRecord>();
+  private readonly byRequestKey = new Map<string, string>();
+
+  async ready(): Promise<void> {}
+
+  async purgeExpired(): Promise<void> {
+    const now = Date.now();
+    for (const [jobId, record] of this.byJobId.entries()) {
+      if (Date.parse(record.expiresAt) > now) continue;
+      this.byJobId.delete(jobId);
+      if (this.byRequestKey.get(record.requestKey) === jobId) {
+        this.byRequestKey.delete(record.requestKey);
+      }
+    }
+  }
+
+  async reserve(
+    record: ManagedMediaStoredRecord
+  ): Promise<ManagedMediaStoreReservation> {
+    await this.purgeExpired();
+    const existingId = this.byRequestKey.get(record.requestKey);
+    if (existingId) {
+      const existing = this.byJobId.get(existingId);
+      if (existing) return { created: false, record: cloneRecord(existing) };
+    }
+    const cloned = cloneRecord(record);
+    this.byJobId.set(record.job.job_id, cloned);
+    this.byRequestKey.set(record.requestKey, record.job.job_id);
+    return { created: true, record: cloneRecord(cloned) };
+  }
+
+  async put(record: ManagedMediaStoredRecord): Promise<void> {
+    const cloned = cloneRecord(record);
+    this.byJobId.set(record.job.job_id, cloned);
+    this.byRequestKey.set(record.requestKey, record.job.job_id);
+  }
+
+  async get(jobId: string): Promise<ManagedMediaStoredRecord | null> {
+    await this.purgeExpired();
+    const record = this.byJobId.get(jobId);
+    return record ? cloneRecord(record) : null;
+  }
+}
+
+export function managedMediaAccessDigest(accessCode: string): string {
+  return createHash("sha256").update(accessCode, "utf8").digest("hex");
+}
+
+export function managedMediaRequestKey(
+  normalizedUrl: string,
+  languageHint: MediaLanguageHint,
+  accessCode: string
+): string {
+  return createHash("sha256")
+    .update(
+      `supadata|native|${normalizedUrl}|${languageHint}|${managedMediaAccessDigest(accessCode)}`,
+      "utf8"
+    )
+    .digest("hex");
 }
 
 function parseLanguageHint(value: unknown): MediaLanguageHint | null {
@@ -162,16 +267,25 @@ export class ManagedMediaService {
   readonly nativeCreditCost = 1 as const;
   readonly requiresExplicitConsent = true as const;
   readonly automaticAiFallback = false as const;
-  private readonly jobs = new Map<string, ManagedMediaJob>();
+  readonly durableStore: boolean;
+  readonly storeKind: "memory" | "postgres";
   private readonly transcriptProvider: ManagedNativeTranscriptProvider | null;
+  private readonly store: ManagedMediaJobStore;
+  private readonly jobTtlSeconds: number;
+  private storeReady: Promise<void> | null = null;
 
   constructor(
     private readonly betaGate: MediaBetaGate,
     supadataApiKey: string | null,
-    provider?: ManagedNativeTranscriptProvider
+    provider?: ManagedNativeTranscriptProvider,
+    options: ManagedMediaServiceOptions = {}
   ) {
     this.transcriptProvider = provider ||
       (supadataApiKey ? new SupadataProvider(supadataApiKey) : null);
+    this.store = options.store || new ManagedMediaMemoryStore();
+    this.jobTtlSeconds = options.jobTtlSeconds ?? 3600;
+    this.durableStore = this.store.durable;
+    this.storeKind = this.store.kind;
     this.configured = betaGate.configured && this.transcriptProvider !== null;
   }
 
@@ -192,6 +306,34 @@ export class ManagedMediaService {
         true
       );
     }
+  }
+
+  private async ensureStore(): Promise<void> {
+    if (!this.storeReady) {
+      this.storeReady = (async () => {
+        await this.store.ready();
+        await this.store.purgeExpired();
+      })().catch((error) => {
+        this.storeReady = null;
+        throw error;
+      });
+    }
+    try {
+      await this.storeReady;
+    } catch {
+      throw new MediaTranscriptError(
+        "MANAGED_DURABLE_STORE_UNAVAILABLE",
+        "The managed media durable store is temporarily unavailable.",
+        503,
+        true
+      );
+    }
+  }
+
+  private expiryFrom(updatedAt: string): string {
+    return new Date(
+      Date.parse(updatedAt) + this.jobTtlSeconds * 1000
+    ).toISOString();
   }
 
   async preflight(
@@ -219,6 +361,7 @@ export class ManagedMediaService {
 
   async startNative(input: ManagedMediaNativeInput): Promise<ManagedMediaJobView> {
     this.authorize(input.beta_access_code);
+    await this.ensureStore();
     const quote = await this.transcriptProvider!.quoteNative();
     if (!quote.can_continue) {
       throw new MediaTranscriptError(
@@ -237,13 +380,14 @@ export class ManagedMediaService {
       );
     }
 
+    const sourceUrl = normalizeMediaUrl(input.url);
     const now = new Date().toISOString();
-    const job: ManagedMediaJob = {
+    const job: ManagedMediaJobView = {
       job_id: `KRCM_${randomUUID()}`,
-      status: "FAILED",
+      status: "PROCESSING",
       created_at: now,
       updated_at: now,
-      source_url: normalizeMediaUrl(input.url),
+      source_url: sourceUrl,
       language_hint: input.language_hint,
       provider: "supadata",
       provider_mode: "native",
@@ -251,38 +395,66 @@ export class ManagedMediaService {
       available_languages: [],
       credits_charged: 0,
       credits_remaining_estimate: quote.remaining_credits,
+      credit_charge_uncertain: true,
+      reused: false,
       segment_count: 0,
       transcript_characters: 0,
       ai_fallback_requires_new_consent: true,
-      error: null,
-      segments: []
+      error: null
     };
-    this.jobs.set(job.job_id, job);
+    const record: ManagedMediaStoredRecord = {
+      job,
+      requestKey: managedMediaRequestKey(
+        sourceUrl,
+        input.language_hint,
+        input.beta_access_code
+      ),
+      accessCodeDigest: managedMediaAccessDigest(input.beta_access_code),
+      segments: [],
+      expiresAt: this.expiryFrom(now)
+    };
+    const reservation = await this.store.reserve(record);
+    if (!reservation.created) {
+      return this.publicJob(reservation.record.job, true);
+    }
 
     try {
       const result = await this.transcriptProvider!.getNativeTranscript(
-        job.source_url,
-        job.language_hint
+        sourceUrl,
+        input.language_hint
       );
-      job.credits_charged = result.billable_credits;
-      job.credits_remaining_estimate = Math.max(
-        0,
-        quote.remaining_credits - result.billable_credits
-      );
-      if (result.status === "unavailable") {
-        job.status = "AWAITING_AI_CONSENT";
-        job.updated_at = new Date().toISOString();
-        return this.publicJob(job);
-      }
-
-      job.status = "COMPLETED";
-      job.detected_language = result.language;
-      job.available_languages = [...result.available_languages];
-      job.segments = result.segments.map((segment) => ({ ...segment }));
-      job.segment_count = result.segments.length;
-      job.transcript_characters = result.transcript_text.length;
-      job.updated_at = new Date().toISOString();
-      return this.publicJob(job);
+      const updatedAt = new Date().toISOString();
+      const updated: ManagedMediaStoredRecord = {
+        ...record,
+        job: {
+          ...job,
+          status: result.status === "unavailable"
+            ? "AWAITING_AI_CONSENT"
+            : "COMPLETED",
+          updated_at: updatedAt,
+          detected_language: result.status === "completed" ? result.language : null,
+          available_languages: result.status === "completed"
+            ? [...result.available_languages]
+            : [],
+          credits_charged: result.billable_credits,
+          credits_remaining_estimate: Math.max(
+            0,
+            quote.remaining_credits - result.billable_credits
+          ),
+          credit_charge_uncertain: false,
+          segment_count: result.status === "completed" ? result.segments.length : 0,
+          transcript_characters: result.status === "completed"
+            ? result.transcript_text.length
+            : 0,
+          error: null
+        },
+        segments: result.status === "completed"
+          ? result.segments.map((segment) => ({ ...segment }))
+          : [],
+        expiresAt: this.expiryFrom(updatedAt)
+      };
+      await this.store.put(updated);
+      return this.publicJob(updated.job, false);
     } catch (error) {
       const normalized = error instanceof MediaTranscriptError
         ? error
@@ -292,57 +464,61 @@ export class ManagedMediaService {
           500,
           true
         );
-      job.status = "FAILED";
-      job.error = {
-        code: normalized.code,
-        message: normalized.message,
-        retryable: normalized.retryable
+      const updatedAt = new Date().toISOString();
+      const failed: ManagedMediaStoredRecord = {
+        ...record,
+        job: {
+          ...job,
+          status: "FAILED",
+          updated_at: updatedAt,
+          credit_charge_uncertain: true,
+          error: {
+            code: normalized.code,
+            message: normalized.message,
+            retryable: false
+          }
+        },
+        expiresAt: this.expiryFrom(updatedAt)
       };
-      job.updated_at = new Date().toISOString();
-      return this.publicJob(job);
+      await this.store.put(failed);
+      return this.publicJob(failed.job, false);
     }
   }
 
-  get(jobId: string): ManagedMediaJobView | null {
-    const job = this.jobs.get(jobId);
-    return job ? this.publicJob(job) : null;
+  async get(jobId: string): Promise<ManagedMediaJobView | null> {
+    await this.ensureStore();
+    const record = await this.store.get(jobId);
+    return record ? this.publicJob(record.job, false) : null;
   }
 
-  page(jobId: string, cursor: number, limit: number): ManagedMediaPage | null {
-    const job = this.jobs.get(jobId);
-    if (!job) return null;
+  async page(
+    jobId: string,
+    cursor: number,
+    limit: number
+  ): Promise<ManagedMediaPage | null> {
+    await this.ensureStore();
+    const record = await this.store.get(jobId);
+    if (!record) return null;
     const safeCursor = Math.max(0, Math.floor(cursor));
     const safeLimit = Math.max(1, Math.min(50, Math.floor(limit)));
-    const segments = job.status === "COMPLETED"
-      ? job.segments.slice(safeCursor, safeCursor + safeLimit)
+    const segments = record.job.status === "COMPLETED"
+      ? record.segments.slice(safeCursor, safeCursor + safeLimit)
       : [];
     const next = safeCursor + segments.length;
     return {
-      job_id: job.job_id,
-      status: job.status,
+      job_id: record.job.job_id,
+      status: record.job.status,
       cursor: safeCursor,
-      next_cursor: next < job.segments.length ? next : null,
+      next_cursor: next < record.segments.length ? next : null,
       segments: segments.map((segment) => ({ ...segment }))
     };
   }
 
-  private publicJob(job: ManagedMediaJob): ManagedMediaJobView {
+  private publicJob(job: ManagedMediaJobView, reused: boolean): ManagedMediaJobView {
     return {
-      job_id: job.job_id,
-      status: job.status,
-      created_at: job.created_at,
-      updated_at: job.updated_at,
-      source_url: job.source_url,
-      language_hint: job.language_hint,
-      provider: job.provider,
-      provider_mode: job.provider_mode,
-      detected_language: job.detected_language,
+      ...job,
+      reused,
       available_languages: [...job.available_languages],
-      credits_charged: job.credits_charged,
-      credits_remaining_estimate: job.credits_remaining_estimate,
-      segment_count: job.segment_count,
-      transcript_characters: job.transcript_characters,
-      ai_fallback_requires_new_consent: job.ai_fallback_requires_new_consent,
       error: job.error ? { ...job.error } : null
     };
   }
