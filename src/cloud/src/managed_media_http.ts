@@ -3,6 +3,7 @@ import { authenticate } from "./auth.js";
 import type { AppConfig } from "./config.js";
 import { createRequestContext, type RequestContext } from "./identifiers.js";
 import { MediaBetaGate } from "./media_beta.js";
+import { ManagedMediaPersistentStore } from "./managed_media_persistence.js";
 import {
   ManagedMediaService,
   parseManagedMediaNativeInput,
@@ -122,15 +123,28 @@ function pagination(requestUrl: URL): { cursor: number; limit: number } {
   return { cursor, limit };
 }
 
-export function createManagedMediaHttpHandler(
-  config: AppConfig,
-  service = new ManagedMediaService(
+function defaultManagedService(config: AppConfig): ManagedMediaService {
+  const databaseUrl = process.env.KRC_MEDIA_DATABASE_URL?.trim() || null;
+  const store = databaseUrl
+    ? new ManagedMediaPersistentStore(databaseUrl)
+    : undefined;
+  return new ManagedMediaService(
     new MediaBetaGate(
       config.mediaBetaCodes ?? [],
       config.mediaDailySttSeconds ?? 7200
     ),
-    config.supadataApiKey ?? null
-  )
+    config.supadataApiKey ?? null,
+    undefined,
+    {
+      ...(store ? { store } : {}),
+      jobTtlSeconds: config.mediaJobTtlSeconds ?? 3600
+    }
+  );
+}
+
+export function createManagedMediaHttpHandler(
+  config: AppConfig,
+  service = defaultManagedService(config)
 ) {
   const capability = {
     mode: "zero_client_managed_beta",
@@ -141,7 +155,10 @@ export function createManagedMediaHttpHandler(
     credit_preflight_required: true,
     explicit_user_consent_required: true,
     consent_options: { approve: 1, reject: 2 },
-    automatic_ai_fallback: false
+    automatic_ai_fallback: false,
+    durable_store: service.storeKind,
+    restart_resilient_jobs: service.durableStore,
+    duplicate_start_reuses_job: true
   } as const;
 
   const handle = async (
@@ -233,7 +250,7 @@ export function createManagedMediaHttpHandler(
       const segmentsMatch = SEGMENTS_PATH.exec(path);
       if (method === "GET" && segmentsMatch?.[1]) {
         const { cursor, limit } = pagination(requestUrl);
-        const page = service.page(segmentsMatch[1], cursor, limit);
+        const page = await service.page(segmentsMatch[1], cursor, limit);
         if (!page) {
           throw new MediaTranscriptError(
             "MEDIA_TRANSCRIPT_NOT_FOUND",
@@ -254,7 +271,7 @@ export function createManagedMediaHttpHandler(
 
       const jobMatch = JOB_PATH.exec(path);
       if (method === "GET" && jobMatch?.[1]) {
-        const job = service.get(jobMatch[1]);
+        const job = await service.get(jobMatch[1]);
         if (!job) {
           throw new MediaTranscriptError(
             "MEDIA_TRANSCRIPT_NOT_FOUND",
