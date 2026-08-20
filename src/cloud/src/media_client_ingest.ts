@@ -13,7 +13,9 @@ import {
   type MediaTranscriptStatus
 } from "./media_transcript.js";
 
-const ASSEMBLYAI_BASE_URL = "https://api.assemblyai.com";
+const ASSEMBLYAI_BASE_URL = (
+  process.env.KRC_MEDIA_ASSEMBLYAI_BASE_URL || "https://api.assemblyai.com"
+).replace(/\/+$/, "");
 const ASSEMBLYAI_ASYNC_MODEL = "universal-2";
 const COMMAND_TIMEOUT_MS = 120000;
 const TRANSCRIPTION_TIMEOUT_MS = 20 * 60 * 1000;
@@ -882,7 +884,7 @@ export class MediaClientIngestService {
       if (now - reference <= ttlMs) continue;
       this.jobs.delete(jobId);
       if (this.requestKeys.get(job.request_key) === jobId) {
-        this.requestKeys.delete(job.request_key);
+        this.requestKeys.delete(jobId);
       }
       if (waiting) {
         this.activeJobs = Math.max(0, this.activeJobs - 1);
