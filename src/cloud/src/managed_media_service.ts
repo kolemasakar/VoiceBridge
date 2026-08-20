@@ -92,6 +92,7 @@ export interface ManagedMediaJobStore {
   readonly kind: "memory" | "postgres";
   ready(): Promise<void>;
   purgeExpired(): Promise<void>;
+  findByRequestKey(requestKey: string): Promise<ManagedMediaStoredRecord | null>;
   reserve(record: ManagedMediaStoredRecord): Promise<ManagedMediaStoreReservation>;
   put(record: ManagedMediaStoredRecord): Promise<void>;
   get(jobId: string): Promise<ManagedMediaStoredRecord | null>;
@@ -151,15 +152,22 @@ class ManagedMediaMemoryStore implements ManagedMediaJobStore {
     }
   }
 
+  async findByRequestKey(
+    requestKey: string
+  ): Promise<ManagedMediaStoredRecord | null> {
+    await this.purgeExpired();
+    const jobId = this.byRequestKey.get(requestKey);
+    if (!jobId) return null;
+    const record = this.byJobId.get(jobId);
+    return record ? cloneRecord(record) : null;
+  }
+
   async reserve(
     record: ManagedMediaStoredRecord
   ): Promise<ManagedMediaStoreReservation> {
     await this.purgeExpired();
-    const existingId = this.byRequestKey.get(record.requestKey);
-    if (existingId) {
-      const existing = this.byJobId.get(existingId);
-      if (existing) return { created: false, record: cloneRecord(existing) };
-    }
+    const existing = await this.findByRequestKey(record.requestKey);
+    if (existing) return { created: false, record: existing };
     const cloned = cloneRecord(record);
     this.byJobId.set(record.job.job_id, cloned);
     this.byRequestKey.set(record.requestKey, record.job.job_id);
@@ -362,6 +370,15 @@ export class ManagedMediaService {
   async startNative(input: ManagedMediaNativeInput): Promise<ManagedMediaJobView> {
     this.authorize(input.beta_access_code);
     await this.ensureStore();
+    const sourceUrl = normalizeMediaUrl(input.url);
+    const requestKey = managedMediaRequestKey(
+      sourceUrl,
+      input.language_hint,
+      input.beta_access_code
+    );
+    const existing = await this.store.findByRequestKey(requestKey);
+    if (existing) return this.publicJob(existing.job, true);
+
     const quote = await this.transcriptProvider!.quoteNative();
     if (!quote.can_continue) {
       throw new MediaTranscriptError(
@@ -380,7 +397,6 @@ export class ManagedMediaService {
       );
     }
 
-    const sourceUrl = normalizeMediaUrl(input.url);
     const now = new Date().toISOString();
     const job: ManagedMediaJobView = {
       job_id: `KRCM_${randomUUID()}`,
@@ -404,11 +420,7 @@ export class ManagedMediaService {
     };
     const record: ManagedMediaStoredRecord = {
       job,
-      requestKey: managedMediaRequestKey(
-        sourceUrl,
-        input.language_hint,
-        input.beta_access_code
-      ),
+      requestKey,
       accessCodeDigest: managedMediaAccessDigest(input.beta_access_code),
       segments: [],
       expiresAt: this.expiryFrom(now)
