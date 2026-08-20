@@ -14,7 +14,9 @@ import {
 } from "./media_transcript.js";
 import { tryYoutubeCaptions } from "./youtube_captions.js";
 
-const ASSEMBLYAI_BASE_URL = "https://api.assemblyai.com";
+const ASSEMBLYAI_BASE_URL = (
+  process.env.KRC_MEDIA_ASSEMBLYAI_BASE_URL || "https://api.assemblyai.com"
+).replace(/\/+$/, "");
 const ASSEMBLYAI_ASYNC_MODEL = "universal-2";
 const COMMAND_TIMEOUT_MS = 120000;
 const TRANSCRIPTION_TIMEOUT_MS = 20 * 60 * 1000;
