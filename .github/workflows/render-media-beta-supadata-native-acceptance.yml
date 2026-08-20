@@ -1,0 +1,229 @@
+name: Render MEDIA BETA Supadata Native Acceptance
+
+on:
+  push:
+    branches:
+      - agent/krc-media-transcript
+    paths:
+      - .github/workflows/render-media-beta-supadata-native-acceptance.yml
+
+permissions:
+  contents: read
+  issues: write
+  pull-requests: write
+
+concurrency:
+  group: render-media-beta-supadata-native-acceptance
+  cancel-in-progress: false
+
+env:
+  RENDER_API_BASE: https://api.render.com/v1
+  SERVICE_ID: srv-da1kic5bedkc73d6fk60
+  SERVICE_NAME: voicebridge-krc-media-beta-kolemasakar
+  REQUIRED_BRANCH: agent/krc-media-transcript
+  BETA_BASE_URL: https://voicebridge-krc-media-beta-kolemasakar.onrender.com
+  PROBE_URL: https://www.youtube.com/watch?v=IzYyKRx7Qwg
+
+jobs:
+  accept:
+    runs-on: ubuntu-latest
+    env:
+      RENDER_API_KEY: ${{ secrets.RENDER_API_KEY }}
+    steps:
+      - name: Verify isolated deployed runtime
+        shell: bash
+        run: |
+          set -euo pipefail
+          test -n "${RENDER_API_KEY:-}" || { echo "RENDER_API_KEY missing" >&2; exit 1; }
+          echo "::add-mask::$RENDER_API_KEY"
+          [[ "$GITHUB_REF_NAME" == "$REQUIRED_BRANCH" ]] || { echo "Unexpected branch" >&2; exit 1; }
+
+          tmp="$(mktemp)"
+          code="$(curl -sS -o "$tmp" -w '%{http_code}' \
+            "${RENDER_API_BASE}/services/${SERVICE_ID}" \
+            -H 'Accept: application/json' \
+            -H "Authorization: Bearer ${RENDER_API_KEY}")"
+          [[ "$code" == 200 ]] || { echo "Service lookup failed HTTP $code" >&2; rm -f "$tmp"; exit 1; }
+          name="$(jq -r '.name // empty' "$tmp")"
+          branch="$(jq -r '.branch // empty' "$tmp")"
+          rm -f "$tmp"
+          [[ "$name" == "$SERVICE_NAME" ]] || { echo "Isolation guard failed" >&2; exit 1; }
+          [[ "$branch" == "$REQUIRED_BRANCH" ]] || { echo "Source branch guard failed" >&2; exit 1; }
+
+          tmp="$(mktemp)"
+          code="$(curl -sS --get -o "$tmp" -w '%{http_code}' \
+            "${RENDER_API_BASE}/services/${SERVICE_ID}/deploys" \
+            --data-urlencode 'limit=1' \
+            -H 'Accept: application/json' \
+            -H "Authorization: Bearer ${RENDER_API_KEY}")"
+          [[ "$code" == 200 ]] || { echo "Deploy lookup failed HTTP $code" >&2; rm -f "$tmp"; exit 1; }
+          status="$(jq -r '((.[0].deploy // .[0]).status // "unknown")' "$tmp")"
+          commit="$(jq -r '((.[0].deploy // .[0]).commit.id // (.[0].deploy // .[0]).commitId // "unknown")' "$tmp")"
+          rm -f "$tmp"
+          [[ "$status" == "live" ]] || { echo "Isolated deploy is not live" >&2; exit 1; }
+          echo "Isolated runtime: PASS / deployed_commit=$commit"
+
+      - name: Load masked beta credentials
+        shell: bash
+        run: |
+          set -euo pipefail
+          get_env_value() {
+            key="$1"
+            tmp="$(mktemp)"
+            code="$(curl -sS -o "$tmp" -w '%{http_code}' \
+              "${RENDER_API_BASE}/services/${SERVICE_ID}/env-vars/${key}" \
+              -H 'Accept: application/json' \
+              -H "Authorization: Bearer ${RENDER_API_KEY}")"
+            [[ "$code" == 200 ]] || { echo "Credential lookup failed for $key: HTTP $code" >&2; rm -f "$tmp"; return 1; }
+            jq -r '(.envVar.value // .value // empty)' "$tmp"
+            rm -f "$tmp"
+          }
+
+          action_token="$(get_env_value KRC_MEDIA_ACTION_TOKEN)"
+          beta_codes="$(get_env_value KRC_MEDIA_BETA_CODES)"
+          supadata_key="$(get_env_value SUPADATA_API_KEY)"
+          test -n "$action_token" || { echo "KRC_MEDIA_ACTION_TOKEN missing" >&2; exit 1; }
+          test -n "$beta_codes" || { echo "KRC_MEDIA_BETA_CODES missing" >&2; exit 1; }
+          test -n "$supadata_key" || { echo "SUPADATA_API_KEY missing on isolated runtime" >&2; exit 1; }
+          beta_code="${beta_codes%%,*}"
+          beta_code="$(printf '%s' "$beta_code" | sed 's/^[[:space:]]*//;s/[[:space:]]*$//')"
+          test -n "$beta_code" || { echo "No beta code resolved" >&2; exit 1; }
+          echo "::add-mask::$action_token"
+          echo "::add-mask::$beta_codes"
+          echo "::add-mask::$beta_code"
+          echo "::add-mask::$supadata_key"
+          printf '%s' "$action_token" > /tmp/krc-action-token
+          printf '%s' "$beta_code" > /tmp/krc-beta-code
+          echo "Masked credentials: READY"
+
+      - name: Confirm one-credit preflight
+        id: before
+        shell: bash
+        run: |
+          set -euo pipefail
+          action_token="$(cat /tmp/krc-action-token)"
+          beta_code="$(cat /tmp/krc-beta-code)"
+          payload="$(jq -nc --arg url "$PROBE_URL" --arg code "$beta_code" \
+            '{url:$url,language_hint:"auto",beta_access_code:$code}')"
+          http_status="$(curl -sS --max-time 90 -o /tmp/preflight-before.json -w '%{http_code}' \
+            -X POST "${BETA_BASE_URL}/api/v1/media/managed/preflight" \
+            -H 'Accept: application/json' \
+            -H 'Content-Type: application/json' \
+            -H "Authorization: Bearer ${action_token}" \
+            --data "$payload")"
+          [[ "$http_status" == 200 ]] || { echo "Preflight failed HTTP $http_status" >&2; exit 1; }
+          jq -e '.provider == "supadata" and .mode == "native" and .estimated_credits == 1 and .can_continue == true and .consent_required == true' /tmp/preflight-before.json >/dev/null
+          available="$(jq -r '.credits_available' /tmp/preflight-before.json)"
+          echo "available=$available" >> "$GITHUB_OUTPUT"
+          echo "Credit consent gate: PASS / available=$available / approved_max=1"
+
+      - name: Start approved native transcript
+        id: transcript
+        shell: bash
+        run: |
+          set -euo pipefail
+          action_token="$(cat /tmp/krc-action-token)"
+          beta_code="$(cat /tmp/krc-beta-code)"
+          payload="$(jq -nc --arg url "$PROBE_URL" --arg code "$beta_code" \
+            '{url:$url,language_hint:"auto",beta_access_code:$code,credit_consent:{provider:"supadata",mode:"native",max_credits:1}}')"
+          http_status="$(curl -sS --max-time 120 -o /tmp/transcript.json -w '%{http_code}' \
+            -X POST "${BETA_BASE_URL}/api/v1/media/managed/transcriptions" \
+            -H 'Accept: application/json' \
+            -H 'Content-Type: application/json' \
+            -H "Authorization: Bearer ${action_token}" \
+            --data "$payload")"
+          [[ "$http_status" == 200 ]] || { echo "Native transcript request failed HTTP $http_status" >&2; jq -c '{error:(.error // null)}' /tmp/transcript.json >&2 || true; exit 1; }
+
+          job_id="$(jq -r '.job_id // empty' /tmp/transcript.json)"
+          status="$(jq -r '.status // empty' /tmp/transcript.json)"
+          credits="$(jq -r '.credits_charged // 0' /tmp/transcript.json)"
+          remaining="$(jq -r '.credits_remaining_estimate // 0' /tmp/transcript.json)"
+          segments="$(jq -r '.segment_count // 0' /tmp/transcript.json)"
+          language="$(jq -r '.detected_language // "unknown"' /tmp/transcript.json)"
+          [[ "$job_id" == KRCM_* ]] || { echo "Unexpected managed job ID" >&2; exit 1; }
+          jq -e '.provider == "supadata" and .provider_mode == "native" and .ai_fallback_requires_new_consent == true and (.credits_charged <= 1)' /tmp/transcript.json >/dev/null
+
+          echo "job_id=$job_id" >> "$GITHUB_OUTPUT"
+          echo "status=$status" >> "$GITHUB_OUTPUT"
+          echo "credits=$credits" >> "$GITHUB_OUTPUT"
+          echo "remaining=$remaining" >> "$GITHUB_OUTPUT"
+          echo "segments=$segments" >> "$GITHUB_OUTPUT"
+          echo "language=$language" >> "$GITHUB_OUTPUT"
+
+          case "$status" in
+            COMPLETED)
+              jq -e '(.segment_count > 0) and .error == null' /tmp/transcript.json >/dev/null
+              echo "Native transcript: COMPLETED"
+              ;;
+            AWAITING_AI_CONSENT)
+              echo "Native captions unavailable: AWAITING_AI_CONSENT"
+              ;;
+            *)
+              echo "Unexpected managed status: $status" >&2
+              jq -c '{job_id,status,error,credits_charged}' /tmp/transcript.json >&2
+              exit 1
+              ;;
+          esac
+
+      - name: Verify timestamped segments when completed
+        if: steps.transcript.outputs.status == 'COMPLETED'
+        env:
+          JOB_ID: ${{ steps.transcript.outputs.job_id }}
+        shell: bash
+        run: |
+          set -euo pipefail
+          action_token="$(cat /tmp/krc-action-token)"
+          http_status="$(curl -sS --max-time 60 -o /tmp/segments.json -w '%{http_code}' \
+            "${BETA_BASE_URL}/api/v1/media/managed/transcriptions/${JOB_ID}/segments?cursor=0&limit=50" \
+            -H 'Accept: application/json' \
+            -H "Authorization: Bearer ${action_token}")"
+          [[ "$http_status" == 200 ]] || { echo "Segment read failed HTTP $http_status" >&2; exit 1; }
+          jq -e '
+            .status == "COMPLETED" and
+            (.segments | length) > 0 and
+            all(.segments[];
+              (.start_ms | type) == "number" and
+              (.end_ms | type) == "number" and
+              (.text | type) == "string" and
+              (.text | length) > 0
+            )
+          ' /tmp/segments.json >/dev/null
+          echo "Timestamped segments: PASS / first_page=$(jq '.segments|length' /tmp/segments.json)"
+
+      - name: Confirm post-request balance
+        id: after
+        shell: bash
+        run: |
+          set -euo pipefail
+          action_token="$(cat /tmp/krc-action-token)"
+          beta_code="$(cat /tmp/krc-beta-code)"
+          payload="$(jq -nc --arg url "$PROBE_URL" --arg code "$beta_code" \
+            '{url:$url,language_hint:"auto",beta_access_code:$code}')"
+          http_status="$(curl -sS --max-time 90 -o /tmp/preflight-after.json -w '%{http_code}' \
+            -X POST "${BETA_BASE_URL}/api/v1/media/managed/preflight" \
+            -H 'Accept: application/json' \
+            -H 'Content-Type: application/json' \
+            -H "Authorization: Bearer ${action_token}" \
+            --data "$payload")"
+          [[ "$http_status" == 200 ]] || { echo "Post-request preflight failed HTTP $http_status" >&2; exit 1; }
+          available="$(jq -r '.credits_available' /tmp/preflight-after.json)"
+          echo "available=$available" >> "$GITHUB_OUTPUT"
+          echo "Post-request balance: $available"
+
+      - name: Report sanitized native acceptance
+        if: always()
+        env:
+          GH_TOKEN: ${{ github.token }}
+          WORKFLOW_STATUS: ${{ job.status }}
+          BEFORE: ${{ steps.before.outputs.available }}
+          JOB_ID: ${{ steps.transcript.outputs.job_id }}
+          MEDIA_STATUS: ${{ steps.transcript.outputs.status }}
+          CREDITS: ${{ steps.transcript.outputs.credits }}
+          REMAINING_ESTIMATE: ${{ steps.transcript.outputs.remaining }}
+          SEGMENTS: ${{ steps.transcript.outputs.segments }}
+          LANGUAGE: ${{ steps.transcript.outputs.language }}
+          AFTER: ${{ steps.after.outputs.available }}
+        shell: bash
+        run: |
+          set -euo pipefail
+          gh pr comment 28 --repo kolemasakar/VoiceBridge --body "A9.2R Supadata native acceptance after explicit user consent: **${WORKFLOW_STATUS^^}**. KRCM job: \`${JOB_ID:-not-created}\`; media status: \`${MEDIA_STATUS:-unknown}\`; detected language: \`${LANGUAGE:-unknown}\`; segment_count: \`${SEGMENTS:-unknown}\`; provider credits charged: \`${CREDITS:-unknown}\`; balance before: \`${BEFORE:-unknown}\`; balance after: \`${AFTER:-unknown}\`; provider remaining estimate: \`${REMAINING_ESTIMATE:-unknown}\`. Consent cap was exactly 1 native credit. AI fallback was not authorized. Transcript text and credentials were not logged. Isolated MEDIA BETA only; production was not modified."
