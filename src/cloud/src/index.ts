@@ -1,5 +1,5 @@
 import { loadConfig } from "./config.js";
-import { listen } from "./server.js";
+import { listen } from "./managed_server.js";
 import { configuredAssemblyAiSpeechModel } from "./stt_provider.js";
 
 try {
