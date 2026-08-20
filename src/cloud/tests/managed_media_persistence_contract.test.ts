@@ -4,7 +4,7 @@ import { test } from "node:test";
 
 test("managed durable reservation returns inserted or conflicting row atomically", async () => {
   const source = await readFile(
-    new URL("../src/managed_media_persistence.ts", import.meta.url),
+    new URL("../../src/managed_media_persistence.ts", import.meta.url),
     "utf8"
   );
 
