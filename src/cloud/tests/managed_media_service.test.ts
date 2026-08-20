@@ -124,10 +124,12 @@ test("native transcript completes after consent and charges only reported credit
   assert.equal(job.status, "COMPLETED");
   assert.equal(job.credits_charged, 1);
   assert.equal(job.credits_remaining_estimate, 89);
+  assert.equal(job.credit_charge_uncertain, false);
+  assert.equal(job.reused, false);
   assert.equal(job.segment_count, 1);
   assert.equal(job.ai_fallback_requires_new_consent, true);
 
-  const page = service.page(job.job_id, 0, 20);
+  const page = await service.page(job.job_id, 0, 20);
   assert.ok(page);
   assert.equal(page.segments.length, 1);
 });
@@ -151,6 +153,7 @@ test("native transcript unavailable stops before AI and requires second consent"
   const job = await service.startNative(input);
   assert.equal(job.status, "AWAITING_AI_CONSENT");
   assert.equal(job.credits_charged, 1);
+  assert.equal(job.credit_charge_uncertain, false);
   assert.equal(job.ai_fallback_requires_new_consent, true);
   assert.equal(job.segment_count, 0);
 });
