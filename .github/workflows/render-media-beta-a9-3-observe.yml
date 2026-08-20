@@ -59,3 +59,5 @@ jobs:
           fi
           gh pr comment 28 --repo kolemasakar/VoiceBridge --body "A9.3 read-only observer: **${status}**. Preflight HTTP: \`${http_status}\`; available credits: \`${available}\`. Observer did not deploy, mutate configuration, or start a transcript request."
           [[ "$status" == SUCCESS ]]
+
+# trigger after first creation
