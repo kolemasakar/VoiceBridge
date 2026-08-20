@@ -84,32 +84,29 @@ LIMIT 1;
     const output = await this.run(`
 DELETE FROM krc_managed_media_jobs
 WHERE request_key='${record.requestKey}' AND expires_at <= now();
-WITH inserted AS (
-  INSERT INTO krc_managed_media_jobs (
-    job_id, request_key, access_code_digest, status,
-    payload, segments, expires_at, updated_at
-  ) VALUES (
-    '${record.job.job_id}', '${record.requestKey}', '${record.accessCodeDigest}',
-    '${record.job.status}',
-    convert_from(decode('${payloadHex}', 'hex'), 'UTF8')::jsonb,
-    convert_from(decode('${segmentsHex}', 'hex'), 'UTF8')::jsonb,
-    to_timestamp(${expirySeconds}), to_timestamp(${updatedSeconds})
-  )
-  ON CONFLICT (request_key) DO NOTHING
-  RETURNING job_id
+INSERT INTO krc_managed_media_jobs (
+  job_id, request_key, access_code_digest, status,
+  payload, segments, expires_at, updated_at
+) VALUES (
+  '${record.job.job_id}', '${record.requestKey}', '${record.accessCodeDigest}',
+  '${record.job.status}',
+  convert_from(decode('${payloadHex}', 'hex'), 'UTF8')::jsonb,
+  convert_from(decode('${segmentsHex}', 'hex'), 'UTF8')::jsonb,
+  to_timestamp(${expirySeconds}), to_timestamp(${updatedSeconds})
 )
-SELECT CASE WHEN EXISTS (SELECT 1 FROM inserted) THEN '1' ELSE '0' END,
-       job_id, request_key, access_code_digest, status,
-       encode(convert_to(payload::text, 'UTF8'), 'hex'),
-       encode(convert_to(segments::text, 'UTF8'), 'hex'),
-       extract(epoch from expires_at)::bigint
-FROM krc_managed_media_jobs
-WHERE request_key='${record.requestKey}' AND expires_at > now()
-LIMIT 1;
+ON CONFLICT (request_key) DO UPDATE SET
+  request_key = EXCLUDED.request_key
+RETURNING job_id, request_key, access_code_digest, status,
+          encode(convert_to(payload::text, 'UTF8'), 'hex'),
+          encode(convert_to(segments::text, 'UTF8'), 'hex'),
+          extract(epoch from expires_at)::bigint;
 `);
-    const parsed = this.parseReservation(output);
+    const parsed = this.parseRow(output);
     if (!parsed) throw new Error("Managed media reservation did not return a row.");
-    return parsed;
+    return {
+      created: parsed.job.job_id === record.job.job_id,
+      record: parsed
+    };
   }
 
   async put(record: ManagedMediaStoredRecord): Promise<void> {
@@ -176,20 +173,6 @@ CREATE INDEX IF NOT EXISTS krc_managed_media_jobs_active_idx
 CREATE INDEX IF NOT EXISTS krc_managed_media_jobs_updated_idx
   ON krc_managed_media_jobs (updated_at DESC);
 `);
-  }
-
-  private parseReservation(output: string): ManagedMediaStoreReservation | null {
-    const line = output.trim().split("\n").filter(Boolean).at(-1);
-    if (!line) return null;
-    const columns = line.split("\t");
-    if (columns.length !== 8) {
-      throw new Error("Managed media reservation row is malformed.");
-    }
-    const [created, ...rest] = columns as [string, ...string[]];
-    return {
-      created: created === "1",
-      record: this.parseColumns(rest)
-    };
   }
 
   private parseRow(output: string): ManagedMediaStoredRecord | null {
