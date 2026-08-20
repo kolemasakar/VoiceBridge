@@ -1,11 +1,15 @@
 import assert from "node:assert/strict";
-import { createServer } from "node:http";
+import {
+  createServer,
+  type IncomingMessage,
+  type ServerResponse
+} from "node:http";
 import type { AddressInfo } from "node:net";
 import { test } from "node:test";
 import { SupadataProvider } from "../src/supadata_provider.js";
 
 async function withMockServer(
-  handler: Parameters<typeof createServer>[0],
+  handler: (request: IncomingMessage, response: ServerResponse) => void,
   run: (baseUrl: string) => Promise<void>
 ): Promise<void> {
   const server = createServer(handler);
