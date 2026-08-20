@@ -280,6 +280,7 @@ export class ManagedMediaService {
   private readonly transcriptProvider: ManagedNativeTranscriptProvider | null;
   private readonly store: ManagedMediaJobStore;
   private readonly jobTtlSeconds: number;
+  private readonly inFlight = new Set<string>();
   private storeReady: Promise<void> | null = null;
 
   constructor(
@@ -344,6 +345,39 @@ export class ManagedMediaService {
     ).toISOString();
   }
 
+  private async interruptedRecord(
+    record: ManagedMediaStoredRecord
+  ): Promise<ManagedMediaStoredRecord> {
+    const updatedAt = new Date().toISOString();
+    const interrupted: ManagedMediaStoredRecord = {
+      ...record,
+      job: {
+        ...record.job,
+        status: "FAILED",
+        updated_at: updatedAt,
+        credit_charge_uncertain: true,
+        error: {
+          code: "MANAGED_PROVIDER_RESULT_UNCERTAIN_RETRY_BLOCKED",
+          message: "The managed provider request was interrupted by a backend restart. Credit charge outcome is uncertain, so automatic replay is blocked to prevent duplicate credit spend.",
+          retryable: false
+        }
+      },
+      expiresAt: this.expiryFrom(updatedAt)
+    };
+    await this.store.put(interrupted);
+    return interrupted;
+  }
+
+  private async reusableRecord(
+    requestKey: string
+  ): Promise<ManagedMediaStoredRecord | null> {
+    const existing = await this.store.findByRequestKey(requestKey);
+    if (!existing) return null;
+    if (existing.job.status !== "PROCESSING") return existing;
+    if (this.inFlight.has(requestKey)) return existing;
+    return this.interruptedRecord(existing);
+  }
+
   async preflight(
     input: ManagedMediaPreflightInput
   ): Promise<ManagedMediaCreditPreflight> {
@@ -376,7 +410,7 @@ export class ManagedMediaService {
       input.language_hint,
       input.beta_access_code
     );
-    const existing = await this.store.findByRequestKey(requestKey);
+    const existing = await this.reusableRecord(requestKey);
     if (existing) return this.publicJob(existing.job, true);
 
     const quote = await this.transcriptProvider!.quoteNative();
@@ -427,9 +461,14 @@ export class ManagedMediaService {
     };
     const reservation = await this.store.reserve(record);
     if (!reservation.created) {
-      return this.publicJob(reservation.record.job, true);
+      const resolved = reservation.record.job.status === "PROCESSING" &&
+        !this.inFlight.has(requestKey)
+        ? await this.interruptedRecord(reservation.record)
+        : reservation.record;
+      return this.publicJob(resolved.job, true);
     }
 
+    this.inFlight.add(requestKey);
     try {
       const result = await this.transcriptProvider!.getNativeTranscript(
         sourceUrl,
@@ -494,13 +533,20 @@ export class ManagedMediaService {
       };
       await this.store.put(failed);
       return this.publicJob(failed.job, false);
+    } finally {
+      this.inFlight.delete(requestKey);
     }
   }
 
   async get(jobId: string): Promise<ManagedMediaJobView | null> {
     await this.ensureStore();
     const record = await this.store.get(jobId);
-    return record ? this.publicJob(record.job, false) : null;
+    if (!record) return null;
+    if (record.job.status === "PROCESSING" && !this.inFlight.has(record.requestKey)) {
+      const interrupted = await this.interruptedRecord(record);
+      return this.publicJob(interrupted.job, false);
+    }
+    return this.publicJob(record.job, false);
   }
 
   async page(
@@ -509,8 +555,11 @@ export class ManagedMediaService {
     limit: number
   ): Promise<ManagedMediaPage | null> {
     await this.ensureStore();
-    const record = await this.store.get(jobId);
+    let record = await this.store.get(jobId);
     if (!record) return null;
+    if (record.job.status === "PROCESSING" && !this.inFlight.has(record.requestKey)) {
+      record = await this.interruptedRecord(record);
+    }
     const safeCursor = Math.max(0, Math.floor(cursor));
     const safeLimit = Math.max(1, Math.min(50, Math.floor(limit)));
     const segments = record.job.status === "COMPLETED"
