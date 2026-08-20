@@ -1,0 +1,238 @@
+name: Render MEDIA BETA A9.3 Durable Preflight
+
+on:
+  push:
+    branches:
+      - agent/krc-media-transcript
+    paths:
+      - .github/workflows/render-media-beta-a9-3-durable-preflight.yml
+
+permissions:
+  contents: read
+  issues: write
+  pull-requests: write
+
+concurrency:
+  group: render-media-beta-a9-3-durable-preflight
+  cancel-in-progress: false
+
+env:
+  RENDER_API_BASE: https://api.render.com/v1
+  SERVICE_ID: srv-da1kic5bedkc73d6fk60
+  SERVICE_NAME: voicebridge-krc-media-beta-kolemasakar
+  REQUIRED_BRANCH: agent/krc-media-transcript
+  BETA_BASE_URL: https://voicebridge-krc-media-beta-kolemasakar.onrender.com
+  CODE_SHA: 2290da0ab15a01ab9fb0b15f609183541ea78a35
+  PROBE_URL: https://www.youtube.com/watch?v=IzYyKRx7Qwg
+
+jobs:
+  durable-preflight:
+    runs-on: ubuntu-latest
+    env:
+      RENDER_API_KEY: ${{ secrets.RENDER_API_KEY }}
+    steps:
+      - name: Verify isolated runtime identity
+        shell: bash
+        run: |
+          set -euo pipefail
+          test -n "${RENDER_API_KEY:-}" || { echo "RENDER_API_KEY missing" >&2; exit 1; }
+          echo "::add-mask::$RENDER_API_KEY"
+          [[ "$GITHUB_REF_NAME" == "$REQUIRED_BRANCH" ]] || { echo "Unexpected branch" >&2; exit 1; }
+          tmp="$(mktemp)"
+          code="$(curl -sS -o "$tmp" -w '%{http_code}' \
+            "${RENDER_API_BASE}/services/${SERVICE_ID}" \
+            -H 'Accept: application/json' \
+            -H "Authorization: Bearer ${RENDER_API_KEY}")"
+          [[ "$code" == 200 ]] || { echo "Service lookup failed HTTP $code" >&2; rm -f "$tmp"; exit 1; }
+          name="$(jq -r '.name // empty' "$tmp")"
+          branch="$(jq -r '.branch // empty' "$tmp")"
+          rm -f "$tmp"
+          [[ "$name" == "$SERVICE_NAME" ]] || { echo "Isolation guard failed" >&2; exit 1; }
+          [[ "$branch" == "$REQUIRED_BRANCH" ]] || { echo "Source branch guard failed" >&2; exit 1; }
+          echo "Runtime identity: PASS / service=$name / branch=$branch"
+
+      - name: Verify required isolated runtime secrets
+        shell: bash
+        run: |
+          set -euo pipefail
+          get_env_value() {
+            key="$1"
+            tmp="$(mktemp)"
+            code="$(curl -sS -o "$tmp" -w '%{http_code}' \
+              "${RENDER_API_BASE}/services/${SERVICE_ID}/env-vars/${key}" \
+              -H 'Accept: application/json' \
+              -H "Authorization: Bearer ${RENDER_API_KEY}")"
+            [[ "$code" == 200 ]] || { echo "Required isolated env lookup failed for $key: HTTP $code" >&2; rm -f "$tmp"; return 1; }
+            value="$(jq -r '(.envVar.value // .value // empty)' "$tmp")"
+            rm -f "$tmp"
+            test -n "$value" || { echo "Required isolated env is empty: $key" >&2; return 1; }
+            echo "::add-mask::$value"
+          }
+          get_env_value KRC_MEDIA_DATABASE_URL
+          get_env_value SUPADATA_API_KEY
+          get_env_value KRC_MEDIA_ACTION_TOKEN
+          get_env_value KRC_MEDIA_BETA_CODES
+          echo "Required isolated runtime configuration: PRESENT"
+
+      - name: Verify code SHA passed CI
+        shell: bash
+        run: |
+          set -euo pipefail
+          [[ "$CODE_SHA" == "2290da0ab15a01ab9fb0b15f609183541ea78a35" ]] || exit 1
+          echo "Code validation source: VoiceBridge Validate #247 SUCCESS / $CODE_SHA"
+
+      - name: Deploy validated code SHA to isolated MEDIA BETA
+        id: deploy
+        shell: bash
+        run: |
+          set -euo pipefail
+          payload="$(jq -nc --arg commitId "$CODE_SHA" '{commitId:$commitId,clearCache:"do_not_clear"}')"
+          tmp="$(mktemp)"
+          code="$(curl -sS -o "$tmp" -w '%{http_code}' \
+            -X POST "${RENDER_API_BASE}/services/${SERVICE_ID}/deploys" \
+            -H 'Accept: application/json' \
+            -H 'Content-Type: application/json' \
+            -H "Authorization: Bearer ${RENDER_API_KEY}" \
+            --data "$payload")"
+          [[ "$code" == 201 || "$code" == 202 ]] || { echo "Deploy request failed HTTP $code" >&2; rm -f "$tmp"; exit 1; }
+          deploy_id="$(jq -r '(.deploy // .).id // empty' "$tmp")"
+          rm -f "$tmp"
+          test -n "$deploy_id" || { echo "Deploy ID missing" >&2; exit 1; }
+          echo "deploy_id=$deploy_id" >> "$GITHUB_OUTPUT"
+          echo "Isolated deploy accepted: $deploy_id / code=$CODE_SHA"
+
+      - name: Wait for isolated deploy
+        env:
+          DEPLOY_ID: ${{ steps.deploy.outputs.deploy_id }}
+        shell: bash
+        run: |
+          set -euo pipefail
+          for i in $(seq 1 90); do
+            tmp="$(mktemp)"
+            code="$(curl -sS -o "$tmp" -w '%{http_code}' \
+              "${RENDER_API_BASE}/services/${SERVICE_ID}/deploys/${DEPLOY_ID}" \
+              -H 'Accept: application/json' \
+              -H "Authorization: Bearer ${RENDER_API_KEY}")"
+            [[ "$code" == 200 ]] || { echo "Deploy status failed HTTP $code" >&2; rm -f "$tmp"; exit 1; }
+            status="$(jq -r '(.deploy // .).status // "unknown"' "$tmp")"
+            commit="$(jq -r '(.deploy // .).commit.id // (.deploy // .).commitId // "unknown"' "$tmp")"
+            rm -f "$tmp"
+            case "$status" in
+              live)
+                [[ "$commit" == "$CODE_SHA" ]] || { echo "Live deploy commit mismatch: $commit" >&2; exit 1; }
+                echo "Isolated deploy: LIVE / $commit"
+                exit 0
+                ;;
+              build_failed|update_failed|canceled|deactivated)
+                echo "Isolated deploy failed: $status" >&2
+                exit 1
+                ;;
+            esac
+            sleep 5
+          done
+          echo "Isolated deploy timeout" >&2
+          exit 1
+
+      - name: Load masked beta request credentials
+        shell: bash
+        run: |
+          set -euo pipefail
+          get_env_value() {
+            key="$1"
+            tmp="$(mktemp)"
+            code="$(curl -sS -o "$tmp" -w '%{http_code}' \
+              "${RENDER_API_BASE}/services/${SERVICE_ID}/env-vars/${key}" \
+              -H 'Accept: application/json' \
+              -H "Authorization: Bearer ${RENDER_API_KEY}")"
+            [[ "$code" == 200 ]] || { echo "Credential lookup failed for $key: HTTP $code" >&2; rm -f "$tmp"; return 1; }
+            jq -r '(.envVar.value // .value // empty)' "$tmp"
+            rm -f "$tmp"
+          }
+          action_token="$(get_env_value KRC_MEDIA_ACTION_TOKEN)"
+          beta_codes="$(get_env_value KRC_MEDIA_BETA_CODES)"
+          test -n "$action_token" || { echo "KRC_MEDIA_ACTION_TOKEN missing" >&2; exit 1; }
+          test -n "$beta_codes" || { echo "KRC_MEDIA_BETA_CODES missing" >&2; exit 1; }
+          beta_code="${beta_codes%%,*}"
+          beta_code="$(printf '%s' "$beta_code" | sed 's/^[[:space:]]*//;s/[[:space:]]*$//')"
+          test -n "$beta_code" || { echo "No beta code resolved" >&2; exit 1; }
+          echo "::add-mask::$action_token"
+          echo "::add-mask::$beta_codes"
+          echo "::add-mask::$beta_code"
+          printf '%s' "$action_token" > /tmp/krc-action-token
+          printf '%s' "$beta_code" > /tmp/krc-beta-code
+          echo "Masked beta credentials: READY"
+
+      - name: Verify A9.3 managed durability capability
+        shell: bash
+        run: |
+          set -euo pipefail
+          action_token="$(cat /tmp/krc-action-token)"
+          code="$(curl -sS --retry 5 --retry-delay 3 --max-time 90 \
+            -o /tmp/capability.json -w '%{http_code}' \
+            "${BETA_BASE_URL}/api/v1/media/managed" \
+            -H 'Accept: application/json' \
+            -H "Authorization: Bearer ${action_token}")"
+          [[ "$code" == 200 ]] || { echo "Managed capability HTTP $code" >&2; exit 1; }
+          jq -e '
+            .mode == "zero_client_managed_beta" and
+            .provider == "supadata" and
+            .configured == true and
+            .durable_store == "postgres" and
+            .restart_resilient_jobs == true and
+            .duplicate_start_reuses_job == true and
+            .native_transcript_credits == 1 and
+            .explicit_user_consent_required == true and
+            .automatic_ai_fallback == false
+          ' /tmp/capability.json >/dev/null
+          jq -c '{mode,provider,configured,durable_store,restart_resilient_jobs,duplicate_start_reuses_job,native_transcript_credits,explicit_user_consent_required,automatic_ai_fallback}' /tmp/capability.json
+          echo "A9.3 durable capability: PASS"
+
+      - name: Run credit preflight only
+        id: preflight
+        shell: bash
+        run: |
+          set -euo pipefail
+          action_token="$(cat /tmp/krc-action-token)"
+          beta_code="$(cat /tmp/krc-beta-code)"
+          payload="$(jq -nc --arg url "$PROBE_URL" --arg code "$beta_code" \
+            '{url:$url,language_hint:"auto",beta_access_code:$code}')"
+          http_status="$(curl -sS --max-time 90 -o /tmp/preflight.json -w '%{http_code}' \
+            -X POST "${BETA_BASE_URL}/api/v1/media/managed/preflight" \
+            -H 'Accept: application/json' \
+            -H 'Content-Type: application/json' \
+            -H "Authorization: Bearer ${action_token}" \
+            --data "$payload")"
+          [[ "$http_status" == 200 ]] || { echo "Preflight failed HTTP $http_status" >&2; exit 1; }
+          jq -e '
+            .provider == "supadata" and
+            .mode == "native" and
+            .estimated_credits == 1 and
+            .consent_required == true
+          ' /tmp/preflight.json >/dev/null
+          plan="$(jq -r '.plan // "unknown"' /tmp/preflight.json)"
+          available="$(jq -r '.credits_available' /tmp/preflight.json)"
+          estimate="$(jq -r '.estimated_credits' /tmp/preflight.json)"
+          after="$(jq -r '.credits_after_estimate' /tmp/preflight.json)"
+          can_continue="$(jq -r '.can_continue' /tmp/preflight.json)"
+          echo "plan=$plan" >> "$GITHUB_OUTPUT"
+          echo "available=$available" >> "$GITHUB_OUTPUT"
+          echo "estimate=$estimate" >> "$GITHUB_OUTPUT"
+          echo "after=$after" >> "$GITHUB_OUTPUT"
+          echo "can_continue=$can_continue" >> "$GITHUB_OUTPUT"
+          jq -c '{provider,mode,plan,credits_available,estimated_credits,credits_after_estimate,can_continue,consent_required}' /tmp/preflight.json
+          echo "A9.3 preflight: PASS / no transcript request started"
+
+      - name: Report sanitized A9.3 preflight
+        if: always()
+        env:
+          GH_TOKEN: ${{ github.token }}
+          WORKFLOW_STATUS: ${{ job.status }}
+          PLAN: ${{ steps.preflight.outputs.plan }}
+          AVAILABLE: ${{ steps.preflight.outputs.available }}
+          ESTIMATE: ${{ steps.preflight.outputs.estimate }}
+          AFTER: ${{ steps.preflight.outputs.after }}
+          CAN_CONTINUE: ${{ steps.preflight.outputs.can_continue }}
+        shell: bash
+        run: |
+          set -euo pipefail
+          gh pr comment 28 --repo kolemasakar/VoiceBridge --body "A9.3 isolated durable runtime + credit preflight: **${WORKFLOW_STATUS^^}**. Validated code: \`${CODE_SHA}\`; target: \`${SERVICE_NAME}\` only. Plan: \`${PLAN:-unknown}\`; available: \`${AVAILABLE:-unknown}\`; estimated native cost: \`${ESTIMATE:-unknown}\`; estimated remaining: \`${AFTER:-unknown}\`; can_continue: \`${CAN_CONTINUE:-unknown}\`. No transcript request was started and no production target was modified."
