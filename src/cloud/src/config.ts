@@ -12,7 +12,7 @@ export interface AppConfig {
   mediaBetaCodes?: string[];
   mediaDailySttSeconds?: number;
   assemblyAiApiKey: string | null;
-  supadataApiKey: string | null;
+  supadataApiKey?: string | null;
   geminiApiKey: string | null;
   geminiTranslationModel: string;
   translationProvider?: TranslationProviderName;
