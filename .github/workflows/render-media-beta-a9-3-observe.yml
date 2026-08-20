@@ -1,0 +1,61 @@
+name: Render MEDIA BETA A9.3 Read-Only Observer
+
+on:
+  push:
+    branches:
+      - agent/krc-media-transcript
+    paths:
+      - .github/workflows/render-media-beta-a9-3-observe.yml
+
+permissions:
+  contents: read
+  issues: write
+  pull-requests: write
+
+env:
+  RENDER_API_BASE: https://api.render.com/v1
+  SERVICE_ID: srv-da1kic5bedkc73d6fk60
+  SERVICE_NAME: voicebridge-krc-media-beta-kolemasakar
+  REQUIRED_BRANCH: agent/krc-media-transcript
+  BETA_BASE_URL: https://voicebridge-krc-media-beta-kolemasakar.onrender.com
+  PROBE_URL: https://www.youtube.com/watch?v=IzYyKRx7Qwg&krc_a93=observer
+
+jobs:
+  observe:
+    runs-on: ubuntu-latest
+    env:
+      RENDER_API_KEY: ${{ secrets.RENDER_API_KEY }}
+      GH_TOKEN: ${{ github.token }}
+    steps:
+      - name: Read current managed preflight only
+        shell: bash
+        run: |
+          set +e
+          status="FAILURE"
+          available="unknown"
+          http_status="unknown"
+          test -n "${RENDER_API_KEY:-}" || exit 1
+          echo "::add-mask::$RENDER_API_KEY"
+          [[ "$GITHUB_REF_NAME" == "$REQUIRED_BRANCH" ]] || exit 1
+          get_env() {
+            key="$1"
+            tmp="$(mktemp)"
+            code="$(curl -sS -o "$tmp" -w '%{http_code}' "${RENDER_API_BASE}/services/${SERVICE_ID}/env-vars/${key}" -H 'Accept: application/json' -H "Authorization: Bearer ${RENDER_API_KEY}")"
+            [[ "$code" == 200 ]] || { rm -f "$tmp"; return 1; }
+            jq -r '(.envVar.value // .value // empty)' "$tmp"
+            rm -f "$tmp"
+          }
+          action_token="$(get_env KRC_MEDIA_ACTION_TOKEN)"
+          beta_codes="$(get_env KRC_MEDIA_BETA_CODES)"
+          beta_code="${beta_codes%%,*}"
+          beta_code="$(printf '%s' "$beta_code" | sed 's/^[[:space:]]*//;s/[[:space:]]*$//')"
+          echo "::add-mask::$action_token"
+          echo "::add-mask::$beta_code"
+          payload="$(jq -nc --arg url "$PROBE_URL" --arg code "$beta_code" '{url:$url,language_hint:"auto",beta_access_code:$code}')"
+          http_status="$(curl -sS --max-time 90 -o /tmp/observer.json -w '%{http_code}' -X POST "${BETA_BASE_URL}/api/v1/media/managed/preflight" -H 'Accept: application/json' -H 'Content-Type: application/json' -H "Authorization: Bearer ${action_token}" --data "$payload")"
+          if [[ "$http_status" == 200 ]]; then
+            available="$(jq -r '.credits_available // "unknown"' /tmp/observer.json)"
+            status="SUCCESS"
+          fi
+          gh pr comment 28 --repo kolemasakar/VoiceBridge --body "A9.3 read-only observer: **${status}**. Preflight HTTP: \`${http_status}\`; available credits: \`${available}\`. Observer did not deploy, mutate configuration, or start a transcript request."
+          [[ "$status" == SUCCESS ]]
