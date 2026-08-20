@@ -1,0 +1,402 @@
+name: Render MEDIA BETA A9.3 Live Idempotency
+
+on:
+  push:
+    branches:
+      - agent/krc-media-transcript
+    paths:
+      - .github/workflows/render-media-beta-a9-3-live-idempotency.yml
+
+permissions:
+  contents: read
+  issues: write
+  pull-requests: write
+
+concurrency:
+  group: render-media-beta-a9-3-live-idempotency
+  cancel-in-progress: false
+
+env:
+  RENDER_API_BASE: https://api.render.com/v1
+  SERVICE_ID: srv-da1kic5bedkc73d6fk60
+  SERVICE_NAME: voicebridge-krc-media-beta-kolemasakar
+  REQUIRED_BRANCH: agent/krc-media-transcript
+  BETA_BASE_URL: https://voicebridge-krc-media-beta-kolemasakar.onrender.com
+  CODE_SHA: 2290da0ab15a01ab9fb0b15f609183541ea78a35
+  PROBE_URL: https://www.youtube.com/watch?v=IzYyKRx7Qwg&krc_a93=20260820T2304
+
+jobs:
+  live-idempotency:
+    runs-on: ubuntu-latest
+    env:
+      RENDER_API_KEY: ${{ secrets.RENDER_API_KEY }}
+      SUPADATA_API_KEY: ${{ secrets.SUPADATA_API_KEY }}
+    steps:
+      - name: Verify isolated runtime and safety secrets
+        shell: bash
+        run: |
+          set -euo pipefail
+          test -n "${RENDER_API_KEY:-}" || { echo "RENDER_API_KEY missing" >&2; exit 1; }
+          test -n "${SUPADATA_API_KEY:-}" || { echo "SUPADATA_API_KEY missing" >&2; exit 1; }
+          echo "::add-mask::$RENDER_API_KEY"
+          echo "::add-mask::$SUPADATA_API_KEY"
+          [[ "$GITHUB_REF_NAME" == "$REQUIRED_BRANCH" ]] || { echo "Unexpected branch" >&2; exit 1; }
+
+          tmp="$(mktemp)"
+          code="$(curl -sS -o "$tmp" -w '%{http_code}' \
+            "${RENDER_API_BASE}/services/${SERVICE_ID}" \
+            -H 'Accept: application/json' \
+            -H "Authorization: Bearer ${RENDER_API_KEY}")"
+          [[ "$code" == 200 ]] || { echo "Service lookup failed HTTP $code" >&2; rm -f "$tmp"; exit 1; }
+          name="$(jq -r '.name // empty' "$tmp")"
+          branch="$(jq -r '.branch // empty' "$tmp")"
+          rm -f "$tmp"
+          [[ "$name" == "$SERVICE_NAME" ]] || { echo "Isolation guard failed" >&2; exit 1; }
+          [[ "$branch" == "$REQUIRED_BRANCH" ]] || { echo "Source branch guard failed" >&2; exit 1; }
+
+          tmp="$(mktemp)"
+          code="$(curl -sS --get -o "$tmp" -w '%{http_code}' \
+            "${RENDER_API_BASE}/services/${SERVICE_ID}/deploys" \
+            --data-urlencode 'limit=1' \
+            -H 'Accept: application/json' \
+            -H "Authorization: Bearer ${RENDER_API_KEY}")"
+          [[ "$code" == 200 ]] || { echo "Deploy lookup failed HTTP $code" >&2; rm -f "$tmp"; exit 1; }
+          status="$(jq -r '((.[0].deploy // .[0]).status // "unknown")' "$tmp")"
+          commit="$(jq -r '((.[0].deploy // .[0]).commit.id // (.[0].deploy // .[0]).commitId // "unknown")' "$tmp")"
+          rm -f "$tmp"
+          [[ "$status" == "live" ]] || { echo "Isolated deploy is not live" >&2; exit 1; }
+          [[ "$commit" == "$CODE_SHA" ]] || { echo "Isolated deploy commit mismatch: $commit" >&2; exit 1; }
+          echo "Isolated runtime: PASS / code=$commit"
+
+      - name: Load masked beta request credentials
+        shell: bash
+        run: |
+          set -euo pipefail
+          get_env_value() {
+            key="$1"
+            tmp="$(mktemp)"
+            code="$(curl -sS -o "$tmp" -w '%{http_code}' \
+              "${RENDER_API_BASE}/services/${SERVICE_ID}/env-vars/${key}" \
+              -H 'Accept: application/json' \
+              -H "Authorization: Bearer ${RENDER_API_KEY}")"
+            [[ "$code" == 200 ]] || { echo "Credential lookup failed for $key: HTTP $code" >&2; rm -f "$tmp"; return 1; }
+            jq -r '(.envVar.value // .value // empty)' "$tmp"
+            rm -f "$tmp"
+          }
+          action_token="$(get_env_value KRC_MEDIA_ACTION_TOKEN)"
+          beta_codes="$(get_env_value KRC_MEDIA_BETA_CODES)"
+          test -n "$action_token" || { echo "KRC_MEDIA_ACTION_TOKEN missing" >&2; exit 1; }
+          test -n "$beta_codes" || { echo "KRC_MEDIA_BETA_CODES missing" >&2; exit 1; }
+          beta_code="${beta_codes%%,*}"
+          beta_code="$(printf '%s' "$beta_code" | sed 's/^[[:space:]]*//;s/[[:space:]]*$//')"
+          test -n "$beta_code" || { echo "No beta code resolved" >&2; exit 1; }
+          echo "::add-mask::$action_token"
+          echo "::add-mask::$beta_codes"
+          echo "::add-mask::$beta_code"
+          printf '%s' "$action_token" > /tmp/krc-action-token
+          printf '%s' "$beta_code" > /tmp/krc-beta-code
+          echo "Masked beta credentials: READY"
+
+      - name: Credit preflight before one approved start
+        id: before
+        shell: bash
+        run: |
+          set -euo pipefail
+          action_token="$(cat /tmp/krc-action-token)"
+          beta_code="$(cat /tmp/krc-beta-code)"
+          payload="$(jq -nc --arg url "$PROBE_URL" --arg code "$beta_code" \
+            '{url:$url,language_hint:"auto",beta_access_code:$code}')"
+          http_status="$(curl -sS --max-time 90 -o /tmp/preflight-before.json -w '%{http_code}' \
+            -X POST "${BETA_BASE_URL}/api/v1/media/managed/preflight" \
+            -H 'Accept: application/json' \
+            -H 'Content-Type: application/json' \
+            -H "Authorization: Bearer ${action_token}" \
+            --data "$payload")"
+          [[ "$http_status" == 200 ]] || { echo "Preflight failed HTTP $http_status" >&2; exit 1; }
+          jq -e '.provider == "supadata" and .mode == "native" and .estimated_credits == 1 and .can_continue == true and .consent_required == true' /tmp/preflight-before.json >/dev/null
+          available="$(jq -r '.credits_available' /tmp/preflight-before.json)"
+          echo "available=$available" >> "$GITHUB_OUTPUT"
+          echo "Preflight before: PASS / available=$available / maximum approved spend=1"
+
+      - name: Start exactly one approved native transcript
+        id: start
+        shell: bash
+        run: |
+          set -euo pipefail
+          action_token="$(cat /tmp/krc-action-token)"
+          beta_code="$(cat /tmp/krc-beta-code)"
+          payload="$(jq -nc --arg url "$PROBE_URL" --arg code "$beta_code" \
+            '{url:$url,language_hint:"auto",beta_access_code:$code,credit_consent:{provider:"supadata",mode:"native",max_credits:1}}')"
+          http_status="$(curl -sS --max-time 120 -o /tmp/first-start.json -w '%{http_code}' \
+            -X POST "${BETA_BASE_URL}/api/v1/media/managed/transcriptions" \
+            -H 'Accept: application/json' \
+            -H 'Content-Type: application/json' \
+            -H "Authorization: Bearer ${action_token}" \
+            --data "$payload")"
+          [[ "$http_status" == 200 ]] || { echo "First native start failed HTTP $http_status" >&2; jq -c '{error:(.error // null)}' /tmp/first-start.json >&2 || true; exit 1; }
+          jq -e '
+            .status == "COMPLETED" and
+            .reused == false and
+            .credits_charged == 1 and
+            .credit_charge_uncertain == false and
+            (.segment_count | numbers) > 0
+          ' /tmp/first-start.json >/dev/null
+          job_id="$(jq -r '.job_id' /tmp/first-start.json)"
+          segments="$(jq -r '.segment_count' /tmp/first-start.json)"
+          detected="$(jq -r '.detected_language // "unknown"' /tmp/first-start.json)"
+          echo "started=true" >> "$GITHUB_OUTPUT"
+          echo "job_id=$job_id" >> "$GITHUB_OUTPUT"
+          echo "segments=$segments" >> "$GITHUB_OUTPUT"
+          echo "detected=$detected" >> "$GITHUB_OUTPUT"
+          echo "First approved start: PASS / job=$job_id / segments=$segments / credits=1"
+
+      - name: Verify completed durable job before restart
+        shell: bash
+        env:
+          JOB_ID: ${{ steps.start.outputs.job_id }}
+        run: |
+          set -euo pipefail
+          action_token="$(cat /tmp/krc-action-token)"
+          code="$(curl -sS --max-time 60 -o /tmp/job-before-restart.json -w '%{http_code}' \
+            "${BETA_BASE_URL}/api/v1/media/managed/transcriptions/${JOB_ID}" \
+            -H 'Accept: application/json' \
+            -H "Authorization: Bearer ${action_token}")"
+          [[ "$code" == 200 ]] || { echo "Job read failed HTTP $code" >&2; exit 1; }
+          jq -e --arg job "$JOB_ID" '.job_id == $job and .status == "COMPLETED" and .credits_charged == 1 and .credit_charge_uncertain == false' /tmp/job-before-restart.json >/dev/null
+          code="$(curl -sS --max-time 60 -o /tmp/segments-before-restart.json -w '%{http_code}' \
+            "${BETA_BASE_URL}/api/v1/media/managed/transcriptions/${JOB_ID}/segments?cursor=0&limit=50" \
+            -H 'Accept: application/json' \
+            -H "Authorization: Bearer ${action_token}")"
+          [[ "$code" == 200 ]] || { echo "Segment read failed HTTP $code" >&2; exit 1; }
+          count="$(jq -r '.segments | length' /tmp/segments-before-restart.json)"
+          [[ "$count" -gt 0 ]] || { echo "No durable segments before restart" >&2; exit 1; }
+          echo "Durable read before restart: PASS / first_page_segments=$count"
+
+      - name: Arm zero-charge duplicate guard
+        id: guard
+        shell: bash
+        run: |
+          set -euo pipefail
+          invalid_key="A9_3_DUPLICATE_GUARD_INVALID_20260820"
+          echo "::add-mask::$invalid_key"
+          payload="$(jq -nc --arg value "$invalid_key" '{value:$value}')"
+          tmp="$(mktemp)"
+          code="$(curl -sS -o "$tmp" -w '%{http_code}' \
+            -X PUT "${RENDER_API_BASE}/services/${SERVICE_ID}/env-vars/SUPADATA_API_KEY" \
+            -H 'Accept: application/json' \
+            -H 'Content-Type: application/json' \
+            -H "Authorization: Bearer ${RENDER_API_KEY}" \
+            --data "$payload")"
+          rm -f "$tmp"
+          [[ "$code" == 200 ]] || { echo "Could not arm provider guard HTTP $code" >&2; exit 1; }
+          echo "armed=true" >> "$GITHUB_OUTPUT"
+          echo "Duplicate guard: ARMED / provider key intentionally invalid for post-restart retry"
+
+      - name: Restart isolated runtime with duplicate guard
+        id: guarded_deploy
+        shell: bash
+        run: |
+          set -euo pipefail
+          payload="$(jq -nc --arg commitId "$CODE_SHA" '{commitId:$commitId,clearCache:"do_not_clear"}')"
+          tmp="$(mktemp)"
+          code="$(curl -sS -o "$tmp" -w '%{http_code}' \
+            -X POST "${RENDER_API_BASE}/services/${SERVICE_ID}/deploys" \
+            -H 'Accept: application/json' \
+            -H 'Content-Type: application/json' \
+            -H "Authorization: Bearer ${RENDER_API_KEY}" \
+            --data "$payload")"
+          [[ "$code" == 201 || "$code" == 202 ]] || { echo "Guarded restart request failed HTTP $code" >&2; rm -f "$tmp"; exit 1; }
+          deploy_id="$(jq -r '(.deploy // .).id // empty' "$tmp")"
+          rm -f "$tmp"
+          test -n "$deploy_id" || { echo "Guarded deploy ID missing" >&2; exit 1; }
+          echo "deploy_id=$deploy_id" >> "$GITHUB_OUTPUT"
+          echo "Guarded restart accepted: $deploy_id"
+
+      - name: Wait for guarded isolated restart
+        env:
+          DEPLOY_ID: ${{ steps.guarded_deploy.outputs.deploy_id }}
+        shell: bash
+        run: |
+          set -euo pipefail
+          for i in $(seq 1 90); do
+            tmp="$(mktemp)"
+            code="$(curl -sS -o "$tmp" -w '%{http_code}' \
+              "${RENDER_API_BASE}/services/${SERVICE_ID}/deploys/${DEPLOY_ID}" \
+              -H 'Accept: application/json' \
+              -H "Authorization: Bearer ${RENDER_API_KEY}")"
+            [[ "$code" == 200 ]] || { echo "Guarded deploy status failed HTTP $code" >&2; rm -f "$tmp"; exit 1; }
+            status="$(jq -r '(.deploy // .).status // "unknown"' "$tmp")"
+            commit="$(jq -r '(.deploy // .).commit.id // (.deploy // .).commitId // "unknown"' "$tmp")"
+            rm -f "$tmp"
+            case "$status" in
+              live)
+                [[ "$commit" == "$CODE_SHA" ]] || { echo "Guarded live commit mismatch: $commit" >&2; exit 1; }
+                echo "Guarded isolated restart: LIVE / $commit"
+                exit 0
+                ;;
+              build_failed|update_failed|canceled|deactivated)
+                echo "Guarded isolated restart failed: $status" >&2
+                exit 1
+                ;;
+            esac
+            sleep 5
+          done
+          echo "Guarded isolated restart timeout" >&2
+          exit 1
+
+      - name: Verify job and segments survive restart
+        id: restart_read
+        shell: bash
+        env:
+          JOB_ID: ${{ steps.start.outputs.job_id }}
+          EXPECTED_SEGMENTS: ${{ steps.start.outputs.segments }}
+        run: |
+          set -euo pipefail
+          action_token="$(cat /tmp/krc-action-token)"
+          code="$(curl -sS --retry 5 --retry-delay 3 --max-time 90 -o /tmp/job-after-restart.json -w '%{http_code}' \
+            "${BETA_BASE_URL}/api/v1/media/managed/transcriptions/${JOB_ID}" \
+            -H 'Accept: application/json' \
+            -H "Authorization: Bearer ${action_token}")"
+          [[ "$code" == 200 ]] || { echo "Post-restart job read failed HTTP $code" >&2; exit 1; }
+          jq -e --arg job "$JOB_ID" --argjson segments "$EXPECTED_SEGMENTS" '
+            .job_id == $job and .status == "COMPLETED" and .segment_count == $segments and .credits_charged == 1 and .credit_charge_uncertain == false
+          ' /tmp/job-after-restart.json >/dev/null
+          code="$(curl -sS --max-time 60 -o /tmp/segments-after-restart.json -w '%{http_code}' \
+            "${BETA_BASE_URL}/api/v1/media/managed/transcriptions/${JOB_ID}/segments?cursor=0&limit=50" \
+            -H 'Accept: application/json' \
+            -H "Authorization: Bearer ${action_token}")"
+          [[ "$code" == 200 ]] || { echo "Post-restart segment read failed HTTP $code" >&2; exit 1; }
+          count="$(jq -r '.segments | length' /tmp/segments-after-restart.json)"
+          [[ "$count" -gt 0 ]] || { echo "No segments survived restart" >&2; exit 1; }
+          echo "restart_read=true" >> "$GITHUB_OUTPUT"
+          echo "Restart durability: PASS / job=$JOB_ID / segment_count=$EXPECTED_SEGMENTS"
+
+      - name: Retry same start after restart under zero-charge guard
+        id: duplicate
+        shell: bash
+        env:
+          JOB_ID: ${{ steps.start.outputs.job_id }}
+        run: |
+          set -euo pipefail
+          action_token="$(cat /tmp/krc-action-token)"
+          beta_code="$(cat /tmp/krc-beta-code)"
+          payload="$(jq -nc --arg url "$PROBE_URL" --arg code "$beta_code" \
+            '{url:$url,language_hint:"auto",beta_access_code:$code,credit_consent:{provider:"supadata",mode:"native",max_credits:1}}')"
+          http_status="$(curl -sS --max-time 60 -o /tmp/duplicate.json -w '%{http_code}' \
+            -X POST "${BETA_BASE_URL}/api/v1/media/managed/transcriptions" \
+            -H 'Accept: application/json' \
+            -H 'Content-Type: application/json' \
+            -H "Authorization: Bearer ${action_token}" \
+            --data "$payload")"
+          [[ "$http_status" == 200 ]] || { echo "Duplicate retry did not reuse durable job; HTTP $http_status" >&2; jq -c '{error:(.error // null)}' /tmp/duplicate.json >&2 || true; exit 1; }
+          jq -e --arg job "$JOB_ID" '
+            .job_id == $job and
+            .status == "COMPLETED" and
+            .reused == true and
+            .credits_charged == 1 and
+            .credit_charge_uncertain == false
+          ' /tmp/duplicate.json >/dev/null
+          echo "duplicate=true" >> "$GITHUB_OUTPUT"
+          echo "Post-restart duplicate: PASS / same job reused / valid provider credential unavailable by design"
+
+      - name: Restore valid isolated Supadata key and runtime
+        id: restore
+        if: always()
+        shell: bash
+        run: |
+          set -euo pipefail
+          test -n "${SUPADATA_API_KEY:-}" || { echo "Cannot restore: GitHub SUPADATA_API_KEY missing" >&2; exit 1; }
+          echo "::add-mask::$SUPADATA_API_KEY"
+          payload="$(jq -nc --arg value "$SUPADATA_API_KEY" '{value:$value}')"
+          tmp="$(mktemp)"
+          code="$(curl -sS -o "$tmp" -w '%{http_code}' \
+            -X PUT "${RENDER_API_BASE}/services/${SERVICE_ID}/env-vars/SUPADATA_API_KEY" \
+            -H 'Accept: application/json' \
+            -H 'Content-Type: application/json' \
+            -H "Authorization: Bearer ${RENDER_API_KEY}" \
+            --data "$payload")"
+          rm -f "$tmp"
+          [[ "$code" == 200 ]] || { echo "Provider key restore failed HTTP $code" >&2; exit 1; }
+
+          payload="$(jq -nc --arg commitId "$CODE_SHA" '{commitId:$commitId,clearCache:"do_not_clear"}')"
+          tmp="$(mktemp)"
+          code="$(curl -sS -o "$tmp" -w '%{http_code}' \
+            -X POST "${RENDER_API_BASE}/services/${SERVICE_ID}/deploys" \
+            -H 'Accept: application/json' \
+            -H 'Content-Type: application/json' \
+            -H "Authorization: Bearer ${RENDER_API_KEY}" \
+            --data "$payload")"
+          [[ "$code" == 201 || "$code" == 202 ]] || { echo "Restore deploy request failed HTTP $code" >&2; rm -f "$tmp"; exit 1; }
+          deploy_id="$(jq -r '(.deploy // .).id // empty' "$tmp")"
+          rm -f "$tmp"
+          test -n "$deploy_id" || { echo "Restore deploy ID missing" >&2; exit 1; }
+
+          for i in $(seq 1 90); do
+            tmp="$(mktemp)"
+            code="$(curl -sS -o "$tmp" -w '%{http_code}' \
+              "${RENDER_API_BASE}/services/${SERVICE_ID}/deploys/${deploy_id}" \
+              -H 'Accept: application/json' \
+              -H "Authorization: Bearer ${RENDER_API_KEY}")"
+            [[ "$code" == 200 ]] || { echo "Restore deploy status failed HTTP $code" >&2; rm -f "$tmp"; exit 1; }
+            status="$(jq -r '(.deploy // .).status // "unknown"' "$tmp")"
+            commit="$(jq -r '(.deploy // .).commit.id // (.deploy // .).commitId // "unknown"' "$tmp")"
+            rm -f "$tmp"
+            case "$status" in
+              live)
+                [[ "$commit" == "$CODE_SHA" ]] || { echo "Restored live commit mismatch: $commit" >&2; exit 1; }
+                echo "restored=true" >> "$GITHUB_OUTPUT"
+                echo "Valid provider key restored; isolated runtime LIVE / $commit"
+                exit 0
+                ;;
+              build_failed|update_failed|canceled|deactivated)
+                echo "Restore deploy failed: $status" >&2
+                exit 1
+                ;;
+            esac
+            sleep 5
+          done
+          echo "Restore deploy timeout" >&2
+          exit 1
+
+      - name: Verify final balance changed by exactly one credit
+        id: after
+        if: always() && steps.start.outputs.started == 'true' && steps.restore.outputs.restored == 'true'
+        shell: bash
+        env:
+          BEFORE: ${{ steps.before.outputs.available }}
+        run: |
+          set -euo pipefail
+          action_token="$(cat /tmp/krc-action-token)"
+          beta_code="$(cat /tmp/krc-beta-code)"
+          payload="$(jq -nc --arg url "$PROBE_URL" --arg code "$beta_code" \
+            '{url:$url,language_hint:"auto",beta_access_code:$code}')"
+          http_status="$(curl -sS --max-time 90 -o /tmp/preflight-after.json -w '%{http_code}' \
+            -X POST "${BETA_BASE_URL}/api/v1/media/managed/preflight" \
+            -H 'Accept: application/json' \
+            -H 'Content-Type: application/json' \
+            -H "Authorization: Bearer ${action_token}" \
+            --data "$payload")"
+          [[ "$http_status" == 200 ]] || { echo "Final preflight failed HTTP $http_status" >&2; exit 1; }
+          after="$(jq -r '.credits_available' /tmp/preflight-after.json)"
+          expected="$((BEFORE - 1))"
+          [[ "$after" -eq "$expected" ]] || { echo "Unexpected credit delta: before=$BEFORE after=$after expected=$expected" >&2; exit 1; }
+          echo "available=$after" >> "$GITHUB_OUTPUT"
+          echo "Credit delta: PASS / before=$BEFORE / after=$after / spent=1"
+
+      - name: Report sanitized A9.3 live acceptance
+        if: always()
+        env:
+          GH_TOKEN: ${{ github.token }}
+          WORKFLOW_STATUS: ${{ job.status }}
+          JOB_ID: ${{ steps.start.outputs.job_id }}
+          SEGMENTS: ${{ steps.start.outputs.segments }}
+          DETECTED: ${{ steps.start.outputs.detected }}
+          BEFORE: ${{ steps.before.outputs.available }}
+          AFTER: ${{ steps.after.outputs.available }}
+          RESTART_READ: ${{ steps.restart_read.outputs.restart_read }}
+          DUPLICATE: ${{ steps.duplicate.outputs.duplicate }}
+          RESTORED: ${{ steps.restore.outputs.restored }}
+        shell: bash
+        run: |
+          set -euo pipefail
+          gh pr comment 28 --repo kolemasakar/VoiceBridge --body "A9.3 live durable/idempotency acceptance: **${WORKFLOW_STATUS^^}**. Validated code: \`${CODE_SHA}\`; isolated target: \`${SERVICE_NAME}\` only. KRCM job: \`${JOB_ID:-unknown}\`; detected language: \`${DETECTED:-unknown}\`; segment_count: \`${SEGMENTS:-unknown}\`; provider credits before: \`${BEFORE:-unknown}\`; after: \`${AFTER:-unknown}\`. Restart durable read: \`${RESTART_READ:-false}\`; post-restart duplicate reused same job under an intentionally invalid provider-key guard: \`${DUPLICATE:-false}\`; valid isolated provider key restored: \`${RESTORED:-false}\`. At most one valid native provider start was issued; production was not targeted."
