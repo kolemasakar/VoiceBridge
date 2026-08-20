@@ -1,4 +1,4 @@
-name: Render MEDIA BETA A9.3 Final Durable Acceptance
+name: Render MEDIA BETA A9.3 Final Durable Acceptance RU
 
 on:
   push:
@@ -24,6 +24,7 @@ env:
   BETA_BASE_URL: https://voicebridge-krc-media-beta-kolemasakar.onrender.com
   CODE_SHA: 77292de5537c7e17093bb6b5921ccac55ac65e25
   PROBE_URL: https://www.youtube.com/watch?v=IzYyKRx7Qwg
+  LANGUAGE_HINT: ru
 
 jobs:
   accept:
@@ -33,18 +34,31 @@ jobs:
       SUPADATA_API_KEY: ${{ secrets.SUPADATA_API_KEY }}
       GH_TOKEN: ${{ github.token }}
     steps:
-      - name: Verify isolated runtime and credit preflight
-        id: preflight
+      - name: Run one-credit guarded durability acceptance on clean request key
         shell: bash
         run: |
-          set -euo pipefail
-          test -n "${RENDER_API_KEY:-}"
-          test -n "${SUPADATA_API_KEY:-}"
-          echo "::add-mask::$RENDER_API_KEY"
-          echo "::add-mask::$SUPADATA_API_KEY"
-          [[ "$GITHUB_REF_NAME" == "$REQUIRED_BRANCH" ]]
+          set -uo pipefail
 
-          get_env() {
+          before="unknown"
+          after="unknown"
+          job_id="unknown"
+          media_status="unknown"
+          reused="unknown"
+          credits_charged="unknown"
+          segment_count="unknown"
+          detected_language="unknown"
+          start_http="unknown"
+          durable_before="false"
+          guarded_restart="false"
+          duplicate_reused="false"
+          provider_key_changed="false"
+          provider_key_restored="true"
+          action_token=""
+          beta_code=""
+
+          mask() { test -z "${1:-}" || echo "::add-mask::$1"; }
+
+          render_env() {
             local key="$1" tmp code
             tmp="$(mktemp)"
             code="$(curl -sS -o "$tmp" -w '%{http_code}' \
@@ -56,298 +70,227 @@ jobs:
             rm -f "$tmp"
           }
 
-          tmp="$(mktemp)"
-          code="$(curl -sS -o "$tmp" -w '%{http_code}' \
-            "${RENDER_API_BASE}/services/${SERVICE_ID}" \
-            -H 'Accept: application/json' \
-            -H "Authorization: Bearer ${RENDER_API_KEY}")"
-          [[ "$code" == 200 ]]
-          [[ "$(jq -r '.name // empty' "$tmp")" == "$SERVICE_NAME" ]]
-          [[ "$(jq -r '.branch // empty' "$tmp")" == "$REQUIRED_BRANCH" ]]
-          rm -f "$tmp"
-
-          tmp="$(mktemp)"
-          code="$(curl -sS --get -o "$tmp" -w '%{http_code}' \
-            "${RENDER_API_BASE}/services/${SERVICE_ID}/deploys" \
-            --data-urlencode 'limit=1' \
-            -H 'Accept: application/json' \
-            -H "Authorization: Bearer ${RENDER_API_KEY}")"
-          [[ "$code" == 200 ]]
-          status="$(jq -r '((.[0].deploy // .[0]).status // "unknown")' "$tmp")"
-          commit="$(jq -r '((.[0].deploy // .[0]).commit.id // (.[0].deploy // .[0]).commitId // "unknown")' "$tmp")"
-          rm -f "$tmp"
-          [[ "$status" == live ]]
-          [[ "$commit" == "$CODE_SHA" ]]
-
-          render_supadata="$(get_env SUPADATA_API_KEY)"
-          echo "::add-mask::$render_supadata"
-          [[ -n "$render_supadata" && "$render_supadata" == "$SUPADATA_API_KEY" ]]
-
-          action_token="$(get_env KRC_MEDIA_ACTION_TOKEN)"
-          beta_codes="$(get_env KRC_MEDIA_BETA_CODES)"
-          beta_code="${beta_codes%%,*}"
-          beta_code="$(printf '%s' "$beta_code" | sed 's/^[[:space:]]*//;s/[[:space:]]*$//')"
-          test -n "$action_token"
-          test -n "$beta_code"
-          echo "::add-mask::$action_token"
-          echo "::add-mask::$beta_codes"
-          echo "::add-mask::$beta_code"
-          printf '%s' "$action_token" > /tmp/krc-action-token
-          printf '%s' "$beta_code" > /tmp/krc-beta-code
-
-          capability_code="$(curl -sS --max-time 60 -o /tmp/a93-capability.json -w '%{http_code}' \
-            "${BETA_BASE_URL}/api/v1/media/managed" \
-            -H 'Accept: application/json' \
-            -H "Authorization: Bearer ${action_token}")"
-          [[ "$capability_code" == 200 ]]
-          jq -e '.configured == true and .durable_store == "postgres" and .restart_resilient_jobs == true and .duplicate_start_reuses_job == true' /tmp/a93-capability.json >/dev/null
-
-          payload="$(jq -nc --arg url "$PROBE_URL" --arg code "$beta_code" \
-            '{url:$url,language_hint:"auto",beta_access_code:$code}')"
-          http_status="$(curl -sS --max-time 90 -o /tmp/a93-before.json -w '%{http_code}' \
-            -X POST "${BETA_BASE_URL}/api/v1/media/managed/preflight" \
-            -H 'Accept: application/json' \
-            -H 'Content-Type: application/json' \
-            -H "Authorization: Bearer ${action_token}" \
-            --data "$payload")"
-          [[ "$http_status" == 200 ]]
-          jq -e '.provider == "supadata" and .mode == "native" and .estimated_credits == 1 and .can_continue == true and .consent_required == true' /tmp/a93-before.json >/dev/null
-          before="$(jq -r '.credits_available' /tmp/a93-before.json)"
-          [[ "$before" =~ ^[0-9]+$ && "$before" -ge 1 ]]
-          echo "before=$before" >> "$GITHUB_OUTPUT"
-          echo "A9.3 preflight PASS / credits=$before / cap=1"
-
-      - name: Start exactly one approved native transcript
-        id: start
-        shell: bash
-        run: |
-          set -euo pipefail
-          action_token="$(cat /tmp/krc-action-token)"
-          beta_code="$(cat /tmp/krc-beta-code)"
-          payload="$(jq -nc --arg url "$PROBE_URL" --arg code "$beta_code" \
-            '{url:$url,language_hint:"auto",beta_access_code:$code,credit_consent:{provider:"supadata",mode:"native",max_credits:1}}')"
-          http_status="$(curl -sS --max-time 120 -o /tmp/a93-start.json -w '%{http_code}' \
-            -X POST "${BETA_BASE_URL}/api/v1/media/managed/transcriptions" \
-            -H 'Accept: application/json' \
-            -H 'Content-Type: application/json' \
-            -H "Authorization: Bearer ${action_token}" \
-            --data "$payload")"
-          [[ "$http_status" == 200 ]]
-          jq -e '.status == "COMPLETED" and .reused == false and .credits_charged == 1 and .credit_charge_uncertain == false and (.segment_count | numbers) > 0' /tmp/a93-start.json >/dev/null
-          job_id="$(jq -r '.job_id' /tmp/a93-start.json)"
-          segment_count="$(jq -r '.segment_count' /tmp/a93-start.json)"
-          detected_language="$(jq -r '.detected_language // "unknown"' /tmp/a93-start.json)"
-          echo "job_id=$job_id" >> "$GITHUB_OUTPUT"
-          echo "segment_count=$segment_count" >> "$GITHUB_OUTPUT"
-          echo "detected_language=$detected_language" >> "$GITHUB_OUTPUT"
-          echo "One approved native start PASS / job=$job_id / segments=$segment_count / credits=1"
-
-      - name: Report one-credit native start
-        if: success()
-        shell: bash
-        env:
-          JOB_ID: ${{ steps.start.outputs.job_id }}
-          SEGMENTS: ${{ steps.start.outputs.segment_count }}
-          LANGUAGE: ${{ steps.start.outputs.detected_language }}
-          BEFORE: ${{ steps.preflight.outputs.before }}
-        run: |
-          gh pr comment 28 --repo kolemasakar/VoiceBridge --body "A9.3 native start checkpoint: **SUCCESS**. One approved Supadata native request completed. KRCM job: \`${JOB_ID}\`; detected language: \`${LANGUAGE}\`; segment_count: \`${SEGMENTS}\`; credits before: \`${BEFORE}\`; operation cap: \`1\`. No second valid provider request is permitted by this acceptance workflow."
-
-      - name: Verify durable job before restart
-        id: before_restart
-        shell: bash
-        env:
-          JOB_ID: ${{ steps.start.outputs.job_id }}
-        run: |
-          set -euo pipefail
-          action_token="$(cat /tmp/krc-action-token)"
-          code="$(curl -sS --max-time 60 -o /tmp/a93-job-before.json -w '%{http_code}' \
-            "${BETA_BASE_URL}/api/v1/media/managed/transcriptions/${JOB_ID}" \
-            -H 'Accept: application/json' \
-            -H "Authorization: Bearer ${action_token}")"
-          [[ "$code" == 200 ]]
-          jq -e --arg job "$JOB_ID" '.job_id == $job and .status == "COMPLETED" and .credits_charged == 1 and .credit_charge_uncertain == false' /tmp/a93-job-before.json >/dev/null
-          code="$(curl -sS --max-time 60 -o /tmp/a93-segments-before.json -w '%{http_code}' \
-            "${BETA_BASE_URL}/api/v1/media/managed/transcriptions/${JOB_ID}/segments?cursor=0&limit=50" \
-            -H 'Accept: application/json' \
-            -H "Authorization: Bearer ${action_token}")"
-          [[ "$code" == 200 ]]
-          [[ "$(jq -r '.segments | length' /tmp/a93-segments-before.json)" -gt 0 ]]
-          echo "Durable read before restart PASS"
-
-      - name: Arm invalid-provider guard and restart isolated beta
-        id: guard
-        shell: bash
-        run: |
-          set -euo pipefail
-          invalid_key="A9_3_INVALID_PROVIDER_GUARD_20260821"
-          echo "::add-mask::$invalid_key"
-          payload="$(jq -nc --arg value "$invalid_key" '{value:$value}')"
-          tmp="$(mktemp)"
-          code="$(curl -sS -o "$tmp" -w '%{http_code}' \
-            -X PUT "${RENDER_API_BASE}/services/${SERVICE_ID}/env-vars/SUPADATA_API_KEY" \
-            -H 'Accept: application/json' \
-            -H 'Content-Type: application/json' \
-            -H "Authorization: Bearer ${RENDER_API_KEY}" \
-            --data "$payload")"
-          rm -f "$tmp"
-          [[ "$code" == 200 ]]
-          echo true > /tmp/provider-key-changed
-
-          deploy_payload="$(jq -nc --arg commitId "$CODE_SHA" '{commitId:$commitId,clearCache:"do_not_clear"}')"
-          tmp="$(mktemp)"
-          code="$(curl -sS -o "$tmp" -w '%{http_code}' \
-            -X POST "${RENDER_API_BASE}/services/${SERVICE_ID}/deploys" \
-            -H 'Accept: application/json' \
-            -H 'Content-Type: application/json' \
-            -H "Authorization: Bearer ${RENDER_API_KEY}" \
-            --data "$deploy_payload")"
-          [[ "$code" == 201 || "$code" == 202 ]]
-          deploy_id="$(jq -r '(.deploy // .).id // empty' "$tmp")"
-          rm -f "$tmp"
-          test -n "$deploy_id"
-          for i in $(seq 1 90); do
+          set_render_env() {
+            local key="$1" value="$2" tmp code payload
+            payload="$(jq -nc --arg value "$value" '{value:$value}')"
             tmp="$(mktemp)"
             code="$(curl -sS -o "$tmp" -w '%{http_code}' \
-              "${RENDER_API_BASE}/services/${SERVICE_ID}/deploys/${deploy_id}" \
+              -X PUT "${RENDER_API_BASE}/services/${SERVICE_ID}/env-vars/${key}" \
               -H 'Accept: application/json' \
-              -H "Authorization: Bearer ${RENDER_API_KEY}")"
-            [[ "$code" == 200 ]]
-            status="$(jq -r '(.deploy // .).status // "unknown"' "$tmp")"
-            commit="$(jq -r '(.deploy // .).commit.id // (.deploy // .).commitId // "unknown"' "$tmp")"
+              -H 'Content-Type: application/json' \
+              -H "Authorization: Bearer ${RENDER_API_KEY}" \
+              --data "$payload")"
             rm -f "$tmp"
-            if [[ "$status" == live ]]; then
-              [[ "$commit" == "$CODE_SHA" ]]
-              echo "Guarded isolated restart PASS"
-              exit 0
-            fi
-            case "$status" in build_failed|update_failed|canceled|deactivated) exit 1 ;; esac
-            sleep 5
-          done
-          exit 1
+            [[ "$code" == 200 ]]
+          }
 
-      - name: Verify restart durability and duplicate reuse
-        id: duplicate
-        shell: bash
-        env:
-          JOB_ID: ${{ steps.start.outputs.job_id }}
-          EXPECTED_SEGMENTS: ${{ steps.start.outputs.segment_count }}
-        run: |
-          set -euo pipefail
-          action_token="$(cat /tmp/krc-action-token)"
-          beta_code="$(cat /tmp/krc-beta-code)"
-          code="$(curl -sS --retry 5 --retry-delay 3 --max-time 90 -o /tmp/a93-job-after.json -w '%{http_code}' \
-            "${BETA_BASE_URL}/api/v1/media/managed/transcriptions/${JOB_ID}" \
-            -H 'Accept: application/json' \
-            -H "Authorization: Bearer ${action_token}")"
-          [[ "$code" == 200 ]]
-          jq -e --arg job "$JOB_ID" --argjson count "$EXPECTED_SEGMENTS" '.job_id == $job and .status == "COMPLETED" and .segment_count == $count and .credits_charged == 1 and .credit_charge_uncertain == false' /tmp/a93-job-after.json >/dev/null
-
-          code="$(curl -sS --max-time 60 -o /tmp/a93-segments-after.json -w '%{http_code}' \
-            "${BETA_BASE_URL}/api/v1/media/managed/transcriptions/${JOB_ID}/segments?cursor=0&limit=50" \
-            -H 'Accept: application/json' \
-            -H "Authorization: Bearer ${action_token}")"
-          [[ "$code" == 200 ]]
-          [[ "$(jq -r '.segments | length' /tmp/a93-segments-after.json)" -gt 0 ]]
-
-          payload="$(jq -nc --arg url "$PROBE_URL" --arg code "$beta_code" \
-            '{url:$url,language_hint:"auto",beta_access_code:$code,credit_consent:{provider:"supadata",mode:"native",max_credits:1}}')"
-          http_status="$(curl -sS --max-time 60 -o /tmp/a93-duplicate.json -w '%{http_code}' \
-            -X POST "${BETA_BASE_URL}/api/v1/media/managed/transcriptions" \
-            -H 'Accept: application/json' \
-            -H 'Content-Type: application/json' \
-            -H "Authorization: Bearer ${action_token}" \
-            --data "$payload")"
-          [[ "$http_status" == 200 ]]
-          jq -e --arg job "$JOB_ID" '.job_id == $job and .status == "COMPLETED" and .reused == true and .credits_charged == 1 and .credit_charge_uncertain == false' /tmp/a93-duplicate.json >/dev/null
-          echo "Restart durable read + duplicate reuse under invalid provider key PASS"
-
-      - name: Restore valid provider key and isolated runtime
-        id: restore
-        if: always()
-        shell: bash
-        run: |
-          set -euo pipefail
-          echo "::add-mask::$RENDER_API_KEY"
-          echo "::add-mask::$SUPADATA_API_KEY"
-          payload="$(jq -nc --arg value "$SUPADATA_API_KEY" '{value:$value}')"
-          tmp="$(mktemp)"
-          code="$(curl -sS -o "$tmp" -w '%{http_code}' \
-            -X PUT "${RENDER_API_BASE}/services/${SERVICE_ID}/env-vars/SUPADATA_API_KEY" \
-            -H 'Accept: application/json' \
-            -H 'Content-Type: application/json' \
-            -H "Authorization: Bearer ${RENDER_API_KEY}" \
-            --data "$payload")"
-          rm -f "$tmp"
-          [[ "$code" == 200 ]]
-
-          deploy_payload="$(jq -nc --arg commitId "$CODE_SHA" '{commitId:$commitId,clearCache:"do_not_clear"}')"
-          tmp="$(mktemp)"
-          code="$(curl -sS -o "$tmp" -w '%{http_code}' \
-            -X POST "${RENDER_API_BASE}/services/${SERVICE_ID}/deploys" \
-            -H 'Accept: application/json' \
-            -H 'Content-Type: application/json' \
-            -H "Authorization: Bearer ${RENDER_API_KEY}" \
-            --data "$deploy_payload")"
-          [[ "$code" == 201 || "$code" == 202 ]]
-          deploy_id="$(jq -r '(.deploy // .).id // empty' "$tmp")"
-          rm -f "$tmp"
-          test -n "$deploy_id"
-          for i in $(seq 1 90); do
+          deploy_code() {
+            local tmp code payload deploy_id status commit i
+            payload="$(jq -nc --arg commitId "$CODE_SHA" '{commitId:$commitId,clearCache:"do_not_clear"}')"
             tmp="$(mktemp)"
             code="$(curl -sS -o "$tmp" -w '%{http_code}' \
-              "${RENDER_API_BASE}/services/${SERVICE_ID}/deploys/${deploy_id}" \
+              -X POST "${RENDER_API_BASE}/services/${SERVICE_ID}/deploys" \
               -H 'Accept: application/json' \
-              -H "Authorization: Bearer ${RENDER_API_KEY}")"
-            [[ "$code" == 200 ]]
-            status="$(jq -r '(.deploy // .).status // "unknown"' "$tmp")"
-            commit="$(jq -r '(.deploy // .).commit.id // (.deploy // .).commitId // "unknown"' "$tmp")"
+              -H 'Content-Type: application/json' \
+              -H "Authorization: Bearer ${RENDER_API_KEY}" \
+              --data "$payload")"
+            [[ "$code" == 201 || "$code" == 202 ]] || { rm -f "$tmp"; return 1; }
+            deploy_id="$(jq -r '(.deploy // .).id // empty' "$tmp")"
             rm -f "$tmp"
-            if [[ "$status" == live ]]; then
-              [[ "$commit" == "$CODE_SHA" ]]
-              echo "Valid provider key restored PASS"
-              exit 0
-            fi
-            case "$status" in build_failed|update_failed|canceled|deactivated) exit 1 ;; esac
-            sleep 5
-          done
-          exit 1
-
-      - name: Verify final balance and report acceptance
-        if: always()
-        shell: bash
-        env:
-          PREFLIGHT_OUTCOME: ${{ steps.preflight.outcome }}
-          START_OUTCOME: ${{ steps.start.outcome }}
-          BEFORE_RESTART_OUTCOME: ${{ steps.before_restart.outcome }}
-          GUARD_OUTCOME: ${{ steps.guard.outcome }}
-          DUPLICATE_OUTCOME: ${{ steps.duplicate.outcome }}
-          RESTORE_OUTCOME: ${{ steps.restore.outcome }}
-          BEFORE: ${{ steps.preflight.outputs.before }}
-          JOB_ID: ${{ steps.start.outputs.job_id }}
-          SEGMENTS: ${{ steps.start.outputs.segment_count }}
-          LANGUAGE: ${{ steps.start.outputs.detected_language }}
-        run: |
-          set +e
-          after="unknown"
-          balance_ok="false"
-          if [[ -f /tmp/krc-action-token && -f /tmp/krc-beta-code ]]; then
-            action_token="$(cat /tmp/krc-action-token)"
-            beta_code="$(cat /tmp/krc-beta-code)"
-            payload="$(jq -nc --arg url "$PROBE_URL" --arg code "$beta_code" '{url:$url,language_hint:"auto",beta_access_code:$code}')"
-            http_status="$(curl -sS --max-time 90 -o /tmp/a93-final.json -w '%{http_code}' -X POST "${BETA_BASE_URL}/api/v1/media/managed/preflight" -H 'Accept: application/json' -H 'Content-Type: application/json' -H "Authorization: Bearer ${action_token}" --data "$payload")"
-            if [[ "$http_status" == 200 ]]; then
-              after="$(jq -r '.credits_available // "unknown"' /tmp/a93-final.json)"
-              if [[ "$BEFORE" =~ ^[0-9]+$ && "$after" =~ ^[0-9]+$ && "$after" -eq $((BEFORE - 1)) ]]; then
-                balance_ok="true"
+            test -n "$deploy_id" || return 1
+            for i in $(seq 1 90); do
+              tmp="$(mktemp)"
+              code="$(curl -sS -o "$tmp" -w '%{http_code}' \
+                "${RENDER_API_BASE}/services/${SERVICE_ID}/deploys/${deploy_id}" \
+                -H 'Accept: application/json' \
+                -H "Authorization: Bearer ${RENDER_API_KEY}")"
+              [[ "$code" == 200 ]] || { rm -f "$tmp"; return 1; }
+              status="$(jq -r '(.deploy // .).status // "unknown"' "$tmp")"
+              commit="$(jq -r '(.deploy // .).commit.id // (.deploy // .).commitId // "unknown"' "$tmp")"
+              rm -f "$tmp"
+              if [[ "$status" == live ]]; then
+                [[ "$commit" == "$CODE_SHA" ]] || return 1
+                return 0
               fi
+              case "$status" in build_failed|update_failed|canceled|deactivated) return 1 ;; esac
+              sleep 5
+            done
+            return 1
+          }
+
+          preflight() {
+            local output="$1" payload http_status
+            payload="$(jq -nc --arg url "$PROBE_URL" --arg code "$beta_code" --arg lang "$LANGUAGE_HINT" \
+              '{url:$url,language_hint:$lang,beta_access_code:$code}')"
+            http_status="$(curl -sS --max-time 90 -o "$output" -w '%{http_code}' \
+              -X POST "${BETA_BASE_URL}/api/v1/media/managed/preflight" \
+              -H 'Accept: application/json' \
+              -H 'Content-Type: application/json' \
+              -H "Authorization: Bearer ${action_token}" \
+              --data "$payload")"
+            [[ "$http_status" == 200 ]] || return 1
+            jq -e '.provider == "supadata" and .mode == "native" and .estimated_credits == 1 and .can_continue == true and .consent_required == true' "$output" >/dev/null
+          }
+
+          main() {
+            set -e
+            test -n "${RENDER_API_KEY:-}"
+            test -n "${SUPADATA_API_KEY:-}"
+            mask "$RENDER_API_KEY"
+            mask "$SUPADATA_API_KEY"
+            [[ "$GITHUB_REF_NAME" == "$REQUIRED_BRANCH" ]]
+
+            local tmp code beta_codes render_supadata payload first_page invalid_key duplicate_http
+
+            tmp="$(mktemp)"
+            code="$(curl -sS -o "$tmp" -w '%{http_code}' \
+              "${RENDER_API_BASE}/services/${SERVICE_ID}" \
+              -H 'Accept: application/json' \
+              -H "Authorization: Bearer ${RENDER_API_KEY}")"
+            [[ "$code" == 200 ]]
+            [[ "$(jq -r '.name // empty' "$tmp")" == "$SERVICE_NAME" ]]
+            [[ "$(jq -r '.branch // empty' "$tmp")" == "$REQUIRED_BRANCH" ]]
+            rm -f "$tmp"
+
+            tmp="$(mktemp)"
+            code="$(curl -sS --get -o "$tmp" -w '%{http_code}' \
+              "${RENDER_API_BASE}/services/${SERVICE_ID}/deploys" \
+              --data-urlencode 'limit=1' \
+              -H 'Accept: application/json' \
+              -H "Authorization: Bearer ${RENDER_API_KEY}")"
+            [[ "$code" == 200 ]]
+            [[ "$(jq -r '((.[0].deploy // .[0]).status // "unknown")' "$tmp")" == live ]]
+            [[ "$(jq -r '((.[0].deploy // .[0]).commit.id // (.[0].deploy // .[0]).commitId // "unknown")' "$tmp")" == "$CODE_SHA" ]]
+            rm -f "$tmp"
+
+            render_supadata="$(render_env SUPADATA_API_KEY)"
+            mask "$render_supadata"
+            [[ "$render_supadata" == "$SUPADATA_API_KEY" ]]
+
+            action_token="$(render_env KRC_MEDIA_ACTION_TOKEN)"
+            beta_codes="$(render_env KRC_MEDIA_BETA_CODES)"
+            beta_code="${beta_codes%%,*}"
+            beta_code="$(printf '%s' "$beta_code" | sed 's/^[[:space:]]*//;s/[[:space:]]*$//')"
+            test -n "$action_token"
+            test -n "$beta_code"
+            mask "$action_token"
+            mask "$beta_codes"
+            mask "$beta_code"
+
+            code="$(curl -sS --max-time 60 -o /tmp/cap.json -w '%{http_code}' \
+              "${BETA_BASE_URL}/api/v1/media/managed" \
+              -H 'Accept: application/json' \
+              -H "Authorization: Bearer ${action_token}")"
+            [[ "$code" == 200 ]]
+            jq -e '.configured == true and .durable_store == "postgres" and .restart_resilient_jobs == true and .duplicate_start_reuses_job == true' /tmp/cap.json >/dev/null
+
+            preflight /tmp/before.json
+            before="$(jq -r '.credits_available' /tmp/before.json)"
+            [[ "$before" =~ ^[0-9]+$ && "$before" -ge 1 ]]
+            echo "A9.3 RU preflight PASS / available=$before / max spend=1"
+
+            payload="$(jq -nc --arg url "$PROBE_URL" --arg code "$beta_code" --arg lang "$LANGUAGE_HINT" \
+              '{url:$url,language_hint:$lang,beta_access_code:$code,credit_consent:{provider:"supadata",mode:"native",max_credits:1}}')"
+            start_http="$(curl -sS --max-time 120 -o /tmp/start.json -w '%{http_code}' \
+              -X POST "${BETA_BASE_URL}/api/v1/media/managed/transcriptions" \
+              -H 'Accept: application/json' \
+              -H 'Content-Type: application/json' \
+              -H "Authorization: Bearer ${action_token}" \
+              --data "$payload")"
+            job_id="$(jq -r '.job_id // "unknown"' /tmp/start.json 2>/dev/null || echo unknown)"
+            media_status="$(jq -r '.status // "unknown"' /tmp/start.json 2>/dev/null || echo unknown)"
+            reused="$(jq -r '.reused // "unknown"' /tmp/start.json 2>/dev/null || echo unknown)"
+            credits_charged="$(jq -r '.credits_charged // "unknown"' /tmp/start.json 2>/dev/null || echo unknown)"
+            segment_count="$(jq -r '.segment_count // "unknown"' /tmp/start.json 2>/dev/null || echo unknown)"
+            detected_language="$(jq -r '.detected_language // "unknown"' /tmp/start.json 2>/dev/null || echo unknown)"
+            echo "Native start HTTP=$start_http / job=$job_id / status=$media_status / reused=$reused / credits=$credits_charged"
+            [[ "$start_http" == 200 ]]
+            jq -e '.status == "COMPLETED" and .reused == false and .credits_charged == 1 and .credit_charge_uncertain == false and (.segment_count | numbers) > 0' /tmp/start.json >/dev/null
+
+            gh pr comment 28 --repo kolemasakar/VoiceBridge --body "A9.3 RU native start checkpoint: **SUCCESS**. One approved native request completed. KRCM job: \`${job_id}\`; detected language: \`${detected_language}\`; segment_count: \`${segment_count}\`; credits before: \`${before}\`; operation cap: \`1\`. No second valid provider request is permitted by this workflow."
+
+            code="$(curl -sS --max-time 60 -o /tmp/job-before.json -w '%{http_code}' \
+              "${BETA_BASE_URL}/api/v1/media/managed/transcriptions/${job_id}" \
+              -H 'Accept: application/json' \
+              -H "Authorization: Bearer ${action_token}")"
+            [[ "$code" == 200 ]]
+            jq -e --arg job "$job_id" '.job_id == $job and .status == "COMPLETED" and .credits_charged == 1 and .credit_charge_uncertain == false' /tmp/job-before.json >/dev/null
+            code="$(curl -sS --max-time 60 -o /tmp/segments-before.json -w '%{http_code}' \
+              "${BETA_BASE_URL}/api/v1/media/managed/transcriptions/${job_id}/segments?cursor=0&limit=50" \
+              -H 'Accept: application/json' \
+              -H "Authorization: Bearer ${action_token}")"
+            [[ "$code" == 200 ]]
+            first_page="$(jq -r '.segments | length' /tmp/segments-before.json)"
+            [[ "$first_page" -gt 0 ]]
+            durable_before="true"
+
+            invalid_key="A9_3_INVALID_PROVIDER_GUARD_20260821"
+            mask "$invalid_key"
+            set_render_env SUPADATA_API_KEY "$invalid_key"
+            provider_key_changed="true"
+            provider_key_restored="false"
+            deploy_code
+            guarded_restart="true"
+
+            code="$(curl -sS --retry 5 --retry-delay 3 --max-time 90 -o /tmp/job-after.json -w '%{http_code}' \
+              "${BETA_BASE_URL}/api/v1/media/managed/transcriptions/${job_id}" \
+              -H 'Accept: application/json' \
+              -H "Authorization: Bearer ${action_token}")"
+            [[ "$code" == 200 ]]
+            jq -e --arg job "$job_id" --argjson count "$segment_count" '.job_id == $job and .status == "COMPLETED" and .segment_count == $count and .credits_charged == 1 and .credit_charge_uncertain == false' /tmp/job-after.json >/dev/null
+            code="$(curl -sS --max-time 60 -o /tmp/segments-after.json -w '%{http_code}' \
+              "${BETA_BASE_URL}/api/v1/media/managed/transcriptions/${job_id}/segments?cursor=0&limit=50" \
+              -H 'Accept: application/json' \
+              -H "Authorization: Bearer ${action_token}")"
+            [[ "$code" == 200 ]]
+            [[ "$(jq -r '.segments | length' /tmp/segments-after.json)" -gt 0 ]]
+
+            duplicate_http="$(curl -sS --max-time 60 -o /tmp/duplicate.json -w '%{http_code}' \
+              -X POST "${BETA_BASE_URL}/api/v1/media/managed/transcriptions" \
+              -H 'Accept: application/json' \
+              -H 'Content-Type: application/json' \
+              -H "Authorization: Bearer ${action_token}" \
+              --data "$payload")"
+            [[ "$duplicate_http" == 200 ]]
+            jq -e --arg job "$job_id" '.job_id == $job and .status == "COMPLETED" and .reused == true and .credits_charged == 1 and .credit_charge_uncertain == false' /tmp/duplicate.json >/dev/null
+            duplicate_reused="true"
+            return 0
+          }
+
+          restore_provider() {
+            set +e
+            if [[ "$provider_key_changed" != true ]]; then
+              provider_key_restored="true"
+              return 0
+            fi
+            mask "$SUPADATA_API_KEY"
+            set_render_env SUPADATA_API_KEY "$SUPADATA_API_KEY" || return 1
+            deploy_code || return 1
+            provider_key_restored="true"
+            return 0
+          }
+
+          set +e
+          main
+          main_rc=$?
+          restore_provider
+          restore_rc=$?
+
+          balance_rc=1
+          if [[ -n "$action_token" && -n "$beta_code" && "$provider_key_restored" == true ]]; then
+            if preflight /tmp/after.json; then
+              after="$(jq -r '.credits_available' /tmp/after.json)"
+              balance_rc=0
             fi
           fi
 
           final="FAILURE"
-          if [[ "$PREFLIGHT_OUTCOME" == success && "$START_OUTCOME" == success && "$BEFORE_RESTART_OUTCOME" == success && "$GUARD_OUTCOME" == success && "$DUPLICATE_OUTCOME" == success && "$RESTORE_OUTCOME" == success && "$balance_ok" == true ]]; then
-            final="SUCCESS"
+          if [[ "$main_rc" -eq 0 && "$restore_rc" -eq 0 && "$balance_rc" -eq 0 && "$before" =~ ^[0-9]+$ && "$after" =~ ^[0-9]+$ ]]; then
+            if [[ "$after" -eq $((before - 1)) && "$durable_before" == true && "$guarded_restart" == true && "$duplicate_reused" == true ]]; then
+              final="SUCCESS"
+            fi
           fi
 
-          gh pr comment 28 --repo kolemasakar/VoiceBridge --body "A9.3 final durable/idempotency acceptance: **${final}**. Validated code: \`${CODE_SHA}\`; isolated target: \`${SERVICE_NAME}\` only. KRCM job: \`${JOB_ID:-unknown}\`; detected language: \`${LANGUAGE:-unknown}\`; segment_count: \`${SEGMENTS:-unknown}\`; credits before: \`${BEFORE:-unknown}\`; after: \`${after}\`; durable read before restart: \`${BEFORE_RESTART_OUTCOME}\`; guarded restart: \`${GUARD_OUTCOME}\`; post-restart durable read and duplicate reuse under invalid provider key: \`${DUPLICATE_OUTCOME}\`; valid provider key restoration: \`${RESTORE_OUTCOME}\`. Exactly one approved valid native provider request was permitted; production was not targeted."
+          gh pr comment 28 --repo kolemasakar/VoiceBridge --body "A9.3 RU final durable/idempotency acceptance: **${final}**. Validated code: \`${CODE_SHA}\`; isolated target only. Start HTTP: \`${start_http}\`; KRCM job: \`${job_id}\`; media status: \`${media_status}\`; initial reused: \`${reused}\`; detected language: \`${detected_language}\`; segment_count: \`${segment_count}\`; credits_charged: \`${credits_charged}\`; credits before: \`${before}\`; after: \`${after}\`; durable read before restart: \`${durable_before}\`; guarded restart: \`${guarded_restart}\`; post-restart duplicate reused same job under invalid provider key: \`${duplicate_reused}\`; valid provider key restored: \`${provider_key_restored}\`. Exactly one approved valid native provider request was permitted; production was not targeted."
+
           [[ "$final" == SUCCESS ]]
