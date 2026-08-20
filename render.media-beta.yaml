@@ -19,6 +19,8 @@ services:
         sync: false
       - key: ASSEMBLYAI_API_KEY
         sync: false
+      - key: KRC_MEDIA_ASSEMBLYAI_BASE_URL
+        value: "https://api.eu.assemblyai.com"
       - key: MEDIA_MAX_DURATION_SECONDS
         value: "3600"
       - key: MEDIA_MAX_CONCURRENT_JOBS
