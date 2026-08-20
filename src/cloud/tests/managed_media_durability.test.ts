@@ -38,15 +38,20 @@ class SharedStore implements ManagedMediaJobStore {
   async ready(): Promise<void> {}
   async purgeExpired(): Promise<void> {}
 
+  async findByRequestKey(
+    requestKey: string
+  ): Promise<ManagedMediaStoredRecord | null> {
+    const jobId = this.byRequest.get(requestKey);
+    if (!jobId) return null;
+    const record = this.byJob.get(jobId);
+    return record ? clone(record) : null;
+  }
+
   async reserve(
     record: ManagedMediaStoredRecord
   ): Promise<ManagedMediaStoreReservation> {
-    const existingId = this.byRequest.get(record.requestKey);
-    if (existingId) {
-      const existing = this.byJob.get(existingId);
-      if (!existing) throw new Error("Shared test store is inconsistent.");
-      return { created: false, record: clone(existing) };
-    }
+    const existing = await this.findByRequestKey(record.requestKey);
+    if (existing) return { created: false, record: existing };
     const stored = clone(record);
     this.byJob.set(stored.job.job_id, stored);
     this.byRequest.set(stored.requestKey, stored.job.job_id);
@@ -67,6 +72,7 @@ class SharedStore implements ManagedMediaJobStore {
 
 class CountingProvider implements ManagedNativeTranscriptProvider {
   transcriptCalls = 0;
+  quoteCalls = 0;
   release: (() => void) | null = null;
   started: Promise<void>;
   private markStarted: (() => void) | null = null;
@@ -78,6 +84,7 @@ class CountingProvider implements ManagedNativeTranscriptProvider {
   }
 
   async quoteNative() {
+    this.quoteCalls += 1;
     return {
       provider: "supadata" as const,
       mode: "native" as const,
@@ -146,6 +153,7 @@ test("completed managed job and segments survive service restart and duplicate s
   const completed = await first.startNative(input());
   assert.equal(completed.status, "COMPLETED");
   assert.equal(provider.transcriptCalls, 1);
+  assert.equal(provider.quoteCalls, 1);
 
   const restarted = new ManagedMediaService(
     new MediaBetaGate([ACCESS_CODE]),
@@ -163,6 +171,7 @@ test("completed managed job and segments survive service restart and duplicate s
   assert.equal(duplicate.status, "COMPLETED");
   assert.equal(duplicate.reused, true);
   assert.equal(provider.transcriptCalls, 1);
+  assert.equal(provider.quoteCalls, 1);
 });
 
 test("concurrent duplicate start has a single provider winner", async () => {
@@ -181,6 +190,7 @@ test("concurrent duplicate start has a single provider winner", async () => {
   assert.equal(duplicate.status, "PROCESSING");
   assert.equal(duplicate.reused, true);
   assert.equal(provider.transcriptCalls, 1);
+  assert.equal(provider.quoteCalls, 1);
 
   provider.release?.();
   const winner = await winnerPromise;
@@ -233,4 +243,5 @@ test("persisted processing reservation is not replayed after restart", async () 
   assert.equal(duplicate.reused, true);
   assert.equal(duplicate.credit_charge_uncertain, true);
   assert.equal(provider.transcriptCalls, 0);
+  assert.equal(provider.quoteCalls, 0);
 });
