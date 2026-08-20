@@ -54,6 +54,23 @@ export class ManagedMediaPersistentStore implements ManagedMediaJobStore {
     await this.run("DELETE FROM krc_managed_media_jobs WHERE expires_at <= now();");
   }
 
+  async findByRequestKey(
+    requestKey: string
+  ): Promise<ManagedMediaStoredRecord | null> {
+    if (!HEX_64.test(requestKey)) return null;
+    await this.ready();
+    const output = await this.run(`
+SELECT job_id, request_key, access_code_digest, status,
+       encode(convert_to(payload::text, 'UTF8'), 'hex'),
+       encode(convert_to(segments::text, 'UTF8'), 'hex'),
+       extract(epoch from expires_at)::bigint
+FROM krc_managed_media_jobs
+WHERE request_key='${requestKey}' AND expires_at > now()
+LIMIT 1;
+`);
+    return this.parseRow(output);
+  }
+
   async reserve(
     record: ManagedMediaStoredRecord
   ): Promise<ManagedMediaStoreReservation> {
