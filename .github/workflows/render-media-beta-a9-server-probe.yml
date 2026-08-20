@@ -9,6 +9,8 @@ on:
 
 permissions:
   contents: read
+  issues: write
+  pull-requests: write
 
 concurrency:
   group: render-media-beta-a9-server-probe
@@ -218,3 +220,14 @@ jobs:
           ' /tmp/segments.json >/dev/null
           jq -c '{job_id,status,cursor,next_cursor,returned_segments:(.segments|length)}' /tmp/segments.json
           echo "A9.2 prerecorded YouTube captions-first probe: PASS"
+
+      - name: Report A9.2 probe result
+        if: always()
+        env:
+          GH_TOKEN: ${{ github.token }}
+          WORKFLOW_STATUS: ${{ job.status }}
+          PROBE_JOB_ID: ${{ steps.start.outputs.job_id }}
+        shell: bash
+        run: |
+          set -euo pipefail
+          gh pr comment 28 --repo kolemasakar/VoiceBridge --body "A9.2 server-side prerecorded YouTube captions probe: **${WORKFLOW_STATUS^^}**. Run ID: \`${GITHUB_RUN_ID}\`; workflow commit: \`${GITHUB_SHA}\`; KRCB job: \`${PROBE_JOB_ID:-not-created}\`. Isolated MEDIA BETA only; production was not targeted; credentials and transcript content were not logged."
