@@ -1,8 +1,8 @@
 import { createHash, randomUUID } from "node:crypto";
 import { MediaBetaGate } from "./media_beta.js";
+import { normalizeManagedMediaUrl } from "./managed_media_url.js";
 import {
   MediaTranscriptError,
-  normalizeMediaUrl,
   type MediaLanguageHint,
   type MediaTranscriptSegment
 } from "./media_transcript.js";
@@ -226,7 +226,7 @@ function parseCommonInput(value: unknown): ManagedMediaPreflightInput | null {
   if (!languageHint) return null;
   try {
     return {
-      url: normalizeMediaUrl(input.url.trim()),
+      url: normalizeManagedMediaUrl(input.url.trim()),
       language_hint: languageHint,
       beta_access_code: input.beta_access_code
     };
@@ -384,7 +384,7 @@ export class ManagedMediaService {
     this.authorize(input.beta_access_code);
     const quote = await this.transcriptProvider!.quoteNative();
     return {
-      source_url: normalizeMediaUrl(input.url),
+      source_url: normalizeManagedMediaUrl(input.url),
       language_hint: input.language_hint,
       provider: "supadata",
       mode: "native",
@@ -404,7 +404,7 @@ export class ManagedMediaService {
   async startNative(input: ManagedMediaNativeInput): Promise<ManagedMediaJobView> {
     this.authorize(input.beta_access_code);
     await this.ensureStore();
-    const sourceUrl = normalizeMediaUrl(input.url);
+    const sourceUrl = normalizeManagedMediaUrl(input.url);
     const requestKey = managedMediaRequestKey(
       sourceUrl,
       input.language_hint,
