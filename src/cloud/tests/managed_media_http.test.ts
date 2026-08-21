@@ -79,12 +79,79 @@ class FakeManagedProvider implements ManagedNativeTranscriptProvider {
           index: 0,
           start_ms: 1200,
           end_ms: 3100,
-          text: "Керований тестовий сегмент",
+          text: "Managed test segment",
           confidence: null
         }
       ],
-      transcript_text: "Керований тестовий сегмент",
+      transcript_text: "Managed test segment",
       billable_credits: 1
+    };
+  }
+}
+
+class FakeAiManagedProvider implements ManagedNativeTranscriptProvider {
+  nativeCalls = 0;
+  aiCalls = 0;
+
+  async quoteNative() {
+    return {
+      provider: "supadata" as const,
+      mode: "native" as const,
+      plan: "Free",
+      max_credits: 100,
+      used_credits: 3,
+      remaining_credits: 97,
+      estimated_credits: 1 as const,
+      remaining_after_estimate: 96,
+      consent_required: true as const,
+      can_continue: true
+    };
+  }
+
+  async getNativeTranscript() {
+    this.nativeCalls += 1;
+    return {
+      status: "unavailable" as const,
+      billable_credits: 1
+    };
+  }
+
+  async quoteGenerateInstagramReel() {
+    return {
+      provider: "supadata" as const,
+      mode: "generate" as const,
+      plan: "Free",
+      max_credits: 100,
+      used_credits: 4,
+      remaining_credits: 96,
+      estimated_credits: 40,
+      maximum_credits: 40,
+      credits_per_minute: 2,
+      maximum_duration_minutes: 20,
+      remaining_after_estimate: 56,
+      conservative_maximum: true as const,
+      consent_required: true as const,
+      can_continue: true
+    };
+  }
+
+  async getGeneratedTranscript() {
+    this.aiCalls += 1;
+    return {
+      status: "completed" as const,
+      language: "en",
+      available_languages: ["en"],
+      segments: [
+        {
+          index: 0,
+          start_ms: 0,
+          end_ms: 18000,
+          text: "AI managed segment",
+          confidence: null
+        }
+      ],
+      transcript_text: "AI managed segment",
+      billable_credits: 2
     };
   }
 }
@@ -176,6 +243,120 @@ test("managed HTTP injects owner access after Action auth and preserves credit c
   }
 });
 
+test("managed HTTP exposes AI preflight and requires a separate 40-credit consent", async () => {
+  const provider = new FakeAiManagedProvider();
+  const service = new ManagedMediaService(
+    new MediaBetaGate([ACCESS_CODE]),
+    null,
+    provider
+  );
+  const handler = createManagedMediaHttpHandler(CONFIG, service);
+  const server = createServer(async (request, response) => {
+    if (await handler.handle(request, response)) return;
+    response.statusCode = 404;
+    response.end();
+  });
+  const baseUrl = await listen(server);
+  try {
+    const nativeStart = await fetch(`${baseUrl}/api/v1/media/managed/transcriptions`, {
+      method: "POST",
+      headers: actionHeaders(),
+      body: JSON.stringify({
+        url: "https://www.instagram.com/reel/ABC123/?igsh=tracking",
+        language_hint: "auto",
+        credit_consent: {
+          provider: "supadata",
+          mode: "native",
+          max_credits: 1
+        }
+      })
+    });
+    assert.equal(nativeStart.status, 200);
+    const nativeJob = await nativeStart.json() as Record<string, unknown>;
+    assert.equal(nativeJob.status, "AWAITING_AI_CONSENT");
+    assert.equal(provider.nativeCalls, 1);
+    assert.equal(provider.aiCalls, 0);
+    const jobId = String(nativeJob.job_id);
+
+    const aiPreflight = await fetch(
+      `${baseUrl}/api/v1/media/managed/transcriptions/${jobId}/ai-preflight`,
+      {
+        headers: {
+          authorization: `Bearer ${ACTION_TOKEN}`,
+          connection: "close"
+        }
+      }
+    );
+    assert.equal(aiPreflight.status, 200);
+    const quote = await aiPreflight.json() as Record<string, unknown>;
+    assert.equal(quote.mode, "generate");
+    assert.equal(quote.credits_available, 96);
+    assert.equal(quote.estimated_credits, 40);
+    assert.equal(quote.maximum_credits, 40);
+    assert.equal(quote.credits_after_estimate, 56);
+    assert.equal(quote.credits_per_minute, 2);
+    assert.equal(quote.maximum_duration_minutes, 20);
+    assert.equal(provider.aiCalls, 0);
+
+    const denied = await fetch(
+      `${baseUrl}/api/v1/media/managed/transcriptions/${jobId}/ai`,
+      {
+        method: "POST",
+        headers: actionHeaders(),
+        body: JSON.stringify({})
+      }
+    );
+    assert.equal(denied.status, 409);
+    const deniedBody = await denied.json() as { error?: { code?: string } };
+    assert.equal(deniedBody.error?.code, "MEDIA_AI_CREDIT_CONSENT_REQUIRED");
+    assert.equal(provider.aiCalls, 0);
+
+    const approved = await fetch(
+      `${baseUrl}/api/v1/media/managed/transcriptions/${jobId}/ai`,
+      {
+        method: "POST",
+        headers: actionHeaders(),
+        body: JSON.stringify({
+          credit_consent: {
+            provider: "supadata",
+            mode: "generate",
+            max_credits: 40
+          }
+        })
+      }
+    );
+    assert.equal(approved.status, 200);
+    const completed = await approved.json() as Record<string, unknown>;
+    assert.equal(completed.status, "COMPLETED");
+    assert.equal(completed.provider_mode, "generate");
+    assert.equal(completed.credits_charged, 3);
+    assert.equal(completed.credits_remaining_estimate, 94);
+    assert.equal(completed.segment_count, 1);
+    assert.equal(provider.aiCalls, 1);
+
+    const duplicate = await fetch(
+      `${baseUrl}/api/v1/media/managed/transcriptions/${jobId}/ai`,
+      {
+        method: "POST",
+        headers: actionHeaders(),
+        body: JSON.stringify({
+          credit_consent: {
+            provider: "supadata",
+            mode: "generate",
+            max_credits: 40
+          }
+        })
+      }
+    );
+    assert.equal(duplicate.status, 200);
+    const duplicateBody = await duplicate.json() as Record<string, unknown>;
+    assert.equal(duplicateBody.reused, true);
+    assert.equal(provider.aiCalls, 1);
+  } finally {
+    await close(server);
+  }
+});
+
 test("managed HTTP still rejects missing or invalid Action bearer before owner code injection", async () => {
   const provider = new FakeManagedProvider();
   const service = new ManagedMediaService(
@@ -238,6 +419,11 @@ test("managed server preserves legacy health and exposes disabled managed capabi
     assert.equal(capabilityBody.configured, false);
     assert.equal(capabilityBody.explicit_user_consent_required, true);
     assert.equal(capabilityBody.automatic_ai_fallback, false);
+    assert.equal(capabilityBody.instagram_reel_ai_fallback, true);
+    assert.equal(capabilityBody.ai_requires_separate_preflight, true);
+    assert.equal(capabilityBody.ai_requires_separate_user_consent, true);
+    assert.equal(capabilityBody.ai_generate_credits_per_minute, 2);
+    assert.equal(capabilityBody.instagram_reel_ai_max_credits, 40);
     assert.equal(capabilityBody.user_beta_access_code_required, false);
     assert.equal(capabilityBody.owner_access_injected_server_side, true);
   } finally {
