@@ -22,6 +22,13 @@ jobs:
           ref: agent/krc-media-transcript
           fetch-depth: 0
 
+      - name: Set up Node.js
+        uses: actions/setup-node@249970729cb0ef3589644e2896645e5dc5ba9c38
+        with:
+          node-version: "24"
+          cache: npm
+          cache-dependency-path: src/cloud/package-lock.json
+
       - name: Apply Facebook AI patch
         id: patch
         continue-on-error: true
@@ -30,6 +37,10 @@ jobs:
           set +e
           python scripts/a9_6_facebook_ai_patch.py > /tmp/fb-patch.log 2>&1
           code=$?
+          if [[ $code -eq 0 ]]; then
+            python scripts/a9_6_facebook_ai_compat_patch.py >> /tmp/fb-patch.log 2>&1
+            code=$?
+          fi
           cat /tmp/fb-patch.log
           exit $code
 
@@ -75,7 +86,7 @@ jobs:
         run: |
           set -euo pipefail
           if [[ "$PATCH_OUTCOME" == "success" && "$TEST_OUTCOME" == "success" && -n "${PATCH_SHA:-}" ]]; then
-            gh pr comment 28 --repo kolemasakar/VoiceBridge --body "A9.6 Facebook AI fallback implementation: **PASS**. Feature commit: \`${PATCH_SHA}\`. Flow is native unavailable -> separate 1-credit metadata-duration consent -> duration-derived AI hard cap -> separate AI consent. Cloud build/tests passed. No metadata or AI provider request was executed. Production/main were not targeted."
+            gh pr comment 28 --repo kolemasakar/VoiceBridge --body "A9.6 Facebook AI fallback implementation: **PASS**. Feature commit: \`${PATCH_SHA}\`. Flow is native unavailable -> separate 1-credit metadata-duration consent -> duration-derived AI hard cap -> separate AI consent. Cloud build/tests passed under Node 24. No metadata or AI provider request was executed. Production/main were not targeted."
           else
             if [[ "$PATCH_OUTCOME" != "success" ]]; then
               diag="$(tail -n 20 /tmp/fb-patch.log 2>/dev/null || true)"
