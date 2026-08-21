@@ -106,6 +106,20 @@ async function readJsonBody(
   }
 }
 
+function withServerOwnerAccessCode(
+  value: unknown,
+  accessCodes: string[] | undefined
+): unknown {
+  if (!value || typeof value !== "object" || Array.isArray(value)) return value;
+  const input = value as Record<string, unknown>;
+  if (typeof input.beta_access_code === "string" && input.beta_access_code) {
+    return value;
+  }
+  const ownerCode = accessCodes?.[0];
+  if (!ownerCode) return value;
+  return { ...input, beta_access_code: ownerCode };
+}
+
 function pagination(requestUrl: URL): { cursor: number; limit: number } {
   const cursor = Number(requestUrl.searchParams.get("cursor") || "0");
   const limit = Number(requestUrl.searchParams.get("limit") || "20");
@@ -156,6 +170,8 @@ export function createManagedMediaHttpHandler(
     explicit_user_consent_required: true,
     consent_options: { approve: 1, reject: 2 },
     automatic_ai_fallback: false,
+    user_beta_access_code_required: false,
+    owner_access_injected_server_side: true,
     durable_store: service.storeKind,
     restart_resilient_jobs: service.durableStore,
     duplicate_start_reuses_job: true
@@ -204,7 +220,8 @@ export function createManagedMediaHttpHandler(
       }
 
       if (method === "POST" && path === PREFLIGHT) {
-        const body = await readJsonBody(request, config.maxRequestBodyBytes);
+        const rawBody = await readJsonBody(request, config.maxRequestBodyBytes);
+        const body = withServerOwnerAccessCode(rawBody, config.mediaBetaCodes);
         const input = parseManagedMediaPreflightInput(body);
         if (!input) {
           throw new MediaTranscriptError(
@@ -226,7 +243,8 @@ export function createManagedMediaHttpHandler(
       }
 
       if (method === "POST" && path === TRANSCRIPTIONS) {
-        const body = await readJsonBody(request, config.maxRequestBodyBytes);
+        const rawBody = await readJsonBody(request, config.maxRequestBodyBytes);
+        const body = withServerOwnerAccessCode(rawBody, config.mediaBetaCodes);
         const input = parseManagedMediaNativeInput(body);
         if (!input) {
           throw new MediaTranscriptError(
