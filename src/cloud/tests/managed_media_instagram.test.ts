@@ -109,5 +109,5 @@ test("managed capability advertises YouTube, Instagram and Facebook", () => {
   );
   const { capability } = createManagedMediaHttpHandler(config, service);
   assert.deepEqual(capability.platforms, ["youtube", "instagram", "facebook"]);
-  assert.equal(capability.facebook_ai_fallback, false);
+  assert.equal(capability.facebook_ai_fallback, true);
 });
