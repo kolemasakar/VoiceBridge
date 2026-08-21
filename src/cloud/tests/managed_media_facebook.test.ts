@@ -14,10 +14,12 @@ import { MediaBetaGate } from "../src/media_beta.js";
 const ACCESS_CODE = "abcdefghijkl";
 
 class FacebookFallbackProvider implements ManagedNativeTranscriptProvider {
+  nativeQuoteCalls = 0;
   nativeCalls = 0;
   metadataCalls = 0;
   aiCalls = 0;
   async quoteNative() {
+    this.nativeQuoteCalls += 1;
     return { provider: "supadata" as const, mode: "native" as const, plan: "Free", max_credits: 100, used_credits: 9, remaining_credits: 91, estimated_credits: 1 as const, remaining_after_estimate: 90, consent_required: true as const, can_continue: true };
   }
   async getNativeTranscript() {
@@ -71,6 +73,21 @@ test("Facebook AI fallback requires separately consented metadata duration and e
   assert.equal(native.status, "AWAITING_AI_CONSENT");
   assert.equal(native.credits_charged, 1);
   assert.equal(provider.nativeCalls, 1);
+  assert.equal(provider.nativeQuoteCalls, 1);
+
+  const recovered = await service.lookup({
+    url: "https://m.facebook.com/reel/1234567890/?mibextid=recovery",
+    language_hint: "auto",
+    beta_access_code: ACCESS_CODE
+  });
+  assert.ok(recovered);
+  assert.equal(recovered.job_id, native.job_id);
+  assert.equal(recovered.status, "AWAITING_AI_CONSENT");
+  assert.equal(recovered.reused, true);
+  assert.equal(provider.nativeCalls, 1);
+  assert.equal(provider.nativeQuoteCalls, 1);
+  assert.equal(provider.metadataCalls, 0);
+  assert.equal(provider.aiCalls, 0);
 
   const metadataQuote = await service.facebookMetadataPreflight(native.job_id, ACCESS_CODE);
   assert.equal(metadataQuote.estimated_credits, 1);

@@ -571,6 +571,25 @@ export class ManagedMediaService {
     };
   }
 
+  async lookup(
+    input: ManagedMediaPreflightInput
+  ): Promise<ManagedMediaJobView | null> {
+    this.authorize(input.beta_access_code);
+    await this.ensureStore();
+    const sourceUrl = normalizeManagedMediaUrl(input.url);
+    const requestKey = managedMediaRequestKey(
+      sourceUrl,
+      input.language_hint,
+      input.beta_access_code
+    );
+    const record = await this.store.findByRequestKey(requestKey);
+    if (!record) return null;
+    if (record.accessCodeDigest !== managedMediaAccessDigest(input.beta_access_code)) {
+      return null;
+    }
+    return this.publicJob(record.job, true);
+  }
+
   async facebookMetadataPreflight(
     jobId: string,
     accessCode: string

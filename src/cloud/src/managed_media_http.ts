@@ -19,6 +19,7 @@ import {
 
 const ROOT = "/api/v1/media/managed";
 const PREFLIGHT = `${ROOT}/preflight`;
+const LOOKUP = `${ROOT}/lookup`;
 const TRANSCRIPTIONS = `${ROOT}/transcriptions`;
 const JOB_PATH = /^\/api\/v1\/media\/managed\/transcriptions\/(KRCM_[A-Za-z0-9-]+)$/;
 const SEGMENTS_PATH = /^\/api\/v1\/media\/managed\/transcriptions\/(KRCM_[A-Za-z0-9-]+)\/segments$/;
@@ -267,6 +268,37 @@ export function createManagedMediaHttpHandler(
           response,
           200,
           { request_id: context.requestId, ...quote },
+          context,
+          config.corsAllowedOrigin
+        );
+        return true;
+      }
+
+      if (method === "POST" && path === LOOKUP) {
+        const rawBody = await readJsonBody(request, config.maxRequestBodyBytes);
+        const body = withServerOwnerAccessCode(rawBody, config.mediaBetaCodes);
+        const input = parseManagedMediaPreflightInput(body);
+        if (!input) {
+          throw new MediaTranscriptError(
+            "INVALID_REQUEST",
+            "The managed media lookup request is not valid.",
+            400,
+            false
+          );
+        }
+        const job = await service.lookup(input);
+        if (!job) {
+          throw new MediaTranscriptError(
+            "MEDIA_TRANSCRIPT_NOT_FOUND",
+            "The managed media job was not found.",
+            404,
+            false
+          );
+        }
+        sendJson(
+          response,
+          200,
+          { request_id: context.requestId, ...job },
           context,
           config.corsAllowedOrigin
         );
