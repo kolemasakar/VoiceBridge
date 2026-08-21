@@ -1,0 +1,201 @@
+name: A9.6 Instagram AI Preflight
+
+on:
+  push:
+    branches:
+      - agent/krc-media-transcript
+    paths:
+      - .github/workflows/a9-6-instagram-ai-preflight.yml
+
+permissions:
+  contents: read
+  issues: write
+  pull-requests: write
+
+concurrency:
+  group: a9-6-instagram-ai-preflight
+  cancel-in-progress: false
+
+env:
+  RENDER_API_BASE: https://api.render.com/v1
+  SERVICE_ID: srv-da1kic5bedkc73d6fk60
+  SERVICE_NAME: voicebridge-krc-media-beta-kolemasakar
+  REQUIRED_BRANCH: agent/krc-media-transcript
+  BETA_BASE_URL: https://voicebridge-krc-media-beta-kolemasakar.onrender.com
+  ACCEPTANCE_JOB_ID: KRCM_9f692330-87f6-4581-a0c4-6d51767aca54
+
+jobs:
+  preflight:
+    runs-on: ubuntu-latest
+    env:
+      RENDER_API_KEY: ${{ secrets.RENDER_API_KEY }}
+    steps:
+      - name: Enforce isolated target
+        shell: bash
+        run: |
+          set -euo pipefail
+          test -n "${RENDER_API_KEY:-}" || { echo "RENDER_API_KEY missing" >&2; exit 1; }
+          [[ "${GITHUB_REF_NAME}" == "${REQUIRED_BRANCH}" ]] || { echo "Unexpected branch" >&2; exit 1; }
+          tmp="$(mktemp)"
+          code="$(curl -sS -o "$tmp" -w '%{http_code}' \
+            "${RENDER_API_BASE}/services/${SERVICE_ID}" \
+            -H 'Accept: application/json' \
+            -H "Authorization: Bearer ${RENDER_API_KEY}")"
+          [[ "$code" == 200 ]] || { echo "Service lookup failed HTTP $code" >&2; rm -f "$tmp"; exit 1; }
+          name="$(jq -r '.name // empty' "$tmp")"
+          branch="$(jq -r '.branch // empty' "$tmp")"
+          rm -f "$tmp"
+          [[ "$name" == "$SERVICE_NAME" ]] || { echo "Isolation guard failed" >&2; exit 1; }
+          [[ "$branch" == "$REQUIRED_BRANCH" ]] || { echo "Branch guard failed" >&2; exit 1; }
+          echo "Isolated target verified."
+
+      - name: Deploy exact feature commit
+        id: deploy
+        shell: bash
+        run: |
+          set -euo pipefail
+          payload="$(jq -nc --arg commitId "$GITHUB_SHA" '{commitId:$commitId,clearCache:"do_not_clear"}')"
+          tmp="$(mktemp)"
+          code="$(curl -sS -o "$tmp" -w '%{http_code}' \
+            -X POST "${RENDER_API_BASE}/services/${SERVICE_ID}/deploys" \
+            -H 'Accept: application/json' \
+            -H 'Content-Type: application/json' \
+            -H "Authorization: Bearer ${RENDER_API_KEY}" \
+            --data "$payload")"
+          [[ "$code" == 201 || "$code" == 202 ]] || { echo "Deploy failed HTTP $code" >&2; rm -f "$tmp"; exit 1; }
+          deploy_id="$(jq -r '(.deploy // .).id // empty' "$tmp")"
+          rm -f "$tmp"
+          test -n "$deploy_id" || { echo "Deploy ID missing" >&2; exit 1; }
+          echo "deploy_id=$deploy_id" >> "$GITHUB_OUTPUT"
+          echo "Deploy accepted for exact feature SHA."
+
+      - name: Wait for isolated deploy
+        env:
+          DEPLOY_ID: ${{ steps.deploy.outputs.deploy_id }}
+        shell: bash
+        run: |
+          set -euo pipefail
+          for i in $(seq 1 72); do
+            tmp="$(mktemp)"
+            code="$(curl -sS -o "$tmp" -w '%{http_code}' \
+              "${RENDER_API_BASE}/services/${SERVICE_ID}/deploys/${DEPLOY_ID}" \
+              -H 'Accept: application/json' \
+              -H "Authorization: Bearer ${RENDER_API_KEY}")"
+            [[ "$code" == 200 ]] || { rm -f "$tmp"; echo "Deploy status HTTP $code" >&2; exit 1; }
+            status="$(jq -r '(.deploy // .).status // "unknown"' "$tmp")"
+            rm -f "$tmp"
+            case "$status" in
+              live) echo "Deploy live."; exit 0 ;;
+              build_failed|update_failed|canceled|deactivated) echo "Deploy failed: $status" >&2; exit 1 ;;
+            esac
+            sleep 5
+          done
+          echo "Deploy timeout" >&2
+          exit 1
+
+      - name: Read and mask Action bearer
+        id: action
+        shell: bash
+        run: |
+          set -euo pipefail
+          tmp="$(mktemp)"
+          code="$(curl -sS -o "$tmp" -w '%{http_code}' \
+            "${RENDER_API_BASE}/services/${SERVICE_ID}/env-vars/KRC_MEDIA_ACTION_TOKEN" \
+            -H 'Accept: application/json' \
+            -H "Authorization: Bearer ${RENDER_API_KEY}")"
+          [[ "$code" == 200 ]] || { rm -f "$tmp"; echo "Action token lookup HTTP $code" >&2; exit 1; }
+          token="$(jq -r '(.envVar.value // .value // empty)' "$tmp")"
+          rm -f "$tmp"
+          test -n "$token" || { echo "Action token missing" >&2; exit 1; }
+          echo "::add-mask::$token"
+          echo "token=$token" >> "$GITHUB_OUTPUT"
+
+      - name: Verify AI capability without transcript request
+        env:
+          ACTION_TOKEN: ${{ steps.action.outputs.token }}
+        shell: bash
+        run: |
+          set -euo pipefail
+          code="$(curl -sS --max-time 90 -o /tmp/capability.json -w '%{http_code}' \
+            "${BETA_BASE_URL}/api/v1/media/managed" \
+            -H 'Accept: application/json' \
+            -H "Authorization: Bearer ${ACTION_TOKEN}")"
+          [[ "$code" == 200 ]] || { echo "Capability HTTP $code" >&2; exit 1; }
+          jq -e '
+            .configured == true and
+            (.platforms | index("youtube") != null) and
+            (.platforms | index("instagram") != null) and
+            .automatic_ai_fallback == false and
+            .instagram_reel_ai_fallback == true and
+            .ai_requires_separate_preflight == true and
+            .ai_requires_separate_user_consent == true and
+            .ai_generate_credits_per_minute == 2 and
+            .instagram_reel_ai_max_credits == 40
+          ' /tmp/capability.json >/dev/null
+          echo "AI capability: PASS."
+
+      - name: Verify existing native job still awaits AI consent
+        env:
+          ACTION_TOKEN: ${{ steps.action.outputs.token }}
+        shell: bash
+        run: |
+          set -euo pipefail
+          code="$(curl -sS --max-time 90 -o /tmp/job.json -w '%{http_code}' \
+            "${BETA_BASE_URL}/api/v1/media/managed/transcriptions/${ACCEPTANCE_JOB_ID}" \
+            -H 'Accept: application/json' \
+            -H "Authorization: Bearer ${ACTION_TOKEN}")"
+          [[ "$code" == 200 ]] || { echo "Existing job unavailable HTTP $code; no AI call made." >&2; exit 1; }
+          jq -e '
+            .job_id == env.ACCEPTANCE_JOB_ID and
+            .status == "AWAITING_AI_CONSENT" and
+            .provider_mode == "native" and
+            .credits_charged == 1 and
+            .segment_count == 0
+          ' /tmp/job.json >/dev/null
+          echo "Existing native stop: PASS."
+
+      - name: Run nonbillable AI preflight only
+        id: quote
+        env:
+          ACTION_TOKEN: ${{ steps.action.outputs.token }}
+        shell: bash
+        run: |
+          set -euo pipefail
+          code="$(curl -sS --max-time 90 -o /tmp/ai-quote.json -w '%{http_code}' \
+            "${BETA_BASE_URL}/api/v1/media/managed/transcriptions/${ACCEPTANCE_JOB_ID}/ai-preflight" \
+            -H 'Accept: application/json' \
+            -H "Authorization: Bearer ${ACTION_TOKEN}")"
+          [[ "$code" == 200 ]] || { echo "AI preflight HTTP $code" >&2; cat /tmp/ai-quote.json >&2; exit 1; }
+          jq -e '
+            .mode == "generate" and
+            .provider == "supadata" and
+            .estimated_credits == 40 and
+            .maximum_credits == 40 and
+            .credits_per_minute == 2 and
+            .maximum_duration_minutes == 20 and
+            .conservative_maximum == true and
+            .consent_required == true and
+            .can_continue == true
+          ' /tmp/ai-quote.json >/dev/null
+          available="$(jq -r '.credits_available' /tmp/ai-quote.json)"
+          after="$(jq -r '.credits_after_estimate' /tmp/ai-quote.json)"
+          echo "available=$available" >> "$GITHUB_OUTPUT"
+          echo "after=$after" >> "$GITHUB_OUTPUT"
+          jq -c '{provider,mode,credits_available,estimated_credits,maximum_credits,credits_per_minute,maximum_duration_minutes,credits_after_estimate,conservative_maximum,can_continue}' /tmp/ai-quote.json
+          echo "No POST /ai and no POST /transcriptions was called by this workflow."
+
+      - name: Report A9.6 AI preflight
+        if: always()
+        env:
+          GH_TOKEN: ${{ github.token }}
+          AVAILABLE: ${{ steps.quote.outputs.available }}
+          AFTER: ${{ steps.quote.outputs.after }}
+        shell: bash
+        run: |
+          set -euo pipefail
+          if [[ "${{ job.status }}" == "success" ]]; then
+            body="A9.6 Instagram AI fallback preflight: **SUCCESS**. Commit: \`${GITHUB_SHA}\`; isolated target only; existing job: \`${ACCEPTANCE_JOB_ID}\`; available=\`${AVAILABLE}\`; conservative AI maximum=\`40\`; rate=\`2 credits/min\`; Reel ceiling=\`20 min\`; after worst case=\`${AFTER}\`. This workflow called capability, job status, and AI preflight only; **no AI transcript request was started and no AI credit was authorized**. Production/main were not targeted."
+          else
+            body="A9.6 Instagram AI fallback preflight: **FAILURE**. Commit: \`${GITHUB_SHA}\`; isolated target only. No AI transcript request is authorized by this workflow. Production/main were not targeted."
+          fi
+          gh pr comment 28 --repo kolemasakar/VoiceBridge --body "$body"
