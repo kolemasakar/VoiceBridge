@@ -23,16 +23,36 @@ jobs:
           fetch-depth: 0
 
       - name: Apply Facebook AI patch
-        run: python scripts/a9_6_facebook_ai_patch.py
+        id: patch
+        continue-on-error: true
+        shell: bash
+        run: |
+          set +e
+          python scripts/a9_6_facebook_ai_patch.py > /tmp/fb-patch.log 2>&1
+          code=$?
+          cat /tmp/fb-patch.log
+          exit $code
 
       - name: Build and test cloud service
+        id: test
+        if: steps.patch.outcome == 'success'
+        continue-on-error: true
         working-directory: src/cloud
+        shell: bash
         run: |
-          npm ci
-          npm run check
+          set +e
+          npm ci > /tmp/fb-test.log 2>&1
+          code=$?
+          if [[ $code -eq 0 ]]; then
+            npm run check >> /tmp/fb-test.log 2>&1
+            code=$?
+          fi
+          cat /tmp/fb-test.log
+          exit $code
 
       - name: Commit implementation to feature branch
         id: commit
+        if: steps.patch.outcome == 'success' && steps.test.outcome == 'success'
         shell: bash
         run: |
           set -euo pipefail
@@ -49,10 +69,22 @@ jobs:
         env:
           GH_TOKEN: ${{ github.token }}
           PATCH_SHA: ${{ steps.commit.outputs.sha }}
+          PATCH_OUTCOME: ${{ steps.patch.outcome }}
+          TEST_OUTCOME: ${{ steps.test.outcome }}
         shell: bash
         run: |
-          if [[ "${{ job.status }}" == "success" ]]; then
+          set -euo pipefail
+          if [[ "$PATCH_OUTCOME" == "success" && "$TEST_OUTCOME" == "success" && -n "${PATCH_SHA:-}" ]]; then
             gh pr comment 28 --repo kolemasakar/VoiceBridge --body "A9.6 Facebook AI fallback implementation: **PASS**. Feature commit: \`${PATCH_SHA}\`. Flow is native unavailable -> separate 1-credit metadata-duration consent -> duration-derived AI hard cap -> separate AI consent. Cloud build/tests passed. No metadata or AI provider request was executed. Production/main were not targeted."
           else
-            gh pr comment 28 --repo kolemasakar/VoiceBridge --body "A9.6 Facebook AI fallback implementation: **FAIL**. No metadata or AI provider request was authorized. Production/main were not targeted."
+            if [[ "$PATCH_OUTCOME" != "success" ]]; then
+              diag="$(tail -n 20 /tmp/fb-patch.log 2>/dev/null || true)"
+              phase="patch"
+            else
+              diag="$(tail -n 30 /tmp/fb-test.log 2>/dev/null || true)"
+              phase="test"
+            fi
+            [[ ${#diag} -le 5000 ]] || diag="${diag:0:5000}"
+            body=$(printf 'A9.6 Facebook AI fallback implementation: **FAIL** at `%s`. Safe diagnostic:\n```text\n%s\n```\nNo metadata or AI provider request was authorized. Production/main were not targeted.' "$phase" "$diag")
+            gh pr comment 28 --repo kolemasakar/VoiceBridge --body "$body"
           fi
