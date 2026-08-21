@@ -42,6 +42,17 @@ export function managedMediaPlatform(url: string): ManagedMediaPlatform {
   );
 }
 
+export function isManagedInstagramReelUrl(value: string): boolean {
+  try {
+    const normalized = normalizeManagedMediaUrl(value);
+    const parsed = new URL(normalized);
+    const parts = parsed.pathname.split("/").filter(Boolean);
+    return managedMediaPlatform(normalized) === "instagram" && parts[0] === "reel";
+  } catch {
+    return false;
+  }
+}
+
 export function normalizeManagedMediaUrl(value: string): string {
   if (value.length > 2048) {
     return invalidUrl("The media URL is too long.");
