@@ -23,7 +23,7 @@ env:
   REQUIRED_BRANCH: agent/krc-media-transcript
   BETA_BASE_URL: https://voicebridge-krc-media-beta-kolemasakar.onrender.com
   REQUIRED_CODE_SHA: 7d53d5ba5414f40638c3a31016403cc06e05ea50
-  FACEBOOK_URL: https://www.facebook.com/reel/1114235920664408
+  FACEBOOK_URL: https://www.facebook.com/reel/1114235920664408/
 
 jobs:
   acceptance:
