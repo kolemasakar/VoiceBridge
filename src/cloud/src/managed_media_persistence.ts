@@ -32,6 +32,15 @@ function validateRecord(record: ManagedMediaStoredRecord): void {
   }
 }
 
+export function selectManagedMediaPsqlRow(output: string): string | null {
+  const lines = output.split(/\r?\n/).filter((line) => line.length > 0);
+  for (let index = lines.length - 1; index >= 0; index -= 1) {
+    const line = lines[index];
+    if (line && line.split("\t").length === 7) return line;
+  }
+  return null;
+}
+
 export class ManagedMediaPersistentStore implements ManagedMediaJobStore {
   readonly durable = true;
   readonly kind = "postgres" as const;
@@ -176,7 +185,7 @@ CREATE INDEX IF NOT EXISTS krc_managed_media_jobs_updated_idx
   }
 
   private parseRow(output: string): ManagedMediaStoredRecord | null {
-    const line = output.trim().split("\n").filter(Boolean).at(-1);
+    const line = selectManagedMediaPsqlRow(output);
     if (!line) return null;
     return this.parseColumns(line.split("\t"));
   }
