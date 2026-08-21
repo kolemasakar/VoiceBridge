@@ -23,6 +23,7 @@ env:
   SERVICE_NAME: voicebridge-krc-media-beta-kolemasakar
   REQUIRED_BRANCH: agent/krc-media-transcript
   BETA_BASE_URL: https://voicebridge-krc-media-beta-kolemasakar.onrender.com
+  INSTAGRAM_PREFLIGHT_URL: https://www.instagram.com/reel/DEDbGqpyfkT/
 
 jobs:
   configure:
@@ -135,8 +136,9 @@ jobs:
           echo "Isolated deploy timeout" >&2
           exit 1
 
-      - name: Verify managed capability without spending transcript credits
+      - name: Verify managed capability and Instagram preflight without transcript spend
         if: steps.secret.outputs.configured == 'true'
+        id: instagram
         shell: bash
         run: |
           set -euo pipefail
@@ -150,6 +152,7 @@ jobs:
           rm -f "$tmp"
           test -n "$action_token" || { echo "KRC_MEDIA_ACTION_TOKEN missing" >&2; exit 1; }
           echo "::add-mask::$action_token"
+
           code="$(curl -sS --retry 5 --retry-delay 3 --max-time 90 \
             -o /tmp/capability.json -w '%{http_code}' \
             "${BETA_BASE_URL}/api/v1/media/managed" \
@@ -160,13 +163,39 @@ jobs:
             .mode == "zero_client_managed_beta" and
             .provider == "supadata" and
             .configured == true and
+            .platforms == ["youtube", "instagram"] and
             .native_transcript_credits == 1 and
             .credit_preflight_required == true and
             .explicit_user_consent_required == true and
             .automatic_ai_fallback == false
           ' /tmp/capability.json >/dev/null
-          jq -c '{mode,provider,configured,native_transcript_credits,credit_preflight_required,explicit_user_consent_required,automatic_ai_fallback}' /tmp/capability.json
-          echo "Managed capability: PASS / zero transcript credits spent"
+
+          payload="$(jq -nc --arg url "$INSTAGRAM_PREFLIGHT_URL" '{url:$url,language_hint:"auto"}')"
+          code="$(curl -sS --retry 3 --retry-delay 2 --max-time 90 \
+            -o /tmp/instagram-preflight.json -w '%{http_code}' \
+            -X POST "${BETA_BASE_URL}/api/v1/media/managed/preflight" \
+            -H 'Accept: application/json' \
+            -H 'Content-Type: application/json' \
+            -H "Authorization: Bearer ${action_token}" \
+            --data "$payload")"
+          [[ "$code" == 200 ]] || { echo "Instagram preflight HTTP $code" >&2; cat /tmp/instagram-preflight.json; exit 1; }
+          jq -e --arg url "$INSTAGRAM_PREFLIGHT_URL" '
+            .source_url == $url and
+            .provider == "supadata" and
+            .mode == "native" and
+            .estimated_credits == 1 and
+            .consent_required == true and
+            .consent_options == {"approve":1,"reject":2}
+          ' /tmp/instagram-preflight.json >/dev/null
+
+          credits="$(jq -r '.credits_available' /tmp/instagram-preflight.json)"
+          after="$(jq -r '.credits_after_estimate' /tmp/instagram-preflight.json)"
+          can_continue="$(jq -r '.can_continue' /tmp/instagram-preflight.json)"
+          echo "credits_available=$credits" >> "$GITHUB_OUTPUT"
+          echo "credits_after=$after" >> "$GITHUB_OUTPUT"
+          echo "can_continue=$can_continue" >> "$GITHUB_OUTPUT"
+          jq -c '{source_url,provider,mode,plan,credits_available,estimated_credits,credits_after_estimate,can_continue,consent_required,consent_options}' /tmp/instagram-preflight.json
+          echo "A9.6 Instagram preflight: PASS / transcript endpoint not called"
 
       - name: Report isolated Supadata configuration state
         if: always()
@@ -174,12 +203,15 @@ jobs:
           GH_TOKEN: ${{ github.token }}
           SECRET_CONFIGURED: ${{ steps.secret.outputs.configured }}
           WORKFLOW_STATUS: ${{ job.status }}
+          IG_CREDITS: ${{ steps.instagram.outputs.credits_available }}
+          IG_AFTER: ${{ steps.instagram.outputs.credits_after }}
+          IG_CAN_CONTINUE: ${{ steps.instagram.outputs.can_continue }}
         shell: bash
         run: |
           set -euo pipefail
           if [[ "$SECRET_CONFIGURED" == "true" ]]; then
-            body="A9.2R isolated Supadata configuration: **${WORKFLOW_STATUS^^}**. Commit: \`${GITHUB_SHA}\`. Target: \`${SERVICE_NAME}\` only. Managed capability was checked without starting a transcript request. Production was not targeted."
+            body="A9.6 isolated Instagram adapter/preflight: **${WORKFLOW_STATUS^^}**. Commit: \`${GITHUB_SHA}\`. Target: \`${SERVICE_NAME}\` only. Capability requires \`youtube + instagram\`. Instagram preflight used \`${INSTAGRAM_PREFLIGHT_URL}\`: available=\`${IG_CREDITS:-unknown}\`, estimated=\`1\`, after=\`${IG_AFTER:-unknown}\`, can_continue=\`${IG_CAN_CONTINUE:-unknown}\`. **No transcript endpoint was called and no transcript credit was authorized by this workflow.** Production was not targeted."
           else
-            body="A9.2R isolated Supadata configuration: **PENDING SECRET**. \`SUPADATA_API_KEY\` is not configured in GitHub Actions Secrets; no Render mutation, deploy, or provider request was performed."
+            body="A9.6 isolated Instagram adapter/preflight: **PENDING SECRET**. \`SUPADATA_API_KEY\` is not configured in GitHub Actions Secrets; no Render mutation, deploy, or provider request was performed."
           fi
           gh pr comment 28 --repo kolemasakar/VoiceBridge --body "$body"
