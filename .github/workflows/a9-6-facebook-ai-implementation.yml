@@ -1,0 +1,1044 @@
+name: A9.6 Facebook AI Implementation
+
+on:
+  push:
+    branches:
+      - agent/krc-media-transcript
+    paths:
+      - .github/workflows/a9-6-facebook-ai-implementation.yml
+
+permissions:
+  contents: write
+  issues: write
+  pull-requests: write
+
+jobs:
+  implement:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout feature branch
+        uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803
+        with:
+          ref: agent/krc-media-transcript
+          fetch-depth: 0
+
+      - name: Apply Facebook metadata-duration and dynamic AI cap patch
+        shell: bash
+        run: |
+          python - <<'PY'
+          from pathlib import Path
+          import re
+
+          def replace_once(text: str, old: str, new: str, label: str) -> str:
+              count = text.count(old)
+              if count != 1:
+                  raise SystemExit(f"{label}: expected one match, got {count}")
+              return text.replace(old, new, 1)
+
+          # Provider: metadata quote/duration + duration-derived AI ceiling.
+          path = Path("src/cloud/src/supadata_provider.ts")
+          s = path.read_text()
+          s = replace_once(
+              s,
+              'const NATIVE_TRANSCRIPT_CREDITS = 1;\n',
+              'const NATIVE_TRANSCRIPT_CREDITS = 1;\nexport const METADATA_CREDITS = 1;\n',
+              'provider metadata constant'
+          )
+          marker = '''export interface SupadataGenerateCreditQuote {
+  provider: "supadata";
+  mode: "generate";
+'''
+          insert = '''export interface SupadataMetadataCreditQuote {
+  provider: "supadata";
+  mode: "metadata";
+  plan: string;
+  max_credits: number;
+  used_credits: number;
+  remaining_credits: number;
+  estimated_credits: 1;
+  remaining_after_estimate: number;
+  consent_required: true;
+  can_continue: boolean;
+}
+
+export interface SupadataMetadataDurationResult {
+  duration_seconds: number;
+  billable_credits: number;
+}
+
+export interface SupadataGenerateCreditQuote {
+  provider: "supadata";
+  mode: "generate";
+'''
+          s = replace_once(s, marker, insert, 'provider metadata interfaces')
+          marker = '''interface SupadataAccountResponse {
+  organizationId?: unknown;
+  plan?: unknown;
+  maxCredits?: unknown;
+  usedCredits?: unknown;
+}
+'''
+          insert = marker + '''
+interface SupadataMetadataResponse {
+  platform?: unknown;
+  type?: unknown;
+  media?: unknown;
+}
+'''
+          s = replace_once(s, marker, insert, 'provider metadata response')
+          s = s.replace(
+              'SupadataTranscriptResponse & SupadataAccountResponse',
+              'SupadataTranscriptResponse & SupadataAccountResponse & SupadataMetadataResponse'
+          )
+          marker = '''  async quoteGenerateInstagramReel(): Promise<SupadataGenerateCreditQuote> {
+'''
+          methods = '''  async quoteMetadata(): Promise<SupadataMetadataCreditQuote> {
+    const account = await this.getAccount();
+    return {
+      provider: "supadata",
+      mode: "metadata",
+      plan: account.plan,
+      max_credits: account.max_credits,
+      used_credits: account.used_credits,
+      remaining_credits: account.remaining_credits,
+      estimated_credits: 1,
+      remaining_after_estimate: Math.max(0, account.remaining_credits - METADATA_CREDITS),
+      consent_required: true,
+      can_continue: account.remaining_credits >= METADATA_CREDITS
+    };
+  }
+
+  async getMetadataDuration(url: string): Promise<SupadataMetadataDurationResult> {
+    const query = new URLSearchParams({ url });
+    const { response, payload } = await this.request(`/metadata?${query}`);
+    const billableCredits = parseBillableCredits(response.headers) || METADATA_CREDITS;
+    if (!response.ok) {
+      if (isFacebookUrl(url) && looksAuthOrPrivateFailure(response, payload)) {
+        throw new MediaTranscriptError(
+          "UNSUPPORTED_PRIVATE_OR_AUTH_REQUIRED",
+          "The Facebook media is not publicly accessible or requires authentication.",
+          422,
+          false
+        );
+      }
+      throw new MediaTranscriptError(
+        "MANAGED_PROVIDER_METADATA_ERROR",
+        nonEmptyString(payload.details) || nonEmptyString(payload.message) ||
+          "The managed provider could not read media metadata.",
+        response.status >= 500 ? 502 : 422,
+        response.status >= 500 || response.status === 429
+      );
+    }
+    if (payload.platform !== "facebook") {
+      throw new MediaTranscriptError(
+        "MANAGED_PROVIDER_METADATA_INVALID",
+        "The managed provider returned metadata for an unexpected platform.",
+        502,
+        false
+      );
+    }
+    const media = payload.media && typeof payload.media === "object"
+      ? payload.media as Record<string, unknown>
+      : null;
+    const duration = media ? finiteNonNegative(media.duration) : null;
+    if (duration === null || duration <= 0) {
+      throw new MediaTranscriptError(
+        "MANAGED_PROVIDER_METADATA_DURATION_UNAVAILABLE",
+        "The Facebook metadata did not contain a usable video duration.",
+        422,
+        false
+      );
+    }
+    return { duration_seconds: duration, billable_credits: billableCredits };
+  }
+
+  async quoteGenerateForDuration(durationSeconds: number): Promise<SupadataGenerateCreditQuote> {
+    const account = await this.getAccount();
+    const maximumDurationMinutes = Math.max(1, Math.ceil(durationSeconds / 60));
+    const maximumCredits = maximumDurationMinutes * GENERATED_TRANSCRIPT_CREDITS_PER_MINUTE;
+    return {
+      provider: "supadata",
+      mode: "generate",
+      plan: account.plan,
+      max_credits: account.max_credits,
+      used_credits: account.used_credits,
+      remaining_credits: account.remaining_credits,
+      estimated_credits: maximumCredits,
+      maximum_credits: maximumCredits,
+      credits_per_minute: GENERATED_TRANSCRIPT_CREDITS_PER_MINUTE,
+      maximum_duration_minutes: maximumDurationMinutes,
+      remaining_after_estimate: Math.max(0, account.remaining_credits - maximumCredits),
+      conservative_maximum: true,
+      consent_required: true,
+      can_continue: account.remaining_credits >= maximumCredits
+    };
+  }
+
+'''+marker
+          s = replace_once(s, marker, methods, 'provider metadata methods')
+          s = replace_once(
+              s,
+              '''  async getGeneratedTranscript(
+    url: string
+  ): Promise<SupadataGeneratedTranscriptResult> {''',
+              '''  async getGeneratedTranscript(
+    url: string,
+    approvedMaxCredits = INSTAGRAM_REEL_GENERATE_MAX_CREDITS
+  ): Promise<SupadataGeneratedTranscriptResult> {''',
+              'provider generated signature'
+          )
+          s = replace_once(
+              s,
+              'if (billableCredits > INSTAGRAM_REEL_GENERATE_MAX_CREDITS) {',
+              'if (billableCredits > approvedMaxCredits) {',
+              'provider dynamic cap check'
+          )
+          s = replace_once(
+              s,
+              '"The provider reported AI transcript usage above the approved Instagram Reel maximum.",',
+              '"The provider reported AI transcript usage above the user-approved maximum.",',
+              'provider cap message'
+          )
+          path.write_text(s)
+
+          # Managed service: add Facebook metadata gate and dynamic generate ceiling.
+          path = Path("src/cloud/src/managed_media_service.ts")
+          s = path.read_text()
+          s = replace_once(
+              s,
+              '''import {
+  isManagedInstagramReelUrl,
+  normalizeManagedMediaUrl
+} from "./managed_media_url.js";''',
+              '''import {
+  isManagedInstagramReelUrl,
+  managedMediaPlatform,
+  normalizeManagedMediaUrl
+} from "./managed_media_url.js";''',
+              'service platform import'
+          )
+          s = replace_once(
+              s,
+              '''  type SupadataGenerateCreditQuote,
+  type SupadataGeneratedTranscriptResult,
+  type SupadataNativeCreditQuote,
+  type SupadataNativeTranscriptResult''',
+              '''  type SupadataGenerateCreditQuote,
+  type SupadataGeneratedTranscriptResult,
+  type SupadataMetadataCreditQuote,
+  type SupadataMetadataDurationResult,
+  type SupadataNativeCreditQuote,
+  type SupadataNativeTranscriptResult''',
+              'service provider types'
+          )
+          marker = '''export interface ManagedMediaAiInput {
+  beta_access_code: string;
+  credit_consent: {
+    provider: "supadata";
+    mode: "generate";
+    max_credits: number;
+  };
+}
+'''
+          insert = marker + '''
+export interface ManagedMediaFacebookMetadataInput {
+  beta_access_code: string;
+  credit_consent: {
+    provider: "supadata";
+    mode: "metadata";
+    max_credits: number;
+  };
+}
+'''
+          s = replace_once(s, marker, insert, 'service metadata input')
+          marker = '''export interface ManagedMediaAiCreditPreflight {
+'''
+          insert = '''export interface ManagedMediaFacebookMetadataPreflight {
+  job_id: string;
+  source_url: string;
+  provider: "supadata";
+  mode: "metadata";
+  purpose: "facebook_ai_duration";
+  plan: string;
+  credits_available: number;
+  estimated_credits: 1;
+  credits_after_estimate: number;
+  can_continue: boolean;
+  consent_required: true;
+  consent_options: { approve: 1; reject: 2 };
+}
+
+export interface ManagedMediaAiCreditPreflight {
+'''
+          s = replace_once(s, marker, insert, 'service metadata quote')
+          s = replace_once(
+              s,
+              '''  conservative_maximum: true;
+  can_continue: boolean;''',
+              '''  conservative_maximum: true;
+  estimate_basis: "instagram_reel_ceiling" | "facebook_metadata_duration";
+  media_duration_seconds: number | null;
+  can_continue: boolean;''',
+              'service ai quote basis'
+          )
+          s = replace_once(
+              s,
+              '''  ai_fallback_requires_new_consent: boolean;
+  error: null | {''',
+              '''  ai_fallback_requires_new_consent: boolean;
+  media_duration_seconds: number | null;
+  ai_credit_ceiling: number | null;
+  metadata_credits_charged: number;
+  error: null | {''',
+              'service job metadata fields'
+          )
+          s = replace_once(
+              s,
+              '''  quoteGenerateInstagramReel?(): Promise<SupadataGenerateCreditQuote>;
+  getGeneratedTranscript?(url: string): Promise<SupadataGeneratedTranscriptResult>;''',
+              '''  quoteGenerateInstagramReel?(): Promise<SupadataGenerateCreditQuote>;
+  quoteMetadata?(): Promise<SupadataMetadataCreditQuote>;
+  getMetadataDuration?(url: string): Promise<SupadataMetadataDurationResult>;
+  quoteGenerateForDuration?(durationSeconds: number): Promise<SupadataGenerateCreditQuote>;
+  getGeneratedTranscript?(
+    url: string,
+    approvedMaxCredits?: number
+  ): Promise<SupadataGeneratedTranscriptResult>;''',
+              'service provider interface'
+          )
+          # Dynamic AI input parser plus Facebook metadata parser.
+          pattern = re.compile(r'''export function parseManagedMediaAiInput\(value: unknown\): ManagedMediaAiInput \| null \{.*?\n\}\n\nexport class ManagedMediaService''', re.S)
+          replacement = '''export function parseManagedMediaFacebookMetadataInput(
+  value: unknown
+): ManagedMediaFacebookMetadataInput | null {
+  if (!value || typeof value !== "object") return null;
+  const input = value as Record<string, unknown>;
+  if (!validAccessCode(input.beta_access_code)) return null;
+  const consent = input.credit_consent;
+  if (!consent || typeof consent !== "object") return null;
+  const record = consent as Record<string, unknown>;
+  if (
+    record.provider !== "supadata" ||
+    record.mode !== "metadata" ||
+    record.max_credits !== 1
+  ) return null;
+  return {
+    beta_access_code: input.beta_access_code,
+    credit_consent: { provider: "supadata", mode: "metadata", max_credits: 1 }
+  };
+}
+
+export function parseManagedMediaAiInput(value: unknown): ManagedMediaAiInput | null {
+  if (!value || typeof value !== "object") return null;
+  const input = value as Record<string, unknown>;
+  if (!validAccessCode(input.beta_access_code)) return null;
+  const consent = input.credit_consent;
+  if (!consent || typeof consent !== "object") return null;
+  const record = consent as Record<string, unknown>;
+  if (
+    record.provider !== "supadata" ||
+    record.mode !== "generate" ||
+    typeof record.max_credits !== "number" ||
+    !Number.isInteger(record.max_credits) ||
+    record.max_credits < 2 ||
+    record.max_credits > 10000
+  ) return null;
+  return {
+    beta_access_code: input.beta_access_code,
+    credit_consent: {
+      provider: "supadata",
+      mode: "generate",
+      max_credits: record.max_credits
+    }
+  };
+}
+
+export class ManagedMediaService'''
+          s, n = pattern.subn(replacement, s, count=1)
+          if n != 1: raise SystemExit(f'service parser block: {n}')
+          s = replace_once(
+              s,
+              '''  private authorizeAiProvider(): void {
+    if (
+      !this.transcriptProvider?.quoteGenerateInstagramReel ||
+      !this.transcriptProvider.getGeneratedTranscript
+    ) {
+      throw new MediaTranscriptError(
+        "MANAGED_AI_PROVIDER_NOT_CONFIGURED",
+        "The managed AI transcript provider is not configured.",
+        503,
+        false
+      );
+    }
+  }
+''',
+              '''  private authorizeAiProvider(): void {
+    if (!this.transcriptProvider?.getGeneratedTranscript) {
+      throw new MediaTranscriptError(
+        "MANAGED_AI_PROVIDER_NOT_CONFIGURED",
+        "The managed AI transcript provider is not configured.",
+        503,
+        false
+      );
+    }
+  }
+
+  private authorizeFacebookMetadataProvider(): void {
+    if (
+      !this.transcriptProvider?.quoteMetadata ||
+      !this.transcriptProvider.getMetadataDuration ||
+      !this.transcriptProvider.quoteGenerateForDuration
+    ) {
+      throw new MediaTranscriptError(
+        "MANAGED_METADATA_PROVIDER_NOT_CONFIGURED",
+        "The managed Facebook duration provider is not configured.",
+        503,
+        false
+      );
+    }
+  }
+''',
+              'service provider guards'
+          )
+          # Replace AI preflight with metadata gate + platform-aware AI preflight.
+          pattern = re.compile(r'''  async aiPreflight\(.*?\n  async startNative''', re.S)
+          replacement = '''  async facebookMetadataPreflight(
+    jobId: string,
+    accessCode: string
+  ): Promise<ManagedMediaFacebookMetadataPreflight> {
+    const record = await this.authorizedRecord(jobId, accessCode);
+    this.authorizeFacebookMetadataProvider();
+    if (record.job.status !== "AWAITING_AI_CONSENT") {
+      throw new MediaTranscriptError(
+        "MEDIA_AI_CONSENT_NOT_APPLICABLE",
+        "Facebook AI duration preflight is allowed only after native transcript unavailability.",
+        409,
+        false
+      );
+    }
+    if (managedMediaPlatform(record.job.source_url) !== "facebook") {
+      throw new MediaTranscriptError(
+        "MEDIA_AI_SOURCE_NOT_SUPPORTED",
+        "Facebook duration preflight applies only to public Facebook media.",
+        422,
+        false
+      );
+    }
+    if (record.job.media_duration_seconds !== null) {
+      throw new MediaTranscriptError(
+        "MEDIA_AI_ESTIMATE_ALREADY_AVAILABLE",
+        "Facebook media duration has already been obtained for this job.",
+        409,
+        false
+      );
+    }
+    const quote = await this.transcriptProvider!.quoteMetadata!();
+    return {
+      job_id: record.job.job_id,
+      source_url: record.job.source_url,
+      provider: "supadata",
+      mode: "metadata",
+      purpose: "facebook_ai_duration",
+      plan: quote.plan,
+      credits_available: quote.remaining_credits,
+      estimated_credits: 1,
+      credits_after_estimate: quote.remaining_after_estimate,
+      can_continue: quote.can_continue,
+      consent_required: true,
+      consent_options: { approve: 1, reject: 2 }
+    };
+  }
+
+  async startFacebookMetadata(
+    jobId: string,
+    input: ManagedMediaFacebookMetadataInput
+  ): Promise<ManagedMediaJobView> {
+    const record = await this.authorizedRecord(jobId, input.beta_access_code);
+    this.authorizeFacebookMetadataProvider();
+    if (record.job.media_duration_seconds !== null) {
+      return this.publicJob(record.job, true);
+    }
+    if (
+      record.job.status !== "AWAITING_AI_CONSENT" ||
+      managedMediaPlatform(record.job.source_url) !== "facebook"
+    ) {
+      throw new MediaTranscriptError(
+        "MEDIA_AI_ESTIMATE_NOT_APPLICABLE",
+        "Facebook duration lookup is allowed only for a Facebook job awaiting AI consent.",
+        409,
+        false
+      );
+    }
+    const quote = await this.transcriptProvider!.quoteMetadata!();
+    if (!quote.can_continue) {
+      throw new MediaTranscriptError(
+        "MANAGED_PROVIDER_CREDITS_EXHAUSTED",
+        "No provider credit is available for the approved Facebook metadata request.",
+        429,
+        false
+      );
+    }
+    const startedAt = new Date().toISOString();
+    const processing: ManagedMediaStoredRecord = {
+      ...record,
+      job: {
+        ...record.job,
+        status: "PROCESSING",
+        updated_at: startedAt,
+        credit_charge_uncertain: true,
+        error: null
+      },
+      expiresAt: this.expiryFrom(startedAt)
+    };
+    await this.store.put(processing);
+    this.inFlight.add(record.requestKey);
+    try {
+      const metadata = await this.transcriptProvider!.getMetadataDuration!(
+        record.job.source_url
+      );
+      const aiQuote = await this.transcriptProvider!.quoteGenerateForDuration!(
+        metadata.duration_seconds
+      );
+      const updatedAt = new Date().toISOString();
+      const updated: ManagedMediaStoredRecord = {
+        ...processing,
+        job: {
+          ...processing.job,
+          status: "AWAITING_AI_CONSENT",
+          updated_at: updatedAt,
+          credits_charged: record.job.credits_charged + metadata.billable_credits,
+          credits_remaining_estimate: Math.max(
+            0,
+            quote.remaining_credits - metadata.billable_credits
+          ),
+          credit_charge_uncertain: false,
+          media_duration_seconds: metadata.duration_seconds,
+          ai_credit_ceiling: aiQuote.maximum_credits,
+          metadata_credits_charged:
+            record.job.metadata_credits_charged + metadata.billable_credits,
+          error: null
+        },
+        expiresAt: this.expiryFrom(updatedAt)
+      };
+      await this.store.put(updated);
+      return this.publicJob(updated.job, false);
+    } catch (error) {
+      const normalized = error instanceof MediaTranscriptError
+        ? error
+        : new MediaTranscriptError(
+          "MANAGED_PROVIDER_METADATA_FAILED",
+          "Managed Facebook metadata processing failed.",
+          500,
+          false
+        );
+      const updatedAt = new Date().toISOString();
+      const failed: ManagedMediaStoredRecord = {
+        ...processing,
+        job: {
+          ...processing.job,
+          status: "FAILED",
+          updated_at: updatedAt,
+          credit_charge_uncertain: true,
+          error: {
+            code: normalized.code,
+            message: normalized.message,
+            retryable: false
+          }
+        },
+        expiresAt: this.expiryFrom(updatedAt)
+      };
+      await this.store.put(failed);
+      return this.publicJob(failed.job, false);
+    } finally {
+      this.inFlight.delete(record.requestKey);
+    }
+  }
+
+  async aiPreflight(
+    jobId: string,
+    accessCode: string
+  ): Promise<ManagedMediaAiCreditPreflight> {
+    const record = await this.authorizedRecord(jobId, accessCode);
+    this.authorizeAiProvider();
+    if (record.job.status !== "AWAITING_AI_CONSENT") {
+      throw new MediaTranscriptError(
+        "MEDIA_AI_CONSENT_NOT_APPLICABLE",
+        "AI transcript preflight is allowed only after the native path stops awaiting separate AI consent.",
+        409,
+        false
+      );
+    }
+    const platform = managedMediaPlatform(record.job.source_url);
+    let quote: SupadataGenerateCreditQuote;
+    let estimateBasis: ManagedMediaAiCreditPreflight["estimate_basis"];
+    let mediaDurationSeconds: number | null = null;
+    if (isManagedInstagramReelUrl(record.job.source_url)) {
+      if (!this.transcriptProvider!.quoteGenerateInstagramReel) {
+        throw new MediaTranscriptError(
+          "MANAGED_AI_PROVIDER_NOT_CONFIGURED",
+          "Instagram AI quoting is not configured.",
+          503,
+          false
+        );
+      }
+      quote = await this.transcriptProvider!.quoteGenerateInstagramReel();
+      estimateBasis = "instagram_reel_ceiling";
+    } else if (platform === "facebook") {
+      if (
+        record.job.media_duration_seconds === null ||
+        record.job.ai_credit_ceiling === null
+      ) {
+        throw new MediaTranscriptError(
+          "MEDIA_AI_ESTIMATE_REQUIRED",
+          "Facebook AI requires a consent-gated metadata duration lookup first.",
+          409,
+          false
+        );
+      }
+      if (!this.transcriptProvider!.quoteGenerateForDuration) {
+        throw new MediaTranscriptError(
+          "MANAGED_AI_PROVIDER_NOT_CONFIGURED",
+          "Facebook AI quoting is not configured.",
+          503,
+          false
+        );
+      }
+      quote = await this.transcriptProvider!.quoteGenerateForDuration(
+        record.job.media_duration_seconds
+      );
+      mediaDurationSeconds = record.job.media_duration_seconds;
+      estimateBasis = "facebook_metadata_duration";
+    } else {
+      throw new MediaTranscriptError(
+        "MEDIA_AI_SOURCE_NOT_SUPPORTED",
+        "AI fallback is not enabled for this media source.",
+        422,
+        false
+      );
+    }
+    return {
+      job_id: record.job.job_id,
+      source_url: record.job.source_url,
+      provider: "supadata",
+      mode: "generate",
+      plan: quote.plan,
+      credits_available: quote.remaining_credits,
+      estimated_credits: quote.estimated_credits,
+      maximum_credits: quote.maximum_credits,
+      credits_per_minute: quote.credits_per_minute,
+      maximum_duration_minutes: quote.maximum_duration_minutes,
+      credits_after_estimate: quote.remaining_after_estimate,
+      conservative_maximum: true,
+      estimate_basis: estimateBasis,
+      media_duration_seconds: mediaDurationSeconds,
+      can_continue: quote.can_continue,
+      consent_required: true,
+      consent_options: { approve: 1, reject: 2 }
+    };
+  }
+
+  async startNative'''
+          s, n = pattern.subn(replacement, s, count=1)
+          if n != 1: raise SystemExit(f'service ai preflight block: {n}')
+          s = replace_once(
+              s,
+              '''      ai_fallback_requires_new_consent: true,
+      error: null''',
+              '''      ai_fallback_requires_new_consent: true,
+      media_duration_seconds: null,
+      ai_credit_ceiling: null,
+      metadata_credits_charged: 0,
+      error: null''',
+              'service initial job fields'
+          )
+          pattern = re.compile(r'''  async startAi\(.*?\n  async get\(''', re.S)
+          replacement = '''  async startAi(
+    jobId: string,
+    input: ManagedMediaAiInput
+  ): Promise<ManagedMediaJobView> {
+    const record = await this.authorizedRecord(jobId, input.beta_access_code);
+    this.authorizeAiProvider();
+
+    if (record.job.provider_mode === "generate") {
+      return this.publicJob(record.job, true);
+    }
+    if (record.job.status !== "AWAITING_AI_CONSENT") {
+      throw new MediaTranscriptError(
+        "MEDIA_AI_CONSENT_NOT_APPLICABLE",
+        "AI transcript processing is allowed only after a native transcript-unavailable stop.",
+        409,
+        false
+      );
+    }
+
+    const platform = managedMediaPlatform(record.job.source_url);
+    let quote: SupadataGenerateCreditQuote;
+    if (isManagedInstagramReelUrl(record.job.source_url)) {
+      if (!this.transcriptProvider!.quoteGenerateInstagramReel) {
+        throw new MediaTranscriptError(
+          "MANAGED_AI_PROVIDER_NOT_CONFIGURED",
+          "Instagram AI quoting is not configured.",
+          503,
+          false
+        );
+      }
+      quote = await this.transcriptProvider!.quoteGenerateInstagramReel();
+    } else if (platform === "facebook") {
+      if (record.job.media_duration_seconds === null) {
+        throw new MediaTranscriptError(
+          "MEDIA_AI_ESTIMATE_REQUIRED",
+          "Facebook AI requires an approved metadata duration lookup before generation.",
+          409,
+          false
+        );
+      }
+      if (!this.transcriptProvider!.quoteGenerateForDuration) {
+        throw new MediaTranscriptError(
+          "MANAGED_AI_PROVIDER_NOT_CONFIGURED",
+          "Facebook AI quoting is not configured.",
+          503,
+          false
+        );
+      }
+      quote = await this.transcriptProvider!.quoteGenerateForDuration(
+        record.job.media_duration_seconds
+      );
+    } else {
+      throw new MediaTranscriptError(
+        "MEDIA_AI_SOURCE_NOT_SUPPORTED",
+        "AI fallback is not enabled for this media source.",
+        422,
+        false
+      );
+    }
+    if (!quote.can_continue) {
+      throw new MediaTranscriptError(
+        "MANAGED_PROVIDER_CREDITS_EXHAUSTED",
+        "The managed provider balance is below the approved AI credit ceiling.",
+        429,
+        false
+      );
+    }
+    if (input.credit_consent.max_credits !== quote.maximum_credits) {
+      throw new MediaTranscriptError(
+        "MEDIA_AI_CREDIT_CONSENT_REQUIRED",
+        "A separate explicit AI credit consent matching the current maximum is required.",
+        409,
+        false
+      );
+    }
+
+    const startedAt = new Date().toISOString();
+    const processing: ManagedMediaStoredRecord = {
+      ...record,
+      job: {
+        ...record.job,
+        status: "PROCESSING",
+        updated_at: startedAt,
+        provider_mode: "generate",
+        credit_charge_uncertain: true,
+        ai_fallback_requires_new_consent: false,
+        error: null
+      },
+      expiresAt: this.expiryFrom(startedAt)
+    };
+    await this.store.put(processing);
+    this.inFlight.add(record.requestKey);
+    try {
+      const result = await this.transcriptProvider!.getGeneratedTranscript!(
+        record.job.source_url,
+        quote.maximum_credits
+      );
+      const updatedAt = new Date().toISOString();
+      const updated: ManagedMediaStoredRecord = {
+        ...processing,
+        job: {
+          ...processing.job,
+          status: "COMPLETED",
+          updated_at: updatedAt,
+          detected_language: result.language,
+          available_languages: [...result.available_languages],
+          credits_charged: record.job.credits_charged + result.billable_credits,
+          credits_remaining_estimate: Math.max(
+            0,
+            quote.remaining_credits - result.billable_credits
+          ),
+          credit_charge_uncertain: false,
+          segment_count: result.segments.length,
+          transcript_characters: result.transcript_text.length,
+          error: null
+        },
+        segments: result.segments.map((segment) => ({ ...segment })),
+        expiresAt: this.expiryFrom(updatedAt)
+      };
+      await this.store.put(updated);
+      return this.publicJob(updated.job, false);
+    } catch (error) {
+      const normalized = error instanceof MediaTranscriptError
+        ? error
+        : new MediaTranscriptError(
+          "MANAGED_PROVIDER_AI_TRANSCRIPT_FAILED",
+          "Managed AI transcript processing failed.",
+          500,
+          false
+        );
+      const updatedAt = new Date().toISOString();
+      const failed: ManagedMediaStoredRecord = {
+        ...processing,
+        job: {
+          ...processing.job,
+          status: "FAILED",
+          updated_at: updatedAt,
+          credit_charge_uncertain: true,
+          error: {
+            code: normalized.code,
+            message: normalized.message,
+            retryable: false
+          }
+        },
+        expiresAt: this.expiryFrom(updatedAt)
+      };
+      await this.store.put(failed);
+      return this.publicJob(failed.job, false);
+    } finally {
+      this.inFlight.delete(record.requestKey);
+    }
+  }
+
+  async get('''
+          s, n = pattern.subn(replacement, s, count=1)
+          if n != 1: raise SystemExit(f'service startAi block: {n}')
+          path.write_text(s)
+
+          # HTTP: expose Facebook metadata gate and dynamic AI consent.
+          path = Path("src/cloud/src/managed_media_http.ts")
+          s = path.read_text()
+          s = replace_once(
+              s,
+              '''  ManagedMediaService,
+  parseManagedMediaAiInput,
+  parseManagedMediaNativeInput,''',
+              '''  ManagedMediaService,
+  parseManagedMediaAiInput,
+  parseManagedMediaFacebookMetadataInput,
+  parseManagedMediaNativeInput,''',
+              'http metadata parser import'
+          )
+          s = replace_once(
+              s,
+              '''const AI_PREFLIGHT_PATH = /^\\/api\\/v1\\/media\\/managed\\/transcriptions\\/(KRCM_[A-Za-z0-9-]+)\\/ai-preflight$/;
+const AI_START_PATH = /^\\/api\\/v1\\/media\\/managed\\/transcriptions\\/(KRCM_[A-Za-z0-9-]+)\\/ai$/;''',
+              '''const FACEBOOK_METADATA_PREFLIGHT_PATH = /^\\/api\\/v1\\/media\\/managed\\/transcriptions\\/(KRCM_[A-Za-z0-9-]+)\\/facebook-ai-estimate-preflight$/;
+const FACEBOOK_METADATA_START_PATH = /^\\/api\\/v1\\/media\\/managed\\/transcriptions\\/(KRCM_[A-Za-z0-9-]+)\\/facebook-ai-estimate$/;
+const AI_PREFLIGHT_PATH = /^\\/api\\/v1\\/media\\/managed\\/transcriptions\\/(KRCM_[A-Za-z0-9-]+)\\/ai-preflight$/;
+const AI_START_PATH = /^\\/api\\/v1\\/media\\/managed\\/transcriptions\\/(KRCM_[A-Za-z0-9-]+)\\/ai$/;''',
+              'http metadata paths'
+          )
+          s = replace_once(
+              s,
+              '''    facebook_ai_fallback: false,
+    ai_requires_separate_preflight: true,''',
+              '''    facebook_ai_fallback: true,
+    facebook_ai_requires_duration_metadata: true,
+    facebook_ai_metadata_credits: 1,
+    ai_requires_separate_preflight: true,''',
+              'http capability facebook ai'
+          )
+          marker = '''      const aiPreflightMatch = AI_PREFLIGHT_PATH.exec(path);
+'''
+          routes = '''      const facebookMetadataPreflightMatch = FACEBOOK_METADATA_PREFLIGHT_PATH.exec(path);
+      if (method === "GET" && facebookMetadataPreflightMatch?.[1]) {
+        const quote = await service.facebookMetadataPreflight(
+          facebookMetadataPreflightMatch[1],
+          serverOwnerAccessCode(config.mediaBetaCodes)
+        );
+        sendJson(response, 200, { request_id: context.requestId, ...quote }, context, config.corsAllowedOrigin);
+        return true;
+      }
+
+      const facebookMetadataStartMatch = FACEBOOK_METADATA_START_PATH.exec(path);
+      if (method === "POST" && facebookMetadataStartMatch?.[1]) {
+        const rawBody = await readJsonBody(request, config.maxRequestBodyBytes);
+        const body = withServerOwnerAccessCode(rawBody, config.mediaBetaCodes);
+        const input = parseManagedMediaFacebookMetadataInput(body);
+        if (!input) {
+          throw new MediaTranscriptError(
+            "MEDIA_METADATA_CREDIT_CONSENT_REQUIRED",
+            "Separate one-credit metadata consent is required before Facebook duration lookup.",
+            409,
+            false
+          );
+        }
+        const job = await service.startFacebookMetadata(
+          facebookMetadataStartMatch[1],
+          input
+        );
+        sendJson(response, 200, { request_id: context.requestId, ...job }, context, config.corsAllowedOrigin);
+        return true;
+      }
+
+'''+marker
+          s = replace_once(s, marker, routes, 'http metadata routes')
+          s = replace_once(
+              s,
+              '''            `Separate AI consent with max_credits=${INSTAGRAM_REEL_GENERATE_MAX_CREDITS} is required before generated transcription.`,''',
+              '''            "Separate AI consent matching the latest AI preflight maximum is required before generated transcription.",''',
+              'http dynamic ai consent message'
+          )
+          path.write_text(s)
+
+          # Facebook tests: full native -> metadata -> dynamic AI flow and duplicate safety.
+          Path("src/cloud/tests/managed_media_facebook.test.ts").write_text(r'''import assert from "node:assert/strict";
+import { test } from "node:test";
+import {
+  ManagedMediaService,
+  parseManagedMediaPreflightInput,
+  type ManagedNativeTranscriptProvider
+} from "../src/managed_media_service.js";
+import {
+  managedMediaPlatform,
+  normalizeManagedMediaUrl
+} from "../src/managed_media_url.js";
+import { MediaBetaGate } from "../src/media_beta.js";
+
+const ACCESS_CODE = "abcdefghijkl";
+
+class FacebookFallbackProvider implements ManagedNativeTranscriptProvider {
+  nativeCalls = 0;
+  metadataCalls = 0;
+  aiCalls = 0;
+  async quoteNative() {
+    return { provider: "supadata" as const, mode: "native" as const, plan: "Free", max_credits: 100, used_credits: 9, remaining_credits: 91, estimated_credits: 1 as const, remaining_after_estimate: 90, consent_required: true as const, can_continue: true };
+  }
+  async getNativeTranscript() {
+    this.nativeCalls += 1;
+    return { status: "unavailable" as const, billable_credits: 1 };
+  }
+  async quoteMetadata() {
+    return { provider: "supadata" as const, mode: "metadata" as const, plan: "Free", max_credits: 100, used_credits: 10, remaining_credits: 90, estimated_credits: 1 as const, remaining_after_estimate: 89, consent_required: true as const, can_continue: true };
+  }
+  async getMetadataDuration() {
+    this.metadataCalls += 1;
+    return { duration_seconds: 143, billable_credits: 1 };
+  }
+  async quoteGenerateForDuration(durationSeconds: number) {
+    assert.equal(durationSeconds, 143);
+    return { provider: "supadata" as const, mode: "generate" as const, plan: "Free", max_credits: 100, used_credits: 11, remaining_credits: 89, estimated_credits: 6, maximum_credits: 6, credits_per_minute: 2, maximum_duration_minutes: 3, remaining_after_estimate: 83, conservative_maximum: true as const, consent_required: true as const, can_continue: true };
+  }
+  async getGeneratedTranscript(_url: string, approvedMaxCredits?: number) {
+    this.aiCalls += 1;
+    assert.equal(approvedMaxCredits, 6);
+    return { status: "completed" as const, language: "en", available_languages: ["en"], segments: [{ index: 0, start_ms: 0, end_ms: 143000, text: "Facebook AI transcript", confidence: null }], transcript_text: "Facebook AI transcript", billable_credits: 6 };
+  }
+}
+
+test("managed Facebook URL forms canonicalize for stable request identity", () => {
+  assert.equal(normalizeManagedMediaUrl("https://m.facebook.com/reel/1234567890/?mibextid=test#fragment"), "https://www.facebook.com/reel/1234567890/");
+  assert.equal(normalizeManagedMediaUrl("https://www.facebook.com/watch/?v=1234567890&utm_source=test"), "https://www.facebook.com/watch/?v=1234567890");
+  assert.equal(normalizeManagedMediaUrl("https://web.facebook.com/example.page/videos/987654321/?ref=sharing"), "https://www.facebook.com/example.page/videos/987654321/");
+  assert.equal(normalizeManagedMediaUrl("https://www.facebook.com/share/r/1BMf76tsxW/?mibextid=wwXIfr"), "https://www.facebook.com/share/r/1BMf76tsxW/");
+  assert.equal(normalizeManagedMediaUrl("https://fb.watch/AbCdEfGhIj/?mibextid=abc"), "https://fb.watch/AbCdEfGhIj/");
+  assert.equal(managedMediaPlatform("https://www.facebook.com/reel/1234567890/"), "facebook");
+});
+
+test("managed Facebook adapter rejects login, groups, profiles and non-HTTPS", () => {
+  assert.throws(() => normalizeManagedMediaUrl("https://facebook.com/login/"));
+  assert.throws(() => normalizeManagedMediaUrl("https://facebook.com/groups/private-group/videos/123/"));
+  assert.throws(() => normalizeManagedMediaUrl("https://facebook.com/example.profile/"));
+  assert.throws(() => normalizeManagedMediaUrl("http://facebook.com/reel/1234567890/"));
+});
+
+test("managed request parser accepts Facebook Reel", () => {
+  const input = parseManagedMediaPreflightInput({ url: "https://m.facebook.com/reel/1234567890/?mibextid=test", beta_access_code: ACCESS_CODE, language_hint: "auto" });
+  assert.ok(input);
+  assert.equal(input.url, "https://www.facebook.com/reel/1234567890/");
+});
+
+test("Facebook AI fallback requires separately consented metadata duration and exact dynamic AI cap", async () => {
+  const provider = new FacebookFallbackProvider();
+  const service = new ManagedMediaService(new MediaBetaGate([ACCESS_CODE]), null, provider);
+  const native = await service.startNative({ url: "https://www.facebook.com/reel/1234567890/", language_hint: "auto", beta_access_code: ACCESS_CODE, credit_consent: { provider: "supadata", mode: "native", max_credits: 1 } });
+  assert.equal(native.status, "AWAITING_AI_CONSENT");
+  assert.equal(native.credits_charged, 1);
+  assert.equal(provider.nativeCalls, 1);
+
+  const metadataQuote = await service.facebookMetadataPreflight(native.job_id, ACCESS_CODE);
+  assert.equal(metadataQuote.estimated_credits, 1);
+  assert.equal(provider.metadataCalls, 0);
+
+  const metadata = await service.startFacebookMetadata(native.job_id, { beta_access_code: ACCESS_CODE, credit_consent: { provider: "supadata", mode: "metadata", max_credits: 1 } });
+  assert.equal(metadata.status, "AWAITING_AI_CONSENT");
+  assert.equal(metadata.media_duration_seconds, 143);
+  assert.equal(metadata.ai_credit_ceiling, 6);
+  assert.equal(metadata.metadata_credits_charged, 1);
+  assert.equal(metadata.credits_charged, 2);
+  assert.equal(provider.metadataCalls, 1);
+
+  const metadataDuplicate = await service.startFacebookMetadata(native.job_id, { beta_access_code: ACCESS_CODE, credit_consent: { provider: "supadata", mode: "metadata", max_credits: 1 } });
+  assert.equal(metadataDuplicate.reused, true);
+  assert.equal(provider.metadataCalls, 1);
+
+  const aiQuote = await service.aiPreflight(native.job_id, ACCESS_CODE);
+  assert.equal(aiQuote.estimate_basis, "facebook_metadata_duration");
+  assert.equal(aiQuote.media_duration_seconds, 143);
+  assert.equal(aiQuote.maximum_credits, 6);
+
+  const completed = await service.startAi(native.job_id, { beta_access_code: ACCESS_CODE, credit_consent: { provider: "supadata", mode: "generate", max_credits: 6 } });
+  assert.equal(completed.status, "COMPLETED");
+  assert.equal(completed.credits_charged, 8);
+  assert.equal(completed.segment_count, 1);
+  assert.equal(provider.aiCalls, 1);
+
+  const duplicate = await service.startAi(native.job_id, { beta_access_code: ACCESS_CODE, credit_consent: { provider: "supadata", mode: "generate", max_credits: 6 } });
+  assert.equal(duplicate.reused, true);
+  assert.equal(provider.aiCalls, 1);
+});
+''')
+
+          # Capability assertions.
+          path = Path("src/cloud/tests/managed_media_http.test.ts")
+          s = path.read_text()
+          s = replace_once(
+              s,
+              '''    assert.equal(capabilityBody.instagram_reel_ai_fallback, true);
+    assert.equal(capabilityBody.ai_requires_separate_preflight, true);''',
+              '''    assert.equal(capabilityBody.instagram_reel_ai_fallback, true);
+    assert.equal(capabilityBody.facebook_ai_fallback, true);
+    assert.equal(capabilityBody.facebook_ai_requires_duration_metadata, true);
+    assert.equal(capabilityBody.facebook_ai_metadata_credits, 1);
+    assert.equal(capabilityBody.ai_requires_separate_preflight, true);''',
+              'http capability test'
+          )
+          path.write_text(s)
+          PY
+
+      - name: Build and test cloud service
+        working-directory: src/cloud
+        run: |
+          npm ci
+          npm run check
+
+      - name: Commit implementation to feature branch
+        id: commit
+        shell: bash
+        run: |
+          set -euo pipefail
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git add src/cloud/src/supadata_provider.ts src/cloud/src/managed_media_service.ts src/cloud/src/managed_media_http.ts src/cloud/tests/managed_media_facebook.test.ts src/cloud/tests/managed_media_http.test.ts
+          git diff --cached --check
+          git commit -m "A9.6: add consent-gated Facebook AI fallback"
+          git push origin HEAD:agent/krc-media-transcript
+          echo "sha=$(git rev-parse HEAD)" >> "$GITHUB_OUTPUT"
+
+      - name: Report implementation
+        if: always()
+        env:
+          GH_TOKEN: ${{ github.token }}
+          PATCH_SHA: ${{ steps.commit.outputs.sha }}
+        run: |
+          if [[ "${{ job.status }}" == "success" ]]; then
+            gh pr comment 28 --repo kolemasakar/VoiceBridge --body "A9.6 Facebook AI fallback implementation: **PASS**. Feature commit: \`${PATCH_SHA}\`. Flow is native unavailable -> separate 1-credit metadata-duration consent -> duration-derived AI hard cap -> separate AI consent. Cloud build/tests passed inside the implementation workflow. No metadata or AI provider request was executed by this workflow. Production/main were not targeted."
+          else
+            gh pr comment 28 --repo kolemasakar/VoiceBridge --body "A9.6 Facebook AI fallback implementation: **FAIL**. No metadata or AI provider request was authorized by this implementation workflow. Production/main were not targeted."
+          fi
