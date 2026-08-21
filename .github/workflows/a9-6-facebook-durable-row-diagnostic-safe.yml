@@ -1,0 +1,107 @@
+name: A9.6 Facebook Durable Row Diagnostic Safe
+
+on:
+  push:
+    branches:
+      - agent/krc-media-transcript
+    paths:
+      - .github/workflows/a9-6-facebook-durable-row-diagnostic-safe.yml
+
+permissions:
+  contents: read
+  issues: write
+  pull-requests: write
+
+env:
+  RENDER_API_BASE: https://api.render.com/v1
+  SERVICE_ID: srv-da1kic5bedkc73d6fk60
+
+jobs:
+  diagnose:
+    runs-on: ubuntu-latest
+    env:
+      RENDER_API_KEY: ${{ secrets.RENDER_API_KEY }}
+      GH_TOKEN: ${{ github.token }}
+    steps:
+      - name: Inspect isolated DB without provider calls
+        id: diag
+        shell: bash
+        run: |
+          set +e
+          found=false
+          status=unknown
+          source=unknown
+          metadata=unknown
+          duration=unknown
+          ceiling=unknown
+          credits=unknown
+          updated=unknown
+          expires=unknown
+          now="$(date +%s)"
+          reason=none
+          rc=0
+          if [[ -z "${RENDER_API_KEY:-}" ]]; then
+            rc=1; reason=render_key_missing
+          else
+            echo "::add-mask::$RENDER_API_KEY"
+          fi
+          if [[ $rc -eq 0 ]]; then
+            tmp="$(mktemp)"
+            code="$(curl -sS -o "$tmp" -w '%{http_code}' "${RENDER_API_BASE}/services/${SERVICE_ID}/env-vars/KRC_MEDIA_DATABASE_URL" -H 'Accept: application/json' -H "Authorization: Bearer ${RENDER_API_KEY}")"
+            database_url="$(jq -r '(.envVar.value // .value // empty)' "$tmp" 2>/dev/null)"
+            rm -f "$tmp"
+            if [[ "$code" != 200 || -z "$database_url" ]]; then
+              rc=1; reason=database_url_lookup_failed
+            else
+              echo "::add-mask::$database_url"
+            fi
+          fi
+          if [[ $rc -eq 0 ]]; then
+            if ! command -v psql >/dev/null 2>&1; then
+              sudo apt-get update -qq >/dev/null 2>&1
+              sudo apt-get install -y -qq postgresql-client >/dev/null 2>&1
+            fi
+            row="$(PGCONNECT_TIMEOUT=8 psql "$database_url" -X -A -t -F '|' -v ON_ERROR_STOP=1 -c "SELECT status, payload->>'source_url', COALESCE(payload->>'metadata_credits_charged','0'), COALESCE(payload->>'media_duration_seconds','null'), COALESCE(payload->>'ai_credit_ceiling','null'), COALESCE(payload->>'credits_charged','0'), extract(epoch from updated_at)::bigint, extract(epoch from expires_at)::bigint FROM krc_managed_media_jobs WHERE payload->>'source_url' ILIKE '%facebook%' ORDER BY updated_at DESC LIMIT 1;" 2>/dev/null | tr -d '\r' | head -n1)"
+            qrc=$?
+            if [[ $qrc -ne 0 ]]; then
+              rc=1; reason=postgres_query_failed
+            elif [[ -z "$row" ]]; then
+              reason=no_facebook_rows
+            else
+              found=true
+              IFS='|' read -r status source metadata duration ceiling credits updated expires <<< "$row"
+            fi
+          fi
+          echo "rc=$rc" >> "$GITHUB_OUTPUT"
+          echo "found=$found" >> "$GITHUB_OUTPUT"
+          echo "status=$status" >> "$GITHUB_OUTPUT"
+          echo "source=$source" >> "$GITHUB_OUTPUT"
+          echo "metadata=$metadata" >> "$GITHUB_OUTPUT"
+          echo "duration=$duration" >> "$GITHUB_OUTPUT"
+          echo "ceiling=$ceiling" >> "$GITHUB_OUTPUT"
+          echo "credits=$credits" >> "$GITHUB_OUTPUT"
+          echo "updated=$updated" >> "$GITHUB_OUTPUT"
+          echo "expires=$expires" >> "$GITHUB_OUTPUT"
+          echo "now=$now" >> "$GITHUB_OUTPUT"
+          echo "reason=$reason" >> "$GITHUB_OUTPUT"
+          exit 0
+
+      - name: Report fail-safe diagnostic
+        if: always()
+        env:
+          RC: ${{ steps.diag.outputs.rc }}
+          FOUND: ${{ steps.diag.outputs.found }}
+          STATUS: ${{ steps.diag.outputs.status }}
+          SOURCE: ${{ steps.diag.outputs.source }}
+          METADATA: ${{ steps.diag.outputs.metadata }}
+          DURATION: ${{ steps.diag.outputs.duration }}
+          CEILING: ${{ steps.diag.outputs.ceiling }}
+          CREDITS: ${{ steps.diag.outputs.credits }}
+          UPDATED: ${{ steps.diag.outputs.updated }}
+          EXPIRES: ${{ steps.diag.outputs.expires }}
+          NOW: ${{ steps.diag.outputs.now }}
+          REASON: ${{ steps.diag.outputs.reason }}
+        shell: bash
+        run: |
+          set -euo pipefail
+          gh pr comment 28 --repo kolemasakar/VoiceBridge --body "A9.6 Facebook fail-safe durable diagnostic: rc=\`${RC:-unknown}\`, found=\`${FOUND:-unknown}\`, status=\`${STATUS:-unknown}\`, source_url=\`${SOURCE:-unknown}\`, metadata_credits=\`${METADATA:-unknown}\`, duration=\`${DURATION:-unknown}\`, ai_ceiling=\`${CEILING:-unknown}\`, cumulative_credits=\`${CREDITS:-unknown}\`, updated_epoch=\`${UPDATED:-unknown}\`, expires_epoch=\`${EXPIRES:-unknown}\`, now_epoch=\`${NOW:-unknown}\`, reason=\`${REASON:-unknown}\`. Read-only diagnostic only; no provider request was executed."
