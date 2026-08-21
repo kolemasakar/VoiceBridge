@@ -104,6 +104,28 @@ function parseSegments(content: unknown): MediaTranscriptSegment[] {
   return segments;
 }
 
+function isInstagramUrl(value: string): boolean {
+  try {
+    const host = new URL(value).hostname.toLowerCase();
+    return host === "instagram.com" || host.endsWith(".instagram.com");
+  } catch {
+    return false;
+  }
+}
+
+function looksAuthOrPrivateFailure(
+  response: Response,
+  payload: SupadataTranscriptResponse
+): boolean {
+  if ([401, 403].includes(response.status)) return true;
+  const message = [
+    nonEmptyString(payload.error),
+    nonEmptyString(payload.message),
+    nonEmptyString(payload.details)
+  ].filter((value): value is string => Boolean(value)).join(" ").toLowerCase();
+  return /private|login|log in|sign in|authentication|authorization|not publicly accessible/.test(message);
+}
+
 export class SupadataProvider {
   private readonly baseUrl: string;
 
@@ -219,6 +241,14 @@ export class SupadataProvider {
     }
 
     if (!response.ok) {
+      if (isInstagramUrl(url) && looksAuthOrPrivateFailure(response, payload)) {
+        throw new MediaTranscriptError(
+          "UNSUPPORTED_PRIVATE_OR_AUTH_REQUIRED",
+          "The Instagram media is not publicly accessible or requires authentication.",
+          422,
+          false
+        );
+      }
       const retryable = response.status >= 500 || response.status === 429;
       throw new MediaTranscriptError(
         "MANAGED_PROVIDER_TRANSCRIPT_ERROR",
