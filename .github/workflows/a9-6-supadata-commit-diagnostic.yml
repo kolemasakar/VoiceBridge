@@ -1,0 +1,98 @@
+name: A9.6 Supadata Commit Diagnostic
+
+on:
+  push:
+    branches:
+      - agent/krc-media-transcript
+    paths:
+      - .github/workflows/a9-6-supadata-commit-diagnostic.yml
+
+permissions:
+  contents: read
+  issues: write
+  pull-requests: write
+
+jobs:
+  diagnose:
+    runs-on: ubuntu-latest
+    env:
+      GH_TOKEN: ${{ github.token }}
+    steps:
+      - name: Checkout feature branch
+        uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803
+        with:
+          ref: agent/krc-media-transcript
+          fetch-depth: 0
+
+      - name: Diagnose patch and git path without writes
+        id: diag
+        shell: bash
+        run: |
+          set +e
+          stage="start"
+          reason="none"
+          patch_bytes="0"
+          changed_files="none"
+          head_before="$(git rev-parse HEAD 2>/dev/null || echo unknown)"
+          origin_head="unknown"
+          rc=0
+
+          stage="apply_patch"
+          python scripts/a9_6_supadata_nested_result_patch.py >/tmp/diag-patch.log 2>&1
+          code=$?
+          if [[ $code -ne 0 ]]; then rc=$code; reason="patch_script_failed"; fi
+
+          if [[ $rc -eq 0 ]]; then
+            stage="capture_diff"
+            git diff -- src/cloud/src/supadata_provider.ts src/cloud/tests/supadata_provider.test.ts > /tmp/nested-result.patch
+            code=$?
+            patch_bytes="$(wc -c < /tmp/nested-result.patch | tr -d ' ')"
+            changed_files="$(git diff --name-only -- src/cloud/src/supadata_provider.ts src/cloud/tests/supadata_provider.test.ts | tr '\n' ',' | sed 's/,$//' )"
+            if [[ $code -ne 0 ]]; then rc=$code; reason="git_diff_failed";
+            elif [[ "$patch_bytes" -eq 0 ]]; then rc=1; reason="empty_patch"; fi
+          fi
+
+          if [[ $rc -eq 0 ]]; then
+            stage="fetch_origin"
+            git fetch origin agent/krc-media-transcript >/tmp/diag-fetch.log 2>&1
+            code=$?
+            origin_head="$(git rev-parse origin/agent/krc-media-transcript 2>/dev/null || echo unknown)"
+            if [[ $code -ne 0 ]]; then rc=$code; reason="fetch_failed"; fi
+          fi
+
+          if [[ $rc -eq 0 ]]; then
+            stage="reset_clean"
+            git reset --hard origin/agent/krc-media-transcript >/tmp/diag-reset.log 2>&1
+            code=$?
+            if [[ $code -ne 0 ]]; then rc=$code; reason="reset_failed"; fi
+          fi
+
+          if [[ $rc -eq 0 ]]; then
+            stage="apply_check"
+            git apply --check /tmp/nested-result.patch >/tmp/diag-apply.log 2>&1
+            code=$?
+            if [[ $code -ne 0 ]]; then rc=$code; reason="git_apply_check_failed"; fi
+          fi
+
+          echo "stage=$stage" >> "$GITHUB_OUTPUT"
+          echo "reason=$reason" >> "$GITHUB_OUTPUT"
+          echo "rc=$rc" >> "$GITHUB_OUTPUT"
+          echo "patch_bytes=$patch_bytes" >> "$GITHUB_OUTPUT"
+          echo "changed_files=$changed_files" >> "$GITHUB_OUTPUT"
+          echo "head_before=$head_before" >> "$GITHUB_OUTPUT"
+          echo "origin_head=$origin_head" >> "$GITHUB_OUTPUT"
+          exit 0
+
+      - name: Report diagnostic
+        env:
+          STAGE: ${{ steps.diag.outputs.stage }}
+          REASON: ${{ steps.diag.outputs.reason }}
+          RC: ${{ steps.diag.outputs.rc }}
+          PATCH_BYTES: ${{ steps.diag.outputs.patch_bytes }}
+          CHANGED_FILES: ${{ steps.diag.outputs.changed_files }}
+          HEAD_BEFORE: ${{ steps.diag.outputs.head_before }}
+          ORIGIN_HEAD: ${{ steps.diag.outputs.origin_head }}
+        shell: bash
+        run: |
+          set -euo pipefail
+          gh pr comment 28 --repo kolemasakar/VoiceBridge --body "A9.6 Supadata commit-path diagnostic: stage=\`${STAGE}\`, rc=\`${RC}\`, reason=\`${REASON}\`, patch_bytes=\`${PATCH_BYTES}\`, changed_files=\`${CHANGED_FILES}\`, checkout_head=\`${HEAD_BEFORE}\`, origin_head=\`${ORIGIN_HEAD}\`. Read-only Git diagnostic only: no branch write, deploy, provider transcript, metadata, or AI request was executed."
