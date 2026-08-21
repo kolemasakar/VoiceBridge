@@ -1,0 +1,101 @@
+name: A9.6 Supadata Nested Result Remediation
+
+on:
+  push:
+    branches:
+      - agent/krc-media-transcript
+    paths:
+      - .github/workflows/a9-6-supadata-nested-result-remediation.yml
+
+permissions:
+  contents: write
+  issues: write
+  pull-requests: write
+
+jobs:
+  remediate:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout feature branch
+        uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803
+        with:
+          ref: agent/krc-media-transcript
+          fetch-depth: 0
+
+      - name: Set up Node.js
+        uses: actions/setup-node@249970729cb0ef3589644e2896645e5dc5ba9c38
+        with:
+          node-version: "24"
+          cache: npm
+          cache-dependency-path: src/cloud/package-lock.json
+
+      - name: Apply parser remediation
+        id: patch
+        continue-on-error: true
+        shell: bash
+        run: |
+          set +e
+          python scripts/a9_6_supadata_nested_result_patch.py > /tmp/nested-patch.log 2>&1
+          code=$?
+          cat /tmp/nested-patch.log
+          exit $code
+
+      - name: Run full cloud checks
+        id: test
+        if: steps.patch.outcome == 'success'
+        continue-on-error: true
+        working-directory: src/cloud
+        shell: bash
+        run: |
+          set +e
+          npm ci > /tmp/nested-test.log 2>&1
+          code=$?
+          if [[ $code -eq 0 ]]; then
+            npm run check >> /tmp/nested-test.log 2>&1
+            code=$?
+          fi
+          cat /tmp/nested-test.log
+          exit $code
+
+      - name: Commit remediation to feature branch
+        id: commit
+        if: steps.patch.outcome == 'success' && steps.test.outcome == 'success'
+        shell: bash
+        run: |
+          set -euo pipefail
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git add src/cloud/src/supadata_provider.ts src/cloud/tests/supadata_provider.test.ts
+          git diff --cached --check
+          if git diff --cached --quiet; then
+            echo "sha=$(git rev-parse HEAD)" >> "$GITHUB_OUTPUT"
+            exit 0
+          fi
+          git commit -m "A9.6: accept nested Supadata async transcript results"
+          git push origin HEAD:agent/krc-media-transcript
+          echo "sha=$(git rev-parse HEAD)" >> "$GITHUB_OUTPUT"
+
+      - name: Report remediation
+        if: always()
+        env:
+          GH_TOKEN: ${{ github.token }}
+          PATCH_OUTCOME: ${{ steps.patch.outcome }}
+          TEST_OUTCOME: ${{ steps.test.outcome }}
+          PATCH_SHA: ${{ steps.commit.outputs.sha }}
+        shell: bash
+        run: |
+          set -euo pipefail
+          if [[ "$PATCH_OUTCOME" == "success" && "$TEST_OUTCOME" == "success" && -n "${PATCH_SHA:-}" ]]; then
+            gh pr comment 28 --repo kolemasakar/VoiceBridge --body "A9.6 Supadata async-result parser remediation: **PASS**. Parser now accepts both documented top-level transcript fields and a nested \`result\` payload while still requiring timestamped segment arrays. Full Node 24 cloud check passed. Feature commit: \`${PATCH_SHA}\`. No provider transcript, metadata, or AI start request was executed. Production/main were not targeted."
+          else
+            if [[ "$PATCH_OUTCOME" != "success" ]]; then
+              diag="$(tail -n 30 /tmp/nested-patch.log 2>/dev/null || true)"
+              phase="patch"
+            else
+              diag="$(tail -n 40 /tmp/nested-test.log 2>/dev/null || true)"
+              phase="test"
+            fi
+            [[ ${#diag} -le 5000 ]] || diag="${diag:0:5000}"
+            body=$(printf 'A9.6 Supadata async-result parser remediation: **FAIL** at `%s`. Safe diagnostic:\n```text\n%s\n```\nNo provider transcript, metadata, or AI start request was executed. Production/main were not targeted.' "$phase" "$diag")
+            gh pr comment 28 --repo kolemasakar/VoiceBridge --body "$body"
+          fi
