@@ -92,7 +92,7 @@ test("Supadata generated transcript accepts nested async result payloads", async
   });
 });
 '''
-    tests = tests.rstrip() + addition + '\n'
+    tests = tests.rstrip() + addition.rstrip() + '\n'
 
 test_path.write_text(tests, encoding='utf-8')
 print('patched supadata nested async transcript result support')
