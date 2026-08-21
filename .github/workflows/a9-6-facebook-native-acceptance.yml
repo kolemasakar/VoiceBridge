@@ -23,32 +23,36 @@ env:
   REQUIRED_BRANCH: agent/krc-media-transcript
   BETA_BASE_URL: https://voicebridge-krc-media-beta-kolemasakar.onrender.com
   FACEBOOK_URL: https://www.facebook.com/reel/1114235920664408
+  REQUIRED_AVAILABLE_BEFORE: "90"
+  REQUIRED_AVAILABLE_AFTER_NATIVE: "89"
 
 jobs:
   acceptance:
     runs-on: ubuntu-latest
     env:
       RENDER_API_KEY: ${{ secrets.RENDER_API_KEY }}
+      GH_TOKEN: ${{ github.token }}
     steps:
       - name: Enforce isolated target
         shell: bash
         run: |
           set -euo pipefail
-          test -n "${RENDER_API_KEY:-}" || { echo "RENDER_API_KEY missing" >&2; exit 1; }
-          [[ "${GITHUB_REF_NAME}" == "${REQUIRED_BRANCH}" ]] || { echo "Unexpected branch" >&2; exit 1; }
+          test -n "${RENDER_API_KEY:-}"
+          echo "::add-mask::$RENDER_API_KEY"
+          [[ "$GITHUB_REF_NAME" == "$REQUIRED_BRANCH" ]]
           tmp="$(mktemp)"
           code="$(curl -sS -o "$tmp" -w '%{http_code}' \
             "${RENDER_API_BASE}/services/${SERVICE_ID}" \
             -H 'Accept: application/json' \
             -H "Authorization: Bearer ${RENDER_API_KEY}")"
-          [[ "$code" == 200 ]] || { echo "Service lookup failed HTTP $code" >&2; rm -f "$tmp"; exit 1; }
+          [[ "$code" == 200 ]]
           name="$(jq -r '.name // empty' "$tmp")"
           branch="$(jq -r '.branch // empty' "$tmp")"
           rm -f "$tmp"
-          [[ "$name" == "$SERVICE_NAME" ]] || { echo "Isolation guard failed" >&2; exit 1; }
-          [[ "$branch" == "$REQUIRED_BRANCH" ]] || { echo "Branch guard failed" >&2; exit 1; }
+          [[ "$name" == "$SERVICE_NAME" ]]
+          [[ "$branch" == "$REQUIRED_BRANCH" ]]
 
-      - name: Deploy exact feature commit
+      - name: Deploy exact feature-branch commit to isolated beta
         id: deploy
         shell: bash
         run: |
@@ -61,10 +65,10 @@ jobs:
             -H 'Content-Type: application/json' \
             -H "Authorization: Bearer ${RENDER_API_KEY}" \
             --data "$payload")"
-          [[ "$code" == 201 || "$code" == 202 ]] || { echo "Deploy failed HTTP $code" >&2; cat "$tmp" >&2; rm -f "$tmp"; exit 1; }
+          [[ "$code" == 201 || "$code" == 202 ]]
           deploy_id="$(jq -r '(.deploy // .).id // empty' "$tmp")"
           rm -f "$tmp"
-          test -n "$deploy_id" || { echo "Deploy ID missing" >&2; exit 1; }
+          test -n "$deploy_id"
           echo "deploy_id=$deploy_id" >> "$GITHUB_OUTPUT"
 
       - name: Wait for isolated deploy
@@ -73,22 +77,27 @@ jobs:
         shell: bash
         run: |
           set -euo pipefail
-          for i in $(seq 1 72); do
+          for i in $(seq 1 90); do
             tmp="$(mktemp)"
             code="$(curl -sS -o "$tmp" -w '%{http_code}' \
               "${RENDER_API_BASE}/services/${SERVICE_ID}/deploys/${DEPLOY_ID}" \
               -H 'Accept: application/json' \
               -H "Authorization: Bearer ${RENDER_API_KEY}")"
-            [[ "$code" == 200 ]] || { rm -f "$tmp"; echo "Deploy status HTTP $code" >&2; exit 1; }
+            [[ "$code" == 200 ]]
             status="$(jq -r '(.deploy // .).status // "unknown"' "$tmp")"
+            commit="$(jq -r '(.deploy // .).commit.id // (.deploy // .).commitId // "unknown"' "$tmp")"
             rm -f "$tmp"
             case "$status" in
-              live) exit 0 ;;
-              build_failed|update_failed|canceled|deactivated) echo "Deploy failed: $status" >&2; exit 1 ;;
+              live)
+                [[ "$commit" == "$GITHUB_SHA" ]]
+                exit 0
+                ;;
+              build_failed|update_failed|canceled|deactivated)
+                exit 1
+                ;;
             esac
             sleep 5
           done
-          echo "Deploy timeout" >&2
           exit 1
 
       - name: Read and mask Action bearer
@@ -101,14 +110,14 @@ jobs:
             "${RENDER_API_BASE}/services/${SERVICE_ID}/env-vars/KRC_MEDIA_ACTION_TOKEN" \
             -H 'Accept: application/json' \
             -H "Authorization: Bearer ${RENDER_API_KEY}")"
-          [[ "$code" == 200 ]] || { rm -f "$tmp"; echo "Action token lookup HTTP $code" >&2; exit 1; }
+          [[ "$code" == 200 ]]
           token="$(jq -r '(.envVar.value // .value // empty)' "$tmp")"
           rm -f "$tmp"
-          test -n "$token" || { echo "Action token missing" >&2; exit 1; }
+          test -n "$token"
           echo "::add-mask::$token"
           echo "token=$token" >> "$GITHUB_OUTPUT"
 
-      - name: Recheck Facebook one-credit quote
+      - name: Recheck exact approved one-credit native quote
         id: quote
         env:
           ACTION_TOKEN: ${{ steps.action.outputs.token }}
@@ -122,7 +131,7 @@ jobs:
             -H 'Content-Type: application/json' \
             -H "Authorization: Bearer ${ACTION_TOKEN}" \
             --data "$payload")"
-          [[ "$code" == 200 ]] || { echo "Facebook preflight HTTP $code" >&2; cat /tmp/facebook-quote.json >&2; exit 1; }
+          [[ "$code" == 200 ]]
           jq -e '
             .provider == "supadata" and
             .mode == "native" and
@@ -133,10 +142,12 @@ jobs:
           ' /tmp/facebook-quote.json >/dev/null
           available="$(jq -r '.credits_available' /tmp/facebook-quote.json)"
           after="$(jq -r '.credits_after_estimate' /tmp/facebook-quote.json)"
+          [[ "$available" == "$REQUIRED_AVAILABLE_BEFORE" ]]
+          [[ "$after" == "$REQUIRED_AVAILABLE_AFTER_NATIVE" ]]
           echo "available=$available" >> "$GITHUB_OUTPUT"
           echo "after=$after" >> "$GITHUB_OUTPUT"
 
-      - name: Execute exactly one approved Facebook native start
+      - name: Execute exactly one newly approved Facebook native start
         id: native
         env:
           ACTION_TOKEN: ${{ steps.action.outputs.token }}
@@ -150,28 +161,25 @@ jobs:
             -H 'Content-Type: application/json' \
             -H "Authorization: Bearer ${ACTION_TOKEN}" \
             --data "$payload")"
-          [[ "$code" == 200 ]] || { echo "Facebook native HTTP $code" >&2; cat /tmp/facebook-native.json >&2; exit 1; }
+          [[ "$code" == 200 ]]
           jq -e '
             (.status == "COMPLETED" or .status == "AWAITING_AI_CONSENT") and
             .provider == "supadata" and
             .provider_mode == "native" and
-            (.credits_charged >= 0 and .credits_charged <= 1) and
-            .credit_charge_uncertain == false
+            .credits_charged == 1 and
+            .credit_charge_uncertain == false and
+            .reused == false
           ' /tmp/facebook-native.json >/dev/null
           status="$(jq -r '.status' /tmp/facebook-native.json)"
-          credits="$(jq -r '.credits_charged' /tmp/facebook-native.json)"
           segments="$(jq -r '.segment_count' /tmp/facebook-native.json)"
           language="$(jq -r '.detected_language // "none"' /tmp/facebook-native.json)"
-          reused="$(jq -r '.reused' /tmp/facebook-native.json)"
           job_id="$(jq -r '.job_id' /tmp/facebook-native.json)"
           echo "status=$status" >> "$GITHUB_OUTPUT"
-          echo "credits=$credits" >> "$GITHUB_OUTPUT"
           echo "segments=$segments" >> "$GITHUB_OUTPUT"
           echo "language=$language" >> "$GITHUB_OUTPUT"
-          echo "reused=$reused" >> "$GITHUB_OUTPUT"
           echo "job_id=$job_id" >> "$GITHUB_OUTPUT"
 
-      - name: Verify completed transcript page when available
+      - name: Verify completed transcript page when native succeeds
         if: steps.native.outputs.status == 'COMPLETED'
         env:
           ACTION_TOKEN: ${{ steps.action.outputs.token }}
@@ -183,10 +191,11 @@ jobs:
             "${BETA_BASE_URL}/api/v1/media/managed/transcriptions/${JOB_ID}/segments?cursor=0&limit=50" \
             -H 'Accept: application/json' \
             -H "Authorization: Bearer ${ACTION_TOKEN}")"
-          [[ "$code" == 200 ]] || { echo "Segments HTTP $code" >&2; exit 1; }
+          [[ "$code" == 200 ]]
           jq -e '.status == "COMPLETED" and (.segments | length) > 0' /tmp/facebook-segments.json >/dev/null
 
-      - name: Confirm Facebook AI remains disabled
+      - name: Verify metadata consent gate when native is unavailable
+        id: metadata_quote
         if: steps.native.outputs.status == 'AWAITING_AI_CONSENT'
         env:
           ACTION_TOKEN: ${{ steps.action.outputs.token }}
@@ -194,31 +203,42 @@ jobs:
         shell: bash
         run: |
           set -euo pipefail
-          code="$(curl -sS --max-time 90 -o /tmp/facebook-ai-preflight.json -w '%{http_code}' \
-            "${BETA_BASE_URL}/api/v1/media/managed/transcriptions/${JOB_ID}/ai-preflight" \
+          code="$(curl -sS --max-time 90 -o /tmp/facebook-metadata-quote.json -w '%{http_code}' \
+            "${BETA_BASE_URL}/api/v1/media/managed/transcriptions/${JOB_ID}/facebook-ai-estimate-preflight" \
             -H 'Accept: application/json' \
             -H "Authorization: Bearer ${ACTION_TOKEN}")"
-          [[ "$code" == 422 ]] || { echo "Expected Facebook AI preflight 422, got HTTP $code" >&2; cat /tmp/facebook-ai-preflight.json >&2; exit 1; }
-          jq -e '.error.code == "MEDIA_AI_SOURCE_NOT_SUPPORTED"' /tmp/facebook-ai-preflight.json >/dev/null
-          echo "Facebook AI fallback remains blocked; no AI start endpoint was called."
+          [[ "$code" == 200 ]]
+          jq -e '
+            .provider == "supadata" and
+            .mode == "metadata" and
+            .purpose == "facebook_ai_duration" and
+            .estimated_credits == 1 and
+            .consent_required == true and
+            .can_continue == true
+          ' /tmp/facebook-metadata-quote.json >/dev/null
+          available="$(jq -r '.credits_available' /tmp/facebook-metadata-quote.json)"
+          after="$(jq -r '.credits_after_estimate' /tmp/facebook-metadata-quote.json)"
+          [[ "$available" == "$REQUIRED_AVAILABLE_AFTER_NATIVE" ]]
+          [[ "$after" -eq $((available - 1)) ]]
+          echo "available=$available" >> "$GITHUB_OUTPUT"
+          echo "after=$after" >> "$GITHUB_OUTPUT"
 
       - name: Report Facebook native acceptance
         if: always()
         env:
-          GH_TOKEN: ${{ github.token }}
           AVAILABLE: ${{ steps.quote.outputs.available }}
-          AFTER: ${{ steps.quote.outputs.after }}
+          NATIVE_AFTER: ${{ steps.quote.outputs.after }}
           STATUS: ${{ steps.native.outputs.status }}
-          CREDITS: ${{ steps.native.outputs.credits }}
           SEGMENTS: ${{ steps.native.outputs.segments }}
           LANGUAGE: ${{ steps.native.outputs.language }}
-          REUSED: ${{ steps.native.outputs.reused }}
+          META_AVAILABLE: ${{ steps.metadata_quote.outputs.available }}
+          META_AFTER: ${{ steps.metadata_quote.outputs.after }}
         shell: bash
         run: |
           set -euo pipefail
           if [[ "${{ job.status }}" == "success" ]]; then
-            body="A9.6 Facebook native acceptance: **SUCCESS**. User explicitly approved one native request with hard maximum \`1\` credit. Isolated target only. Preflight available=\`${AVAILABLE}\`, expected after=\`${AFTER}\`; result status=\`${STATUS}\`, detected_language=\`${LANGUAGE}\`, segments=\`${SEGMENTS}\`, credits_charged=\`${CREDITS}\`, reused=\`${REUSED}\`. Facebook AI fallback remained disabled and no AI start request was executed. Production/main were not targeted."
+            body="A9.6 Facebook fresh native acceptance: **SUCCESS**. User explicitly approved exactly one new native request with hard maximum \`1\` credit. Isolated target only. Native balance quote \`${AVAILABLE}\` -> \`${NATIVE_AFTER}\`; result status=\`${STATUS}\`, detected_language=\`${LANGUAGE}\`, segments=\`${SEGMENTS}\`, credits_charged=\`1\`, reused=\`false\`. If native was unavailable, metadata preflight only returned balance \`${META_AVAILABLE}\` -> \`${META_AFTER}\`; no metadata start or AI start request was executed. Production/main were not targeted."
           else
-            body="A9.6 Facebook native acceptance: **FAILURE**. User authorization was limited to one native request with hard maximum \`1\` credit. Isolated target only. No AI start request was authorized. Production/main were not targeted."
+            body="A9.6 Facebook fresh native acceptance: **FAILURE**. Authorization was limited to exactly one new native request with hard maximum \`1\` credit. No metadata start or AI start request was authorized by this workflow. Production/main were not targeted."
           fi
           gh pr comment 28 --repo kolemasakar/VoiceBridge --body "$body"
