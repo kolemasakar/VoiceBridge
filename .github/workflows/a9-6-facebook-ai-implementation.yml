@@ -103,3 +103,5 @@ jobs:
             body=$(printf 'A9.6 Facebook AI fallback implementation: **FAIL** at `%s`. Safe diagnostic:\n```text\n%s\n```\nNo metadata or AI provider request was authorized. Production/main were not targeted.' "$phase" "$diag")
             gh pr comment 28 --repo kolemasakar/VoiceBridge --body "$body"
           fi
+
+# retrigger after regression fixes
