@@ -109,6 +109,7 @@ interface SupadataTranscriptResponse {
   error?: unknown;
   message?: unknown;
   details?: unknown;
+  result?: unknown;
 }
 
 interface SupadataAccountResponse {
@@ -162,10 +163,24 @@ function parseSegments(content: unknown): MediaTranscriptSegment[] {
   return segments;
 }
 
+function unwrapTranscriptPayload(
+  payload: SupadataTranscriptResponse
+): SupadataTranscriptResponse {
+  const nested = payload.result;
+  if (!nested || typeof nested !== "object" || Array.isArray(nested)) {
+    return payload;
+  }
+  return {
+    ...payload,
+    ...(nested as SupadataTranscriptResponse)
+  };
+}
+
 function parseTranscriptResult(
   payload: SupadataTranscriptResponse,
   billableCredits: number
 ): SupadataGeneratedTranscriptResult {
+  payload = unwrapTranscriptPayload(payload);
   const language = nonEmptyString(payload.lang);
   const segments = parseSegments(payload.content);
   const availableLanguages = Array.isArray(payload.availableLangs)

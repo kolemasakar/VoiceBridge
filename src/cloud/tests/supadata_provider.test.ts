@@ -244,3 +244,62 @@ test("Supadata generated transcript polls asynchronous jobs without extra transc
     assert.equal(accountReads, 2);
   });
 });
+
+test("Supadata generated transcript accepts nested async result payloads", async () => {
+  let accountReads = 0;
+  let jobReads = 0;
+  await withMockServer((request, response) => {
+    const url = new URL(request.url || "/", "http://localhost");
+    if (url.pathname === "/me") {
+      accountReads += 1;
+      response.writeHead(200, { "content-type": "application/json" });
+      response.end(JSON.stringify({
+        organizationId: "org-fb-ai",
+        plan: "Free",
+        maxCredits: 100,
+        usedCredits: accountReads === 1 ? 12 : 14
+      }));
+      return;
+    }
+    if (url.pathname === "/transcript") {
+      assert.equal(url.searchParams.get("mode"), "generate");
+      assert.equal(url.searchParams.get("text"), "false");
+      assert.equal(
+        url.searchParams.get("url"),
+        "https://www.facebook.com/reel/1234567890/"
+      );
+      response.writeHead(202, {
+        "content-type": "application/json",
+        "x-billable-requests": "2"
+      });
+      response.end(JSON.stringify({ jobId: "job-fb-nested" }));
+      return;
+    }
+    assert.equal(url.pathname, "/transcript/job-fb-nested");
+    jobReads += 1;
+    response.writeHead(200, { "content-type": "application/json" });
+    response.end(JSON.stringify({
+      status: "completed",
+      result: {
+        lang: "en",
+        availableLangs: ["en"],
+        content: [
+          { text: "Nested Facebook transcript", offset: 0, duration: 22000, lang: "en" }
+        ]
+      }
+    }));
+  }, async (baseUrl) => {
+    const provider = new SupadataProvider("test-key", baseUrl, 0, 2);
+    const result = await provider.getGeneratedTranscript(
+      "https://www.facebook.com/reel/1234567890/",
+      2
+    );
+    assert.equal(result.status, "completed");
+    assert.equal(result.billable_credits, 2);
+    assert.equal(result.language, "en");
+    assert.equal(result.segments.length, 1);
+    assert.equal(result.segments[0]?.end_ms, 22000);
+    assert.equal(jobReads, 1);
+    assert.equal(accountReads, 2);
+  });
+});
