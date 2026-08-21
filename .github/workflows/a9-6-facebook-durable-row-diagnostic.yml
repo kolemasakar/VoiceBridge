@@ -1,0 +1,80 @@
+name: A9.6 Facebook Durable Row Diagnostic
+
+on:
+  push:
+    branches:
+      - agent/krc-media-transcript
+    paths:
+      - .github/workflows/a9-6-facebook-durable-row-diagnostic.yml
+
+permissions:
+  contents: read
+  issues: write
+  pull-requests: write
+
+env:
+  RENDER_API_BASE: https://api.render.com/v1
+  SERVICE_ID: srv-da1kic5bedkc73d6fk60
+
+jobs:
+  diagnose:
+    runs-on: ubuntu-latest
+    env:
+      RENDER_API_KEY: ${{ secrets.RENDER_API_KEY }}
+      GH_TOKEN: ${{ github.token }}
+    steps:
+      - name: Inspect latest Facebook durable rows only
+        id: diag
+        shell: bash
+        run: |
+          set -euo pipefail
+          echo "::add-mask::$RENDER_API_KEY"
+          tmp="$(mktemp)"
+          code="$(curl -sS -o "$tmp" -w '%{http_code}' "${RENDER_API_BASE}/services/${SERVICE_ID}/env-vars/KRC_MEDIA_DATABASE_URL" -H 'Accept: application/json' -H "Authorization: Bearer ${RENDER_API_KEY}")"
+          [[ "$code" == 200 ]]
+          database_url="$(jq -r '(.envVar.value // .value // empty)' "$tmp")"
+          rm -f "$tmp"
+          test -n "$database_url"
+          echo "::add-mask::$database_url"
+          if ! command -v psql >/dev/null 2>&1; then sudo apt-get update -qq >/dev/null 2>&1; sudo apt-get install -y -qq postgresql-client >/dev/null 2>&1; fi
+          now_epoch="$(date +%s)"
+          row="$(PGCONNECT_TIMEOUT=8 psql "$database_url" -X -A -t -F $'\t' -v ON_ERROR_STOP=1 -c "SELECT job_id, status, payload->>'source_url', COALESCE(payload->>'metadata_credits_charged','0'), COALESCE(payload->>'media_duration_seconds','null'), COALESCE(payload->>'ai_credit_ceiling','null'), COALESCE(payload->>'credits_charged','0'), extract(epoch from updated_at)::bigint, extract(epoch from expires_at)::bigint FROM krc_managed_media_jobs WHERE payload->>'source_url' ILIKE '%facebook%' ORDER BY updated_at DESC LIMIT 1;" | tr -d '\r' | head -n1)"
+          if [[ -z "$row" ]]; then
+            echo "found=false" >> "$GITHUB_OUTPUT"
+            echo "now=$now_epoch" >> "$GITHUB_OUTPUT"
+            exit 0
+          fi
+          IFS=$'\t' read -r job status source metadata duration ceiling credits updated expires <<< "$row"
+          echo "found=true" >> "$GITHUB_OUTPUT"
+          echo "job=$job" >> "$GITHUB_OUTPUT"
+          echo "status=$status" >> "$GITHUB_OUTPUT"
+          echo "source=$source" >> "$GITHUB_OUTPUT"
+          echo "metadata=$metadata" >> "$GITHUB_OUTPUT"
+          echo "duration=$duration" >> "$GITHUB_OUTPUT"
+          echo "ceiling=$ceiling" >> "$GITHUB_OUTPUT"
+          echo "credits=$credits" >> "$GITHUB_OUTPUT"
+          echo "updated=$updated" >> "$GITHUB_OUTPUT"
+          echo "expires=$expires" >> "$GITHUB_OUTPUT"
+          echo "now=$now_epoch" >> "$GITHUB_OUTPUT"
+
+      - name: Report row identity
+        env:
+          FOUND: ${{ steps.diag.outputs.found }}
+          JOB: ${{ steps.diag.outputs.job }}
+          STATUS: ${{ steps.diag.outputs.status }}
+          SOURCE: ${{ steps.diag.outputs.source }}
+          METADATA: ${{ steps.diag.outputs.metadata }}
+          DURATION: ${{ steps.diag.outputs.duration }}
+          CEILING: ${{ steps.diag.outputs.ceiling }}
+          CREDITS: ${{ steps.diag.outputs.credits }}
+          UPDATED: ${{ steps.diag.outputs.updated }}
+          EXPIRES: ${{ steps.diag.outputs.expires }}
+          NOW: ${{ steps.diag.outputs.now }}
+        shell: bash
+        run: |
+          set -euo pipefail
+          if [[ "$FOUND" == "true" ]]; then
+            gh pr comment 28 --repo kolemasakar/VoiceBridge --body "A9.6 Facebook durable-row diagnostic: found=\`true\`, job=\`${JOB}\`, status=\`${STATUS}\`, source_url=\`${SOURCE}\`, metadata_credits=\`${METADATA}\`, duration=\`${DURATION}\`, ai_ceiling=\`${CEILING}\`, cumulative_credits=\`${CREDITS}\`, updated_epoch=\`${UPDATED}\`, expires_epoch=\`${EXPIRES}\`, now_epoch=\`${NOW}\`. Read-only DB inspection; no provider call was executed."
+          else
+            gh pr comment 28 --repo kolemasakar/VoiceBridge --body "A9.6 Facebook durable-row diagnostic: found=\`false\`, now_epoch=\`${NOW}\`. No Facebook durable row exists in the isolated database. Read-only DB inspection; no provider call was executed."
+          fi
