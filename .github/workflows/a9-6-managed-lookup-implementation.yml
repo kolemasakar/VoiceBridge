@@ -1,0 +1,124 @@
+name: A9.6 Managed Lookup Implementation
+
+on:
+  push:
+    branches:
+      - agent/krc-media-transcript
+    paths:
+      - .github/workflows/a9-6-managed-lookup-implementation.yml
+
+permissions:
+  contents: write
+  issues: write
+  pull-requests: write
+
+jobs:
+  implement:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: agent/krc-media-transcript
+          fetch-depth: 0
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '24'
+          cache: npm
+          cache-dependency-path: src/cloud/package-lock.json
+
+      - name: Apply read-only lookup patch
+        shell: bash
+        run: |
+          set -euo pipefail
+          python - <<'PY'
+          from pathlib import Path
+
+          service = Path('src/cloud/src/managed_media_service.ts')
+          text = service.read_text(encoding='utf-8')
+          marker = '''  async facebookMetadataPreflight(\n'''
+          insert = '''  async lookup(\n    input: ManagedMediaPreflightInput\n  ): Promise<ManagedMediaJobView | null> {\n    this.authorize(input.beta_access_code);\n    await this.ensureStore();\n    const sourceUrl = normalizeManagedMediaUrl(input.url);\n    const requestKey = managedMediaRequestKey(\n      sourceUrl,\n      input.language_hint,\n      input.beta_access_code\n    );\n    const record = await this.store.findByRequestKey(requestKey);\n    if (!record) return null;\n    if (record.accessCodeDigest !== managedMediaAccessDigest(input.beta_access_code)) {\n      return null;\n    }\n    return this.publicJob(record.job, true);\n  }\n\n  async facebookMetadataPreflight(\n'''
+          if marker not in text:
+              raise SystemExit('service insertion marker missing')
+          if 'async lookup(' not in text:
+              text = text.replace(marker, insert, 1)
+          service.write_text(text, encoding='utf-8')
+
+          http = Path('src/cloud/src/managed_media_http.ts')
+          text = http.read_text(encoding='utf-8')
+          const_marker = '''const PREFLIGHT = `${ROOT}/preflight`;\nconst TRANSCRIPTIONS = `${ROOT}/transcriptions`;'''
+          const_repl = '''const PREFLIGHT = `${ROOT}/preflight`;\nconst LOOKUP = `${ROOT}/lookup`;\nconst TRANSCRIPTIONS = `${ROOT}/transcriptions`;'''
+          if const_marker not in text and 'const LOOKUP =' not in text:
+              raise SystemExit('http constant marker missing')
+          if 'const LOOKUP =' not in text:
+              text = text.replace(const_marker, const_repl, 1)
+
+          route_marker = '''      if (method === "POST" && path === TRANSCRIPTIONS) {\n'''
+          route_insert = '''      if (method === "POST" && path === LOOKUP) {\n        const rawBody = await readJsonBody(request, config.maxRequestBodyBytes);\n        const body = withServerOwnerAccessCode(rawBody, config.mediaBetaCodes);\n        const input = parseManagedMediaPreflightInput(body);\n        if (!input) {\n          throw new MediaTranscriptError(\n            "INVALID_REQUEST",\n            "The managed media lookup request is not valid.",\n            400,\n            false\n          );\n        }\n        const job = await service.lookup(input);\n        if (!job) {\n          throw new MediaTranscriptError(\n            "MEDIA_TRANSCRIPT_NOT_FOUND",\n            "The managed media job was not found.",\n            404,\n            false\n          );\n        }\n        sendJson(\n          response,\n          200,\n          { request_id: context.requestId, ...job },\n          context,\n          config.corsAllowedOrigin\n        );\n        return true;\n      }\n\n      if (method === "POST" && path === TRANSCRIPTIONS) {\n'''
+          if route_marker not in text and 'path === LOOKUP' not in text:
+              raise SystemExit('http route marker missing')
+          if 'path === LOOKUP' not in text:
+              text = text.replace(route_marker, route_insert, 1)
+          http.write_text(text, encoding='utf-8')
+
+          test = Path('src/cloud/tests/managed_media_facebook.test.ts')
+          text = test.read_text(encoding='utf-8')
+          field_marker = '''class FacebookFallbackProvider implements ManagedNativeTranscriptProvider {\n  nativeCalls = 0;'''
+          field_repl = '''class FacebookFallbackProvider implements ManagedNativeTranscriptProvider {\n  nativeQuoteCalls = 0;\n  nativeCalls = 0;'''
+          if field_marker not in text and 'nativeQuoteCalls = 0;' not in text:
+              raise SystemExit('test field marker missing')
+          if 'nativeQuoteCalls = 0;' not in text:
+              text = text.replace(field_marker, field_repl, 1)
+
+          quote_marker = '''  async quoteNative() {\n    return { provider: "supadata" as const,'''
+          quote_repl = '''  async quoteNative() {\n    this.nativeQuoteCalls += 1;\n    return { provider: "supadata" as const,'''
+          if quote_marker not in text and 'this.nativeQuoteCalls += 1;' not in text:
+              raise SystemExit('test quote marker missing')
+          if 'this.nativeQuoteCalls += 1;' not in text:
+              text = text.replace(quote_marker, quote_repl, 1)
+
+          native_marker = '''  assert.equal(native.credits_charged, 1);\n  assert.equal(provider.nativeCalls, 1);\n\n  const metadataQuote = await service.facebookMetadataPreflight(native.job_id, ACCESS_CODE);'''
+          native_repl = '''  assert.equal(native.credits_charged, 1);\n  assert.equal(provider.nativeCalls, 1);\n  assert.equal(provider.nativeQuoteCalls, 1);\n\n  const recovered = await service.lookup({\n    url: "https://m.facebook.com/reel/1234567890/?mibextid=recovery",\n    language_hint: "auto",\n    beta_access_code: ACCESS_CODE\n  });\n  assert.ok(recovered);\n  assert.equal(recovered.job_id, native.job_id);\n  assert.equal(recovered.status, "AWAITING_AI_CONSENT");\n  assert.equal(recovered.reused, true);\n  assert.equal(provider.nativeCalls, 1);\n  assert.equal(provider.nativeQuoteCalls, 1);\n  assert.equal(provider.metadataCalls, 0);\n  assert.equal(provider.aiCalls, 0);\n\n  const metadataQuote = await service.facebookMetadataPreflight(native.job_id, ACCESS_CODE);'''
+          if native_marker not in text and 'const recovered = await service.lookup' not in text:
+              raise SystemExit('test recovery insertion marker missing')
+          if 'const recovered = await service.lookup' not in text:
+              text = text.replace(native_marker, native_repl, 1)
+          test.write_text(text, encoding='utf-8')
+          PY
+
+      - name: Run full cloud checks
+        working-directory: src/cloud
+        shell: bash
+        run: |
+          set -euo pipefail
+          npm ci
+          npm run check
+
+      - name: Commit implementation
+        id: commit
+        shell: bash
+        run: |
+          set -euo pipefail
+          git config user.name 'github-actions[bot]'
+          git config user.email '41898282+github-actions[bot]@users.noreply.github.com'
+          git add src/cloud/src/managed_media_service.ts src/cloud/src/managed_media_http.ts src/cloud/tests/managed_media_facebook.test.ts
+          if git diff --cached --quiet; then
+            echo "No implementation changes to commit."
+          else
+            git commit -m 'feat(media): add read-only managed job lookup'
+            git push origin HEAD:agent/krc-media-transcript
+          fi
+          echo "sha=$(git rev-parse HEAD)" >> "$GITHUB_OUTPUT"
+
+      - name: Report implementation result
+        if: always()
+        env:
+          GH_TOKEN: ${{ github.token }}
+          SHA: ${{ steps.commit.outputs.sha }}
+        shell: bash
+        run: |
+          if [[ "${{ job.status }}" == "success" ]]; then
+            gh pr comment 28 --repo kolemasakar/VoiceBridge --body "A9.6 managed job lookup implementation: **PASS**. Added authenticated read-only URL/language durable lookup; no provider quote/transcript/metadata/AI call occurs in lookup. Full Node 24 cloud check passed. Code commit: \`${SHA}\`. Production/main were not targeted."
+          else
+            gh pr comment 28 --repo kolemasakar/VoiceBridge --body "A9.6 managed job lookup implementation: **FAIL**. No provider request is part of this implementation workflow. Production/main were not targeted."
+          fi
