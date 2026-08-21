@@ -1,0 +1,218 @@
+name: A9.6 Instagram Native Acceptance Once
+
+on:
+  push:
+    branches:
+      - agent/krc-media-transcript
+    paths:
+      - .github/workflows/a9-6-instagram-native-acceptance-once.yml
+
+permissions:
+  contents: read
+  issues: write
+  pull-requests: write
+
+concurrency:
+  group: a9-6-instagram-native-acceptance-once
+  cancel-in-progress: false
+
+env:
+  RENDER_API_BASE: https://api.render.com/v1
+  SERVICE_ID: srv-da1kic5bedkc73d6fk60
+  SERVICE_NAME: voicebridge-krc-media-beta-kolemasakar
+  REQUIRED_BRANCH: agent/krc-media-transcript
+  BETA_BASE_URL: https://voicebridge-krc-media-beta-kolemasakar.onrender.com
+  ACCEPTANCE_URL: https://www.instagram.com/reel/DEDbGqpyfkT/
+  EXPECTED_CREDITS_BEFORE: '97'
+  EXPECTED_CREDITS_AFTER: '96'
+
+jobs:
+  accept:
+    if: github.event_name == 'push' && github.event.head_commit.message == 'A9.6 Instagram native acceptance once'
+    runs-on: ubuntu-latest
+    env:
+      RENDER_API_KEY: ${{ secrets.RENDER_API_KEY }}
+    steps:
+      - name: Enforce one-shot isolated boundary
+        shell: bash
+        run: |
+          set -euo pipefail
+          test -n "${RENDER_API_KEY:-}" || { echo "RENDER_API_KEY missing" >&2; exit 1; }
+          [[ "${GITHUB_REF_NAME}" == "$REQUIRED_BRANCH" ]] || { echo "Unexpected branch" >&2; exit 1; }
+          [[ "$SERVICE_ID" == "srv-da1kic5bedkc73d6fk60" ]] || { echo "Unexpected service id" >&2; exit 1; }
+          [[ "$SERVICE_NAME" == "voicebridge-krc-media-beta-kolemasakar" ]] || { echo "Unexpected service name" >&2; exit 1; }
+          echo "One-shot isolated boundary: PASS"
+
+      - name: Verify exact isolated Render service and read Action token
+        id: auth
+        shell: bash
+        run: |
+          set -euo pipefail
+          tmp="$(mktemp)"
+          code="$(curl -sS -o "$tmp" -w '%{http_code}' \
+            "${RENDER_API_BASE}/services/${SERVICE_ID}" \
+            -H 'Accept: application/json' \
+            -H "Authorization: Bearer ${RENDER_API_KEY}")"
+          [[ "$code" == 200 ]] || { echo "Service lookup failed HTTP $code" >&2; rm -f "$tmp"; exit 1; }
+          name="$(jq -r '.name // empty' "$tmp")"
+          branch="$(jq -r '.branch // empty' "$tmp")"
+          rm -f "$tmp"
+          [[ "$name" == "$SERVICE_NAME" ]] || { echo "Isolation name guard failed" >&2; exit 1; }
+          [[ "$branch" == "$REQUIRED_BRANCH" ]] || { echo "Isolation branch guard failed" >&2; exit 1; }
+
+          tmp="$(mktemp)"
+          code="$(curl -sS -o "$tmp" -w '%{http_code}' \
+            "${RENDER_API_BASE}/services/${SERVICE_ID}/env-vars/KRC_MEDIA_ACTION_TOKEN" \
+            -H 'Accept: application/json' \
+            -H "Authorization: Bearer ${RENDER_API_KEY}")"
+          [[ "$code" == 200 ]] || { echo "Action token lookup failed HTTP $code" >&2; rm -f "$tmp"; exit 1; }
+          token="$(jq -r '(.envVar.value // .value // empty)' "$tmp")"
+          rm -f "$tmp"
+          test -n "$token" || { echo "KRC_MEDIA_ACTION_TOKEN missing" >&2; exit 1; }
+          echo "::add-mask::$token"
+          echo "token=$token" >> "$GITHUB_OUTPUT"
+          echo "Exact isolated service verified."
+
+      - name: Re-check Instagram quote before billable call
+        id: preflight
+        env:
+          ACTION_TOKEN: ${{ steps.auth.outputs.token }}
+        shell: bash
+        run: |
+          set -euo pipefail
+          payload="$(jq -nc --arg url "$ACCEPTANCE_URL" '{url:$url,language_hint:"auto"}')"
+          code="$(curl -sS --retry 3 --retry-delay 2 --max-time 90 \
+            -o /tmp/preflight.json -w '%{http_code}' \
+            -X POST "${BETA_BASE_URL}/api/v1/media/managed/preflight" \
+            -H 'Accept: application/json' \
+            -H 'Content-Type: application/json' \
+            -H "Authorization: Bearer ${ACTION_TOKEN}" \
+            --data "$payload")"
+          [[ "$code" == 200 ]] || { echo "Preflight failed HTTP $code" >&2; cat /tmp/preflight.json >&2 || true; exit 1; }
+          jq -e \
+            --argjson before "$EXPECTED_CREDITS_BEFORE" \
+            --argjson after "$EXPECTED_CREDITS_AFTER" '
+              .provider == "supadata" and
+              .mode == "native" and
+              .credits_available == $before and
+              .estimated_credits == 1 and
+              .credits_after_estimate == $after and
+              .can_continue == true and
+              .consent_required == true
+            ' /tmp/preflight.json >/dev/null
+          echo "Preflight re-check: PASS / 97 -> 96 / max approved spend=1"
+
+      - name: Start exactly one approved native Instagram transcript
+        id: start
+        env:
+          ACTION_TOKEN: ${{ steps.auth.outputs.token }}
+        shell: bash
+        run: |
+          set -euo pipefail
+          payload="$(jq -nc --arg url "$ACCEPTANCE_URL" '{url:$url,language_hint:"auto",credit_consent:{provider:"supadata",mode:"native",max_credits:1}}')"
+          code="$(curl -sS --max-time 180 \
+            -o /tmp/start.json -w '%{http_code}' \
+            -X POST "${BETA_BASE_URL}/api/v1/media/managed/transcriptions" \
+            -H 'Accept: application/json' \
+            -H 'Content-Type: application/json' \
+            -H "Authorization: Bearer ${ACTION_TOKEN}" \
+            --data "$payload")"
+          echo "http=$code" >> "$GITHUB_OUTPUT"
+          if [[ "$code" != 200 ]]; then
+            echo "Billable start returned HTTP $code" >&2
+            cat /tmp/start.json >&2 || true
+            exit 1
+          fi
+          job_id="$(jq -r '.job_id // empty' /tmp/start.json)"
+          status="$(jq -r '.status // empty' /tmp/start.json)"
+          charged="$(jq -r '.credits_charged // -1' /tmp/start.json)"
+          reused="$(jq -r '.reused // false' /tmp/start.json)"
+          segment_count="$(jq -r '.segment_count // 0' /tmp/start.json)"
+          language="$(jq -r '.detected_language // "unknown"' /tmp/start.json)"
+          ai_gate="$(jq -r '.ai_fallback_requires_new_consent // false' /tmp/start.json)"
+          test -n "$job_id" || { echo "Missing KRCM job id" >&2; exit 1; }
+          [[ "$reused" == false ]] || { echo "Unexpected reused job; acceptance requires a fresh request" >&2; exit 1; }
+          [[ "$charged" == 1 ]] || { echo "Expected exactly one charged credit; got $charged" >&2; exit 1; }
+          [[ "$ai_gate" == true ]] || { echo "AI second-consent guard missing" >&2; exit 1; }
+          case "$status" in
+            COMPLETED|AWAITING_AI_CONSENT) ;;
+            *) echo "Unexpected managed status: $status" >&2; exit 1 ;;
+          esac
+          echo "job_id=$job_id" >> "$GITHUB_OUTPUT"
+          echo "status=$status" >> "$GITHUB_OUTPUT"
+          echo "charged=$charged" >> "$GITHUB_OUTPUT"
+          echo "segment_count=$segment_count" >> "$GITHUB_OUTPUT"
+          echo "language=$language" >> "$GITHUB_OUTPUT"
+          echo "Native request finished: status=$status / charged=$charged"
+
+      - name: Verify timestamped Instagram segments when completed
+        if: steps.start.outputs.status == 'COMPLETED'
+        env:
+          ACTION_TOKEN: ${{ steps.auth.outputs.token }}
+          JOB_ID: ${{ steps.start.outputs.job_id }}
+        shell: bash
+        run: |
+          set -euo pipefail
+          code="$(curl -sS --max-time 90 \
+            -o /tmp/segments.json -w '%{http_code}' \
+            "${BETA_BASE_URL}/api/v1/media/managed/transcriptions/${JOB_ID}/segments?cursor=0&limit=50" \
+            -H 'Accept: application/json' \
+            -H "Authorization: Bearer ${ACTION_TOKEN}")"
+          [[ "$code" == 200 ]] || { echo "Segments read failed HTTP $code" >&2; exit 1; }
+          jq -e '
+            .status == "COMPLETED" and
+            (.segments | length) > 0 and
+            ([.segments[] | (.start_ms != null and .end_ms != null and (.end_ms >= .start_ms) and (.text | type == "string") and (.text | length > 0))] | all)
+          ' /tmp/segments.json >/dev/null
+          echo "Timestamped Instagram segments: PASS"
+
+      - name: Enforce hard stop when native transcript is unavailable
+        if: steps.start.outputs.status == 'AWAITING_AI_CONSENT'
+        shell: bash
+        run: |
+          set -euo pipefail
+          jq -e '
+            .status == "AWAITING_AI_CONSENT" and
+            .credits_charged == 1 and
+            .segment_count == 0 and
+            .ai_fallback_requires_new_consent == true
+          ' /tmp/start.json >/dev/null
+          echo "Native transcript unavailable: HARD STOP before AI. New consent required for any future AI path."
+
+      - name: Observe provider balance after the approved request
+        id: after
+        env:
+          ACTION_TOKEN: ${{ steps.auth.outputs.token }}
+        shell: bash
+        run: |
+          set -euo pipefail
+          payload="$(jq -nc --arg url "$ACCEPTANCE_URL" '{url:$url,language_hint:"auto"}')"
+          code="$(curl -sS --retry 3 --retry-delay 2 --max-time 90 \
+            -o /tmp/after.json -w '%{http_code}' \
+            -X POST "${BETA_BASE_URL}/api/v1/media/managed/preflight" \
+            -H 'Accept: application/json' \
+            -H 'Content-Type: application/json' \
+            -H "Authorization: Bearer ${ACTION_TOKEN}" \
+            --data "$payload")"
+          [[ "$code" == 200 ]] || { echo "Postflight balance read failed HTTP $code" >&2; exit 1; }
+          available="$(jq -r '.credits_available // -1' /tmp/after.json)"
+          [[ "$available" == "$EXPECTED_CREDITS_AFTER" ]] || { echo "Expected postflight balance $EXPECTED_CREDITS_AFTER; got $available" >&2; exit 1; }
+          echo "available=$available" >> "$GITHUB_OUTPUT"
+          echo "Provider balance after request: $available"
+
+      - name: Report A9.6 native acceptance
+        if: always()
+        env:
+          GH_TOKEN: ${{ github.token }}
+          JOB_STATUS: ${{ job.status }}
+          KRCM_JOB: ${{ steps.start.outputs.job_id }}
+          MEDIA_STATUS: ${{ steps.start.outputs.status }}
+          CHARGED: ${{ steps.start.outputs.charged }}
+          SEGMENTS: ${{ steps.start.outputs.segment_count }}
+          LANGUAGE: ${{ steps.start.outputs.language }}
+          AFTER: ${{ steps.after.outputs.available }}
+        shell: bash
+        run: |
+          set -euo pipefail
+          body="A9.6 Instagram native acceptance: **${JOB_STATUS^^}**. Isolated target only. URL: \`${ACCEPTANCE_URL}\`; KRCM job: \`${KRCM_JOB:-unknown}\`; managed status: \`${MEDIA_STATUS:-unknown}\`; detected language: \`${LANGUAGE:-unknown}\`; segment_count: \`${SEGMENTS:-unknown}\`; credits_charged: \`${CHARGED:-unknown}\`; credits before: \`${EXPECTED_CREDITS_BEFORE}\`; credits after observed: \`${AFTER:-unknown}\`. The request was authorized with \`max_credits=1\`; automatic AI fallback was not permitted; production/main were not targeted."
+          gh pr comment 28 --repo kolemasakar/VoiceBridge --body "$body"
