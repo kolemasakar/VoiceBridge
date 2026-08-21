@@ -1,0 +1,194 @@
+name: A9.6 Facebook Lookup Metadata Acceptance
+
+on:
+  push:
+    branches:
+      - agent/krc-media-transcript
+    paths:
+      - .github/workflows/a9-6-facebook-lookup-metadata-acceptance.yml
+
+permissions:
+  contents: read
+  issues: write
+  pull-requests: write
+
+env:
+  RENDER_API_BASE: https://api.render.com/v1
+  SERVICE_ID: srv-da1kic5bedkc73d6fk60
+  SERVICE_NAME: voicebridge-krc-media-beta-kolemasakar
+  REQUIRED_BRANCH: agent/krc-media-transcript
+  BETA_BASE_URL: https://voicebridge-krc-media-beta-kolemasakar.onrender.com
+  REQUIRED_CODE_SHA: 23422e0f41b29918c5528ad3ef4579c565ab6545
+  FACEBOOK_URL: https://www.facebook.com/reel/1114235920664408
+  EXPECTED_BEFORE: '89'
+  EXPECTED_AFTER: '88'
+
+jobs:
+  acceptance:
+    runs-on: ubuntu-latest
+    env:
+      RENDER_API_KEY: ${{ secrets.RENDER_API_KEY }}
+      GH_TOKEN: ${{ github.token }}
+    steps:
+      - name: Enforce isolated target
+        shell: bash
+        run: |
+          set -euo pipefail
+          test -n "${RENDER_API_KEY:-}"
+          echo "::add-mask::$RENDER_API_KEY"
+          [[ "$GITHUB_REF_NAME" == "$REQUIRED_BRANCH" ]]
+          tmp="$(mktemp)"
+          code="$(curl -sS -o "$tmp" -w '%{http_code}' "${RENDER_API_BASE}/services/${SERVICE_ID}" -H 'Accept: application/json' -H "Authorization: Bearer ${RENDER_API_KEY}")"
+          [[ "$code" == 200 ]]
+          [[ "$(jq -r '.name // empty' "$tmp")" == "$SERVICE_NAME" ]]
+          [[ "$(jq -r '.branch // empty' "$tmp")" == "$REQUIRED_BRANCH" ]]
+          rm -f "$tmp"
+
+      - name: Deploy exact lookup code to isolated beta
+        id: deploy
+        shell: bash
+        run: |
+          set -euo pipefail
+          payload="$(jq -nc --arg commitId "$REQUIRED_CODE_SHA" '{commitId:$commitId,clearCache:"do_not_clear"}')"
+          tmp="$(mktemp)"
+          code="$(curl -sS -o "$tmp" -w '%{http_code}' -X POST "${RENDER_API_BASE}/services/${SERVICE_ID}/deploys" -H 'Accept: application/json' -H 'Content-Type: application/json' -H "Authorization: Bearer ${RENDER_API_KEY}" --data "$payload")"
+          [[ "$code" == 201 || "$code" == 202 ]]
+          deploy_id="$(jq -r '(.deploy // .).id // empty' "$tmp")"
+          rm -f "$tmp"
+          test -n "$deploy_id"
+          echo "deploy_id=$deploy_id" >> "$GITHUB_OUTPUT"
+
+      - name: Wait for exact isolated deploy
+        env:
+          DEPLOY_ID: ${{ steps.deploy.outputs.deploy_id }}
+        shell: bash
+        run: |
+          set -euo pipefail
+          for i in $(seq 1 72); do
+            tmp="$(mktemp)"
+            code="$(curl -sS -o "$tmp" -w '%{http_code}' "${RENDER_API_BASE}/services/${SERVICE_ID}/deploys/${DEPLOY_ID}" -H 'Accept: application/json' -H "Authorization: Bearer ${RENDER_API_KEY}")"
+            [[ "$code" == 200 ]]
+            status="$(jq -r '(.deploy // .).status // "unknown"' "$tmp")"
+            commit="$(jq -r '(.deploy // .).commit.id // (.deploy // .).commitId // empty' "$tmp")"
+            rm -f "$tmp"
+            case "$status" in
+              live)
+                [[ "$commit" == "$REQUIRED_CODE_SHA" ]]
+                exit 0
+                ;;
+              build_failed|update_failed|canceled|deactivated) exit 1 ;;
+            esac
+            sleep 5
+          done
+          exit 1
+
+      - name: Read and mask Action bearer
+        id: action
+        shell: bash
+        run: |
+          set -euo pipefail
+          tmp="$(mktemp)"
+          code="$(curl -sS -o "$tmp" -w '%{http_code}' "${RENDER_API_BASE}/services/${SERVICE_ID}/env-vars/KRC_MEDIA_ACTION_TOKEN" -H 'Accept: application/json' -H "Authorization: Bearer ${RENDER_API_KEY}")"
+          [[ "$code" == 200 ]]
+          token="$(jq -r '(.envVar.value // .value // empty)' "$tmp")"
+          rm -f "$tmp"
+          test -n "$token"
+          echo "::add-mask::$token"
+          echo "token=$token" >> "$GITHUB_OUTPUT"
+
+      - name: Recover durable Facebook job through read-only lookup
+        id: lookup
+        env:
+          ACTION_TOKEN: ${{ steps.action.outputs.token }}
+        shell: bash
+        run: |
+          set -euo pipefail
+          payload="$(jq -nc --arg url "$FACEBOOK_URL" '{url:$url,language_hint:"auto"}')"
+          code="$(curl -sS --max-time 60 -o /tmp/lookup.json -w '%{http_code}' -X POST "${BETA_BASE_URL}/api/v1/media/managed/lookup" -H 'Accept: application/json' -H 'Content-Type: application/json' -H "Authorization: Bearer ${ACTION_TOKEN}" --data "$payload")"
+          [[ "$code" == 200 ]]
+          jq -e '
+            .status == "AWAITING_AI_CONSENT" and
+            .provider == "supadata" and
+            .provider_mode == "native" and
+            .credits_charged == 1 and
+            .credit_charge_uncertain == false and
+            .segment_count == 0 and
+            .media_duration_seconds == null and
+            ((.metadata_credits_charged // 0) == 0) and
+            ((.source_url | startswith("https://www.facebook.com/")) or (.source_url | startswith("https://fb.watch/")))
+          ' /tmp/lookup.json >/dev/null
+          job_id="$(jq -r '.job_id' /tmp/lookup.json)"
+          [[ "$job_id" =~ ^KRCM_[A-Za-z0-9-]+$ ]]
+          echo "job_id=$job_id" >> "$GITHUB_OUTPUT"
+
+      - name: Recheck exact approved metadata quote
+        id: quote
+        env:
+          ACTION_TOKEN: ${{ steps.action.outputs.token }}
+          JOB_ID: ${{ steps.lookup.outputs.job_id }}
+        shell: bash
+        run: |
+          set -euo pipefail
+          code="$(curl -sS --max-time 60 -o /tmp/meta-quote.json -w '%{http_code}' "${BETA_BASE_URL}/api/v1/media/managed/transcriptions/${JOB_ID}/facebook-ai-estimate-preflight" -H 'Accept: application/json' -H "Authorization: Bearer ${ACTION_TOKEN}")"
+          [[ "$code" == 200 ]]
+          jq -e '.provider == "supadata" and .mode == "metadata" and .purpose == "facebook_ai_duration" and .estimated_credits == 1 and .consent_required == true and .can_continue == true' /tmp/meta-quote.json >/dev/null
+          available="$(jq -r '.credits_available' /tmp/meta-quote.json)"
+          after="$(jq -r '.credits_after_estimate' /tmp/meta-quote.json)"
+          [[ "$available" == "$EXPECTED_BEFORE" ]]
+          [[ "$after" == "$EXPECTED_AFTER" ]]
+          echo "available=$available" >> "$GITHUB_OUTPUT"
+
+      - name: Execute exactly one already-approved metadata lookup
+        id: metadata
+        env:
+          ACTION_TOKEN: ${{ steps.action.outputs.token }}
+          JOB_ID: ${{ steps.lookup.outputs.job_id }}
+        shell: bash
+        run: |
+          set -euo pipefail
+          payload='{"credit_consent":{"provider":"supadata","mode":"metadata","max_credits":1}}'
+          code="$(curl -sS --max-time 180 -o /tmp/meta-result.json -w '%{http_code}' -X POST "${BETA_BASE_URL}/api/v1/media/managed/transcriptions/${JOB_ID}/facebook-ai-estimate" -H 'Accept: application/json' -H 'Content-Type: application/json' -H "Authorization: Bearer ${ACTION_TOKEN}" --data "$payload")"
+          [[ "$code" == 200 ]]
+          jq -e '.status == "AWAITING_AI_CONSENT" and .credit_charge_uncertain == false and .metadata_credits_charged == 1 and .credits_charged == 2 and (.media_duration_seconds | numbers) > 0 and (.ai_credit_ceiling | numbers) >= 2' /tmp/meta-result.json >/dev/null
+          echo "duration=$(jq -r '.media_duration_seconds' /tmp/meta-result.json)" >> "$GITHUB_OUTPUT"
+          echo "ceiling=$(jq -r '.ai_credit_ceiling' /tmp/meta-result.json)" >> "$GITHUB_OUTPUT"
+          echo "cumulative=$(jq -r '.credits_charged' /tmp/meta-result.json)" >> "$GITHUB_OUTPUT"
+
+      - name: Obtain separate AI preflight only
+        id: ai
+        env:
+          ACTION_TOKEN: ${{ steps.action.outputs.token }}
+          JOB_ID: ${{ steps.lookup.outputs.job_id }}
+          EXPECTED_CEILING: ${{ steps.metadata.outputs.ceiling }}
+        shell: bash
+        run: |
+          set -euo pipefail
+          code="$(curl -sS --max-time 60 -o /tmp/ai-quote.json -w '%{http_code}' "${BETA_BASE_URL}/api/v1/media/managed/transcriptions/${JOB_ID}/ai-preflight" -H 'Accept: application/json' -H "Authorization: Bearer ${ACTION_TOKEN}")"
+          [[ "$code" == 200 ]]
+          jq -e --argjson ceiling "$EXPECTED_CEILING" '.provider == "supadata" and .mode == "generate" and .estimate_basis == "facebook_metadata_duration" and .maximum_credits == $ceiling and .credits_per_minute == 2 and .consent_required == true' /tmp/ai-quote.json >/dev/null
+          available="$(jq -r '.credits_available' /tmp/ai-quote.json)"
+          [[ "$available" == "$EXPECTED_AFTER" ]]
+          echo "available=$available" >> "$GITHUB_OUTPUT"
+          echo "maximum=$(jq -r '.maximum_credits' /tmp/ai-quote.json)" >> "$GITHUB_OUTPUT"
+          echo "after=$(jq -r '.credits_after_estimate' /tmp/ai-quote.json)" >> "$GITHUB_OUTPUT"
+          echo "minutes=$(jq -r '.maximum_duration_minutes' /tmp/ai-quote.json)" >> "$GITHUB_OUTPUT"
+          echo "can_continue=$(jq -r '.can_continue' /tmp/ai-quote.json)" >> "$GITHUB_OUTPUT"
+
+      - name: Report lookup metadata acceptance
+        if: always()
+        env:
+          DURATION: ${{ steps.metadata.outputs.duration }}
+          CUMULATIVE: ${{ steps.metadata.outputs.cumulative }}
+          AI_MAX: ${{ steps.ai.outputs.maximum }}
+          AI_AFTER: ${{ steps.ai.outputs.after }}
+          AI_MINUTES: ${{ steps.ai.outputs.minutes }}
+          AI_CAN_CONTINUE: ${{ steps.ai.outputs.can_continue }}
+        shell: bash
+        run: |
+          set -euo pipefail
+          if [[ "${{ job.status }}" == "success" ]]; then
+            body="A9.6 Facebook lookup-based metadata acceptance: **SUCCESS**. Read-only managed lookup recovered and guarded the durable Facebook job. Existing user authorization was consumed by exactly one metadata-duration request, hard max \`1\` credit. Provider balance \`${EXPECTED_BEFORE}\` -> \`${EXPECTED_AFTER}\`; metadata credits=\`1\`; cumulative job credits=\`${CUMULATIVE}\`; duration_seconds=\`${DURATION}\`. Separate AI preflight only: rate=\`2 credits/min\`, maximum_credits=\`${AI_MAX}\`, maximum_duration_minutes=\`${AI_MINUTES}\`, worst-case remaining=\`${AI_AFTER}\`, can_continue=\`${AI_CAN_CONTINUE}\`. No AI start request was executed. Production/main were not targeted."
+          else
+            body="A9.6 Facebook lookup-based metadata acceptance: **FAILURE**. Existing authorization remained limited to one metadata-duration request with hard max \`1\` credit. No AI start request was authorized or executed. Production/main were not targeted."
+          fi
+          gh pr comment 28 --repo kolemasakar/VoiceBridge --body "$body"
