@@ -6,16 +6,23 @@ import { MediaBetaGate } from "./media_beta.js";
 import { ManagedMediaPersistentStore } from "./managed_media_persistence.js";
 import {
   ManagedMediaService,
+  parseManagedMediaAiInput,
   parseManagedMediaNativeInput,
   parseManagedMediaPreflightInput
 } from "./managed_media_service.js";
 import { MediaTranscriptError } from "./media_transcript.js";
+import {
+  GENERATED_TRANSCRIPT_CREDITS_PER_MINUTE,
+  INSTAGRAM_REEL_GENERATE_MAX_CREDITS
+} from "./supadata_provider.js";
 
 const ROOT = "/api/v1/media/managed";
 const PREFLIGHT = `${ROOT}/preflight`;
 const TRANSCRIPTIONS = `${ROOT}/transcriptions`;
 const JOB_PATH = /^\/api\/v1\/media\/managed\/transcriptions\/(KRCM_[A-Za-z0-9-]+)$/;
 const SEGMENTS_PATH = /^\/api\/v1\/media\/managed\/transcriptions\/(KRCM_[A-Za-z0-9-]+)\/segments$/;
+const AI_PREFLIGHT_PATH = /^\/api\/v1\/media\/managed\/transcriptions\/(KRCM_[A-Za-z0-9-]+)\/ai-preflight$/;
+const AI_START_PATH = /^\/api\/v1\/media\/managed\/transcriptions\/(KRCM_[A-Za-z0-9-]+)\/ai$/;
 
 function setHeaders(
   response: ServerResponse,
@@ -120,6 +127,19 @@ function withServerOwnerAccessCode(
   return { ...input, beta_access_code: ownerCode };
 }
 
+function serverOwnerAccessCode(accessCodes: string[] | undefined): string {
+  const ownerCode = accessCodes?.[0];
+  if (!ownerCode) {
+    throw new MediaTranscriptError(
+      "MEDIA_TRANSCRIPT_NOT_CONFIGURED",
+      "The owner media admission code is not configured.",
+      503,
+      false
+    );
+  }
+  return ownerCode;
+}
+
 function pagination(requestUrl: URL): { cursor: number; limit: number } {
   const cursor = Number(requestUrl.searchParams.get("cursor") || "0");
   const limit = Number(requestUrl.searchParams.get("limit") || "20");
@@ -170,6 +190,11 @@ export function createManagedMediaHttpHandler(
     explicit_user_consent_required: true,
     consent_options: { approve: 1, reject: 2 },
     automatic_ai_fallback: false,
+    instagram_reel_ai_fallback: true,
+    ai_requires_separate_preflight: true,
+    ai_requires_separate_user_consent: true,
+    ai_generate_credits_per_minute: GENERATED_TRANSCRIPT_CREDITS_PER_MINUTE,
+    instagram_reel_ai_max_credits: INSTAGRAM_REEL_GENERATE_MAX_CREDITS,
     user_beta_access_code_required: false,
     owner_access_injected_server_side: true,
     durable_store: service.storeKind,
@@ -255,6 +280,46 @@ export function createManagedMediaHttpHandler(
           );
         }
         const job = await service.startNative(input);
+        sendJson(
+          response,
+          200,
+          { request_id: context.requestId, ...job },
+          context,
+          config.corsAllowedOrigin
+        );
+        return true;
+      }
+
+      const aiPreflightMatch = AI_PREFLIGHT_PATH.exec(path);
+      if (method === "GET" && aiPreflightMatch?.[1]) {
+        const quote = await service.aiPreflight(
+          aiPreflightMatch[1],
+          serverOwnerAccessCode(config.mediaBetaCodes)
+        );
+        sendJson(
+          response,
+          200,
+          { request_id: context.requestId, ...quote },
+          context,
+          config.corsAllowedOrigin
+        );
+        return true;
+      }
+
+      const aiStartMatch = AI_START_PATH.exec(path);
+      if (method === "POST" && aiStartMatch?.[1]) {
+        const rawBody = await readJsonBody(request, config.maxRequestBodyBytes);
+        const body = withServerOwnerAccessCode(rawBody, config.mediaBetaCodes);
+        const input = parseManagedMediaAiInput(body);
+        if (!input) {
+          throw new MediaTranscriptError(
+            "MEDIA_AI_CREDIT_CONSENT_REQUIRED",
+            `Separate AI consent with max_credits=${INSTAGRAM_REEL_GENERATE_MAX_CREDITS} is required before generated transcription.`,
+            409,
+            false
+          );
+        }
+        const job = await service.startAi(aiStartMatch[1], input);
         sendJson(
           response,
           200,
