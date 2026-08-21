@@ -1,0 +1,50 @@
+name: A9.6 Supadata Diff Check Diagnostic
+
+on:
+  push:
+    branches:
+      - agent/krc-media-transcript
+    paths:
+      - .github/workflows/a9-6-supadata-diff-check-diagnostic.yml
+
+permissions:
+  contents: read
+  issues: write
+  pull-requests: write
+
+jobs:
+  diagnose:
+    runs-on: ubuntu-latest
+    env:
+      GH_TOKEN: ${{ github.token }}
+    steps:
+      - uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803
+        with:
+          ref: agent/krc-media-transcript
+      - name: Capture diff-check diagnostic
+        id: diag
+        shell: bash
+        run: |
+          set +e
+          python scripts/a9_6_supadata_nested_result_patch.py >/dev/null 2>&1
+          git add src/cloud/src/supadata_provider.ts src/cloud/tests/supadata_provider.test.ts
+          output="$(git diff --cached --check 2>&1)"
+          rc=$?
+          output="$(printf '%s' "$output" | head -n 20 | sed 's/[`]/_/g')"
+          {
+            echo "rc=$rc"
+            echo "output<<EOF"
+            echo "$output"
+            echo "EOF"
+          } >> "$GITHUB_OUTPUT"
+          exit 0
+      - name: Report
+        env:
+          RC: ${{ steps.diag.outputs.rc }}
+          OUTPUT: ${{ steps.diag.outputs.output }}
+        shell: bash
+        run: |
+          set -euo pipefail
+          [[ ${#OUTPUT} -le 4000 ]] || OUTPUT="${OUTPUT:0:4000}"
+          body=$(printf 'A9.6 Supadata diff-check diagnostic: rc=`%s`.\n```text\n%s\n```\nNo branch source write, deploy, or provider request was executed.' "$RC" "$OUTPUT")
+          gh pr comment 28 --repo kolemasakar/VoiceBridge --body "$body"
