@@ -41,6 +41,10 @@ jobs:
             python scripts/a9_6_facebook_ai_compat_patch.py >> /tmp/fb-patch.log 2>&1
             code=$?
           fi
+          if [[ $code -eq 0 ]]; then
+            python scripts/a9_6_facebook_ai_test_patch.py >> /tmp/fb-patch.log 2>&1
+            code=$?
+          fi
           cat /tmp/fb-patch.log
           exit $code
 
@@ -69,7 +73,7 @@ jobs:
           set -euo pipefail
           git config user.name "github-actions[bot]"
           git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
-          git add src/cloud/src/supadata_provider.ts src/cloud/src/managed_media_service.ts src/cloud/src/managed_media_http.ts src/cloud/tests/managed_media_facebook.test.ts src/cloud/tests/managed_media_http.test.ts
+          git add src/cloud/src/supadata_provider.ts src/cloud/src/managed_media_service.ts src/cloud/src/managed_media_http.ts src/cloud/tests/managed_media_facebook.test.ts src/cloud/tests/managed_media_http.test.ts src/cloud/tests/managed_media_service.test.ts
           git diff --cached --check
           git commit -m "A9.6: add consent-gated Facebook AI fallback"
           git push origin HEAD:agent/krc-media-transcript
