@@ -1,0 +1,95 @@
+name: A9.6 Supadata Commit Write Diagnostic
+
+on:
+  push:
+    branches:
+      - agent/krc-media-transcript
+    paths:
+      - .github/workflows/a9-6-supadata-commit-write-diagnostic.yml
+
+permissions:
+  contents: write
+  issues: write
+  pull-requests: write
+
+jobs:
+  commit_fix:
+    runs-on: ubuntu-latest
+    env:
+      GH_TOKEN: ${{ github.token }}
+    steps:
+      - name: Checkout feature branch
+        uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803
+        with:
+          ref: agent/krc-media-transcript
+          fetch-depth: 0
+
+      - name: Apply verified patch and attempt commit/push
+        id: write
+        shell: bash
+        run: |
+          set +e
+          stage="apply"
+          reason="none"
+          rc=0
+          sha="none"
+          push_tail="none"
+
+          python scripts/a9_6_supadata_nested_result_patch.py >/tmp/write-patch.log 2>&1
+          code=$?
+          if [[ $code -ne 0 ]]; then rc=$code; reason="patch_failed"; fi
+
+          if [[ $rc -eq 0 ]]; then
+            stage="add"
+            git add src/cloud/src/supadata_provider.ts src/cloud/tests/supadata_provider.test.ts
+            code=$?
+            if [[ $code -ne 0 ]]; then rc=$code; reason="git_add_failed"; fi
+          fi
+
+          if [[ $rc -eq 0 ]]; then
+            stage="diff_check"
+            git diff --cached --check >/tmp/write-diff.log 2>&1
+            code=$?
+            if [[ $code -ne 0 ]]; then rc=$code; reason="diff_check_failed"; fi
+          fi
+
+          if [[ $rc -eq 0 ]]; then
+            stage="commit"
+            git config user.name "github-actions[bot]"
+            git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+            git commit -m "A9.6: accept nested Supadata async transcript results" >/tmp/write-commit.log 2>&1
+            code=$?
+            if [[ $code -ne 0 ]]; then rc=$code; reason="git_commit_failed"; else sha="$(git rev-parse HEAD)"; fi
+          fi
+
+          if [[ $rc -eq 0 ]]; then
+            stage="push"
+            git push origin HEAD:agent/krc-media-transcript >/tmp/write-push.log 2>&1
+            code=$?
+            push_tail="$(tail -n 5 /tmp/write-push.log | tr '\n' ' ' | sed 's/[`]/_/g')"
+            if [[ $code -ne 0 ]]; then rc=$code; reason="git_push_failed"; fi
+          fi
+
+          echo "stage=$stage" >> "$GITHUB_OUTPUT"
+          echo "reason=$reason" >> "$GITHUB_OUTPUT"
+          echo "rc=$rc" >> "$GITHUB_OUTPUT"
+          echo "sha=$sha" >> "$GITHUB_OUTPUT"
+          echo "push_tail=$push_tail" >> "$GITHUB_OUTPUT"
+          exit 0
+
+      - name: Report write path
+        env:
+          STAGE: ${{ steps.write.outputs.stage }}
+          REASON: ${{ steps.write.outputs.reason }}
+          RC: ${{ steps.write.outputs.rc }}
+          SHA: ${{ steps.write.outputs.sha }}
+          PUSH_TAIL: ${{ steps.write.outputs.push_tail }}
+        shell: bash
+        run: |
+          set -euo pipefail
+          if [[ "$RC" == "0" && "$STAGE" == "push" ]]; then
+            gh pr comment 28 --repo kolemasakar/VoiceBridge --body "A9.6 Supadata parser write-path: **PASS**. Verified nested-result patch committed and pushed as \`${SHA}\`. No deploy or provider transcript/metadata/AI request was executed. Production/main were not targeted."
+          else
+            [[ ${#PUSH_TAIL} -le 1200 ]] || PUSH_TAIL="${PUSH_TAIL:0:1200}"
+            gh pr comment 28 --repo kolemasakar/VoiceBridge --body "A9.6 Supadata parser write-path: **FAIL**. stage=\`${STAGE}\`, rc=\`${RC}\`, reason=\`${REASON}\`, local_sha=\`${SHA}\`, push_tail=\`${PUSH_TAIL}\`. No deploy or provider transcript/metadata/AI request was executed. Production/main were not targeted."
+          fi
