@@ -164,7 +164,7 @@ export function createManagedMediaHttpHandler(
     mode: "zero_client_managed_beta",
     provider: "supadata",
     configured: Boolean(config.mediaActionToken && service.configured),
-    platforms: ["youtube"],
+    platforms: ["youtube", "instagram"],
     native_transcript_credits: 1,
     credit_preflight_required: true,
     explicit_user_consent_required: true,
