@@ -6,6 +6,11 @@ on:
       - agent/krc-media-transcript
     paths:
       - .github/workflows/render-media-beta-a9-3-observe.yml
+  pull_request:
+    branches:
+      - main
+    paths:
+      - .github/workflows/render-media-beta-a9-3-observe.yml
 
 permissions:
   contents: read
@@ -77,7 +82,8 @@ jobs:
             jq -e '(.maxCredits|numbers)>=0 and (.usedCredits|numbers)>=0' "$out" >/dev/null
           }
           main(){
-            set -e; test -n "${RENDER_API_KEY:-}"; test -n "${SUPADATA_API_KEY:-}"; mask "$RENDER_API_KEY"; mask "$SUPADATA_API_KEY"; [[ "$GITHUB_REF_NAME" == "$REQUIRED_BRANCH" ]]
+            set -e; test -n "${RENDER_API_KEY:-}"; test -n "${SUPADATA_API_KEY:-}"; mask "$RENDER_API_KEY"; mask "$SUPADATA_API_KEY"
+            current_branch="${GITHUB_HEAD_REF:-$GITHUB_REF_NAME}"; [[ "$current_branch" == "$REQUIRED_BRANCH" ]]
             local tmp code render_supadata beta_codes payload invalid_key duplicate_http first_page
             failure_stage=isolation
             tmp="$(mktemp)"; code="$(curl -sS -o "$tmp" -w '%{http_code}' "${RENDER_API_BASE}/services/${SERVICE_ID}" -H 'Accept: application/json' -H "Authorization: Bearer ${RENDER_API_KEY}")"
