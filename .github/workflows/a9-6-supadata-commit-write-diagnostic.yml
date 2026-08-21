@@ -93,3 +93,5 @@ jobs:
             [[ ${#PUSH_TAIL} -le 1200 ]] || PUSH_TAIL="${PUSH_TAIL:0:1200}"
             gh pr comment 28 --repo kolemasakar/VoiceBridge --body "A9.6 Supadata parser write-path: **FAIL**. stage=\`${STAGE}\`, rc=\`${RC}\`, reason=\`${REASON}\`, local_sha=\`${SHA}\`, push_tail=\`${PUSH_TAIL}\`. No deploy or provider transcript/metadata/AI request was executed. Production/main were not targeted."
           fi
+
+# rerun after EOF hygiene fix
