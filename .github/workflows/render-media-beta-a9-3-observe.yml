@@ -36,10 +36,7 @@ jobs:
           [[ "$current_branch" == "$REQUIRED_BRANCH" ]]
 
           tmp="$(mktemp)"
-          code="$(curl -sS -o "$tmp" -w '%{http_code}' \
-            "${RENDER_API_BASE}/services/${SERVICE_ID}" \
-            -H 'Accept: application/json' \
-            -H "Authorization: Bearer ${RENDER_API_KEY}")"
+          code="$(curl -sS -o "$tmp" -w '%{http_code}' "${RENDER_API_BASE}/services/${SERVICE_ID}" -H 'Accept: application/json' -H "Authorization: Bearer ${RENDER_API_KEY}")"
           [[ "$code" == 200 ]]
           [[ "$(jq -r '.name // empty' "$tmp")" == "$SERVICE_NAME" ]]
           owner="$(jq -r '.ownerId // .owner_id // .owner.id // empty' "$tmp")"
@@ -47,29 +44,20 @@ jobs:
           test -n "$owner"
 
           tmp="$(mktemp)"
-          code="$(curl -sS --get -o "$tmp" -w '%{http_code}' \
-            "${RENDER_API_BASE}/postgres" \
-            --data-urlencode "ownerId=${owner}" \
-            --data-urlencode 'limit=100' \
-            -H 'Accept: application/json' \
-            -H "Authorization: Bearer ${RENDER_API_KEY}")"
+          code="$(curl -sS --get -o "$tmp" -w '%{http_code}' "${RENDER_API_BASE}/postgres" --data-urlencode "ownerId=${owner}" --data-urlencode 'limit=100' -H 'Accept: application/json' -H "Authorization: Bearer ${RENDER_API_KEY}")"
           [[ "$code" == 200 ]]
           db_id="$(jq -r --arg n "$DB_NAME" '[.[] | (.postgres // .) | select(.name==$n)] | first | (.id // empty)' "$tmp")"
           rm -f "$tmp"
           test -n "$db_id"
 
           tmp="$(mktemp)"
-          code="$(curl -sS -o "$tmp" -w '%{http_code}' \
-            "${RENDER_API_BASE}/postgres/${db_id}/connection-info" \
-            -H 'Accept: application/json' \
-            -H "Authorization: Bearer ${RENDER_API_KEY}")"
+          code="$(curl -sS -o "$tmp" -w '%{http_code}' "${RENDER_API_BASE}/postgres/${db_id}/connection-info" -H 'Accept: application/json' -H "Authorization: Bearer ${RENDER_API_KEY}")"
           [[ "$code" == 200 ]]
           database_url="$(jq -r '.externalConnectionString // .external_connection_string // empty' "$tmp")"
           connection_fields="$(jq -r 'keys | sort | join(",")' "$tmp")"
           rm -f "$tmp"
           test -n "$database_url"
           echo "::add-mask::$database_url"
-          echo "Connection info fields: $connection_fields"
           command -v psql >/dev/null
 
           request_key="$(printf 'a9-3-reservation-diagnostic' | sha256sum | awk '{print $1}')"
@@ -82,48 +70,25 @@ jobs:
           payload_hex="$(printf '%s' "$payload" | xxd -p -c 100000)"
           segments_hex="5b5d"
 
-          cat > /tmp/a93-reserve.sql <<SQL
-BEGIN;
-DELETE FROM krc_managed_media_jobs
-WHERE request_key='${request_key}' AND expires_at <= now();
-INSERT INTO krc_managed_media_jobs (
-  job_id, request_key, access_code_digest, status,
-  payload, segments, expires_at, updated_at
-) VALUES (
-  '${job_id}', '${request_key}', '${access_digest}', 'PROCESSING',
-  convert_from(decode('${payload_hex}', 'hex'), 'UTF8')::jsonb,
-  convert_from(decode('${segments_hex}', 'hex'), 'UTF8')::jsonb,
-  to_timestamp(${expiry_epoch}), to_timestamp(${updated_epoch})
-)
-ON CONFLICT (request_key) DO UPDATE SET
-  request_key = EXCLUDED.request_key
-RETURNING job_id, request_key, access_code_digest, status,
-          encode(convert_to(payload::text, 'UTF8'), 'hex'),
-          encode(convert_to(segments::text, 'UTF8'), 'hex'),
-          extract(epoch from expires_at)::bigint;
-ROLLBACK;
-SQL
+          printf '%s\n' \
+            'BEGIN;' \
+            "DELETE FROM krc_managed_media_jobs WHERE request_key='${request_key}' AND expires_at <= now();" \
+            "INSERT INTO krc_managed_media_jobs (job_id,request_key,access_code_digest,status,payload,segments,expires_at,updated_at) VALUES ('${job_id}','${request_key}','${access_digest}','PROCESSING',convert_from(decode('${payload_hex}','hex'),'UTF8')::jsonb,convert_from(decode('${segments_hex}','hex'),'UTF8')::jsonb,to_timestamp(${expiry_epoch}),to_timestamp(${updated_epoch})) ON CONFLICT (request_key) DO UPDATE SET request_key=EXCLUDED.request_key RETURNING job_id,request_key,access_code_digest,status,encode(convert_to(payload::text,'UTF8'),'hex'),encode(convert_to(segments::text,'UTF8'),'hex'),extract(epoch from expires_at)::bigint;" \
+            'ROLLBACK;' > /tmp/a93-reserve.sql
 
           set +e
           PGCONNECT_TIMEOUT=10 psql -X -v ON_ERROR_STOP=1 -A -t -F $'\t' --dbname "$database_url" < /tmp/a93-reserve.sql > /tmp/a93-out.txt 2> /tmp/a93-err.txt
           rc=$?
           set -e
           lines="$(grep -cve '^$' /tmp/a93-out.txt || true)"
-          last="$(grep -ve '^$' /tmp/a93-out.txt | tail -n 1 || true)"
-          tabs="$(printf '%s' "$last" | awk -F '\t' '{print NF}')"
           first="$(grep -ve '^$' /tmp/a93-out.txt | head -n 1 || true)"
-          first_kind=row
-          [[ "$first" == BEGIN* ]] && first_kind=command_tag
-          [[ "$first" == DELETE* ]] && first_kind=command_tag
-          [[ "$first" == INSERT* ]] && first_kind=command_tag
-          last_kind=row
-          [[ "$last" == BEGIN* ]] && last_kind=command_tag
-          [[ "$last" == DELETE* ]] && last_kind=command_tag
-          [[ "$last" == INSERT* ]] && last_kind=command_tag
-          [[ "$last" == ROLLBACK* ]] && last_kind=command_tag
-          err_summary="$(tr '\n\r' ' ' < /tmp/a93-err.txt | sed -E 's#postgres(ql)?://[^ ]+#<masked-db-url>#g' | head -c 220)"
+          last="$(grep -ve '^$' /tmp/a93-out.txt | tail -n 1 || true)"
+          fields="$(printf '%s' "$last" | awk -F '\t' '{print NF}')"
+          first_kind=row; last_kind=row
+          [[ "$first" =~ ^(BEGIN|DELETE|INSERT|ROLLBACK) ]] && first_kind=command_tag
+          [[ "$last" =~ ^(BEGIN|DELETE|INSERT|ROLLBACK) ]] && last_kind=command_tag
+          err_summary="$(tr '\n\r' ' ' < /tmp/a93-err.txt | head -c 220)"
           [[ -n "$err_summary" ]] || err_summary=none
-
-          echo "Reservation diagnostic: rc=$rc lines=$lines first_kind=$first_kind last_kind=$last_kind last_fields=$tabs"
-          gh pr comment 28 --repo kolemasakar/VoiceBridge --body "A9.3 Postgres reservation diagnostic: **$([[ $rc -eq 0 ]] && echo SQL_SUCCESS || echo SQL_FAILURE)**. Transaction was rolled back. psql rc: \`${rc}\`; non-empty stdout lines: \`${lines}\`; first line kind: \`${first_kind}\`; last line kind: \`${last_kind}\`; last-line field count: \`${tabs}\`; stderr: \`${err_summary}\`. No Supadata transcript API was called; no durable state or production/main was modified."
+          echo "Reservation diagnostic: rc=$rc lines=$lines first_kind=$first_kind last_kind=$last_kind last_fields=$fields"
+          gh pr comment 28 --repo kolemasakar/VoiceBridge --body "A9.3 Postgres reservation diagnostic: **$([[ $rc -eq 0 ]] && echo SQL_SUCCESS || echo SQL_FAILURE)**. Transaction rolled back. Connection-info fields: \`${connection_fields}\`; psql rc: \`${rc}\`; non-empty stdout lines: \`${lines}\`; first line kind: \`${first_kind}\`; last line kind: \`${last_kind}\`; last-line field count: \`${fields}\`; stderr: \`${err_summary}\`. No Supadata transcript API was called; no durable state or production/main was modified."
           [[ "$rc" -eq 0 ]]
