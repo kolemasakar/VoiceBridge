@@ -1,0 +1,67 @@
+name: A9.6 Facebook Balance Check
+
+on:
+  push:
+    branches:
+      - agent/krc-media-transcript
+    paths:
+      - .github/workflows/a9-6-facebook-balance-check.yml
+
+permissions:
+  contents: read
+  issues: write
+  pull-requests: write
+
+env:
+  RENDER_API_BASE: https://api.render.com/v1
+  SERVICE_ID: srv-da1kic5bedkc73d6fk60
+  BETA_BASE_URL: https://voicebridge-krc-media-beta-kolemasakar.onrender.com
+  FACEBOOK_URL: https://www.facebook.com/reel/1114235920664408/
+
+jobs:
+  check:
+    runs-on: ubuntu-latest
+    env:
+      RENDER_API_KEY: ${{ secrets.RENDER_API_KEY }}
+      GH_TOKEN: ${{ github.token }}
+    steps:
+      - name: Read balance using free preflight only
+        id: balance
+        shell: bash
+        run: |
+          set +e
+          result=unknown
+          reason=none
+          if [[ -z "${RENDER_API_KEY:-}" ]]; then
+            reason=render_key_missing
+          else
+            echo "::add-mask::$RENDER_API_KEY"
+            tmp="$(mktemp)"
+            code="$(curl -sS -o "$tmp" -w '%{http_code}' "${RENDER_API_BASE}/services/${SERVICE_ID}/env-vars/KRC_MEDIA_ACTION_TOKEN" -H 'Accept: application/json' -H "Authorization: Bearer ${RENDER_API_KEY}")"
+            token="$(jq -r '(.envVar.value // .value // empty)' "$tmp" 2>/dev/null)"
+            rm -f "$tmp"
+            if [[ "$code" != 200 || -z "$token" ]]; then
+              reason=token_lookup_failed
+            else
+              echo "::add-mask::$token"
+              payload="$(jq -nc --arg url "$FACEBOOK_URL" '{url:$url,language_hint:"auto"}')"
+              code="$(curl -sS --max-time 60 -o /tmp/preflight.json -w '%{http_code}' -X POST "${BETA_BASE_URL}/api/v1/media/managed/preflight" -H 'Accept: application/json' -H 'Content-Type: application/json' -H "Authorization: Bearer ${token}" --data "$payload")"
+              if [[ "$code" == 200 ]]; then
+                result="$(jq -r '.credits_available // "unknown"' /tmp/preflight.json)"
+              else
+                reason=preflight_failed
+              fi
+            fi
+          fi
+          echo "result=$result" >> "$GITHUB_OUTPUT"
+          echo "reason=$reason" >> "$GITHUB_OUTPUT"
+          exit 0
+
+      - name: Report balance
+        if: always()
+        env:
+          RESULT: ${{ steps.balance.outputs.result }}
+          REASON: ${{ steps.balance.outputs.reason }}
+        shell: bash
+        run: |
+          gh pr comment 28 --repo kolemasakar/VoiceBridge --body "A9.6 Facebook post-recovery balance check: provider_balance=\`${RESULT:-unknown}\`, reason=\`${REASON:-unknown}\`. Free preflight only; no metadata, transcript, or AI start request was executed."
