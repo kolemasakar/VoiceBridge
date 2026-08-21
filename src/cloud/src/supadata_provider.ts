@@ -191,7 +191,7 @@ function looksAuthOrPrivateFailure(
 
 function inferredCreditsFromSegments(segments: MediaTranscriptSegment[]): number {
   const durationMs = segments.reduce(
-    (maximum, segment) => Math.max(maximum, segment.end_ms),
+    (maximum, segment) => Math.max(maximum, segment.end_ms ?? 0),
     0
   );
   return Math.max(
