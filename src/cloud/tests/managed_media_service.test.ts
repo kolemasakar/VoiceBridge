@@ -220,19 +220,47 @@ test("native transcript unavailable stops before AI and requires second consent"
   assert.equal(job.segment_count, 0);
 });
 
-test("AI consent parser accepts only separate Supadata generate cap of 40", () => {
+test("AI consent parser accepts bounded dynamic Supadata generate caps", () => {
+  for (const maxCredits of [2, 6, 40]) {
+    assert.ok(
+      parseManagedMediaAiInput({
+        beta_access_code: ACCESS_CODE,
+        credit_consent: {
+          provider: "supadata",
+          mode: "generate",
+          max_credits: maxCredits
+        }
+      })
+    );
+  }
+
+  for (const maxCredits of [1, 2.5, 10001]) {
+    assert.equal(
+      parseManagedMediaAiInput({
+        beta_access_code: ACCESS_CODE,
+        credit_consent: {
+          provider: "supadata",
+          mode: "generate",
+          max_credits: maxCredits
+        }
+      }),
+      null
+    );
+  }
+
   assert.equal(
     parseManagedMediaAiInput({
       beta_access_code: ACCESS_CODE,
-      credit_consent: { provider: "supadata", mode: "generate", max_credits: 2 }
+      credit_consent: { provider: "other", mode: "generate", max_credits: 6 }
     }),
     null
   );
-  assert.ok(
+  assert.equal(
     parseManagedMediaAiInput({
       beta_access_code: ACCESS_CODE,
-      credit_consent: { provider: "supadata", mode: "generate", max_credits: 40 }
-    })
+      credit_consent: { provider: "supadata", mode: "native", max_credits: 6 }
+    }),
+    null
   );
 });
 

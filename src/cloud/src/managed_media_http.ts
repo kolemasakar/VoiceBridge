@@ -7,6 +7,7 @@ import { ManagedMediaPersistentStore } from "./managed_media_persistence.js";
 import {
   ManagedMediaService,
   parseManagedMediaAiInput,
+  parseManagedMediaFacebookMetadataInput,
   parseManagedMediaNativeInput,
   parseManagedMediaPreflightInput
 } from "./managed_media_service.js";
@@ -21,6 +22,8 @@ const PREFLIGHT = `${ROOT}/preflight`;
 const TRANSCRIPTIONS = `${ROOT}/transcriptions`;
 const JOB_PATH = /^\/api\/v1\/media\/managed\/transcriptions\/(KRCM_[A-Za-z0-9-]+)$/;
 const SEGMENTS_PATH = /^\/api\/v1\/media\/managed\/transcriptions\/(KRCM_[A-Za-z0-9-]+)\/segments$/;
+const FACEBOOK_METADATA_PREFLIGHT_PATH = /^\/api\/v1\/media\/managed\/transcriptions\/(KRCM_[A-Za-z0-9-]+)\/facebook-ai-estimate-preflight$/;
+const FACEBOOK_METADATA_START_PATH = /^\/api\/v1\/media\/managed\/transcriptions\/(KRCM_[A-Za-z0-9-]+)\/facebook-ai-estimate$/;
 const AI_PREFLIGHT_PATH = /^\/api\/v1\/media\/managed\/transcriptions\/(KRCM_[A-Za-z0-9-]+)\/ai-preflight$/;
 const AI_START_PATH = /^\/api\/v1\/media\/managed\/transcriptions\/(KRCM_[A-Za-z0-9-]+)\/ai$/;
 
@@ -191,7 +194,9 @@ export function createManagedMediaHttpHandler(
     consent_options: { approve: 1, reject: 2 },
     automatic_ai_fallback: false,
     instagram_reel_ai_fallback: true,
-    facebook_ai_fallback: false,
+    facebook_ai_fallback: true,
+    facebook_ai_requires_duration_metadata: true,
+    facebook_ai_metadata_credits: 1,
     ai_requires_separate_preflight: true,
     ai_requires_separate_user_consent: true,
     ai_generate_credits_per_minute: GENERATED_TRANSCRIPT_CREDITS_PER_MINUTE,
@@ -291,6 +296,37 @@ export function createManagedMediaHttpHandler(
         return true;
       }
 
+      const facebookMetadataPreflightMatch = FACEBOOK_METADATA_PREFLIGHT_PATH.exec(path);
+      if (method === "GET" && facebookMetadataPreflightMatch?.[1]) {
+        const quote = await service.facebookMetadataPreflight(
+          facebookMetadataPreflightMatch[1],
+          serverOwnerAccessCode(config.mediaBetaCodes)
+        );
+        sendJson(response, 200, { request_id: context.requestId, ...quote }, context, config.corsAllowedOrigin);
+        return true;
+      }
+
+      const facebookMetadataStartMatch = FACEBOOK_METADATA_START_PATH.exec(path);
+      if (method === "POST" && facebookMetadataStartMatch?.[1]) {
+        const rawBody = await readJsonBody(request, config.maxRequestBodyBytes);
+        const body = withServerOwnerAccessCode(rawBody, config.mediaBetaCodes);
+        const input = parseManagedMediaFacebookMetadataInput(body);
+        if (!input) {
+          throw new MediaTranscriptError(
+            "MEDIA_METADATA_CREDIT_CONSENT_REQUIRED",
+            "Separate one-credit metadata consent is required before Facebook duration lookup.",
+            409,
+            false
+          );
+        }
+        const job = await service.startFacebookMetadata(
+          facebookMetadataStartMatch[1],
+          input
+        );
+        sendJson(response, 200, { request_id: context.requestId, ...job }, context, config.corsAllowedOrigin);
+        return true;
+      }
+
       const aiPreflightMatch = AI_PREFLIGHT_PATH.exec(path);
       if (method === "GET" && aiPreflightMatch?.[1]) {
         const quote = await service.aiPreflight(
@@ -315,7 +351,7 @@ export function createManagedMediaHttpHandler(
         if (!input) {
           throw new MediaTranscriptError(
             "MEDIA_AI_CREDIT_CONSENT_REQUIRED",
-            `Separate AI consent with max_credits=${INSTAGRAM_REEL_GENERATE_MAX_CREDITS} is required before generated transcription.`,
+            "Separate AI consent matching the latest AI preflight maximum is required before generated transcription.",
             409,
             false
           );

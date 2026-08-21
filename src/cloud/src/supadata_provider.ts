@@ -6,6 +6,7 @@ import {
 
 const DEFAULT_SUPADATA_BASE_URL = "https://api.supadata.ai/v1";
 const NATIVE_TRANSCRIPT_CREDITS = 1;
+export const METADATA_CREDITS = 1;
 export const GENERATED_TRANSCRIPT_CREDITS_PER_MINUTE = 2;
 export const INSTAGRAM_REEL_MAX_DURATION_MINUTES = 20;
 export const INSTAGRAM_REEL_GENERATE_MAX_CREDITS =
@@ -32,6 +33,24 @@ export interface SupadataNativeCreditQuote {
   remaining_after_estimate: number;
   consent_required: true;
   can_continue: boolean;
+}
+
+export interface SupadataMetadataCreditQuote {
+  provider: "supadata";
+  mode: "metadata";
+  plan: string;
+  max_credits: number;
+  used_credits: number;
+  remaining_credits: number;
+  estimated_credits: 1;
+  remaining_after_estimate: number;
+  consent_required: true;
+  can_continue: boolean;
+}
+
+export interface SupadataMetadataDurationResult {
+  duration_seconds: number;
+  billable_credits: number;
 }
 
 export interface SupadataGenerateCreditQuote {
@@ -97,6 +116,12 @@ interface SupadataAccountResponse {
   plan?: unknown;
   maxCredits?: unknown;
   usedCredits?: unknown;
+}
+
+interface SupadataMetadataResponse {
+  platform?: unknown;
+  type?: unknown;
+  media?: unknown;
 }
 
 function finiteNonNegative(value: unknown): number | null {
@@ -241,7 +266,7 @@ export class SupadataProvider {
 
   private async request(path: string): Promise<{
     response: Response;
-    payload: SupadataTranscriptResponse & SupadataAccountResponse;
+    payload: SupadataTranscriptResponse & SupadataAccountResponse & SupadataMetadataResponse;
   }> {
     const response = await fetch(`${this.baseUrl}${path}`, {
       method: "GET",
@@ -251,10 +276,10 @@ export class SupadataProvider {
       }
     });
     const text = await response.text();
-    let payload: SupadataTranscriptResponse & SupadataAccountResponse = {};
+    let payload: SupadataTranscriptResponse & SupadataAccountResponse & SupadataMetadataResponse = {};
     if (text) {
       try {
-        payload = JSON.parse(text) as SupadataTranscriptResponse & SupadataAccountResponse;
+        payload = JSON.parse(text) as SupadataTranscriptResponse & SupadataAccountResponse & SupadataMetadataResponse;
       } catch {
         throw new MediaTranscriptError(
           "MANAGED_PROVIDER_INVALID_RESPONSE",
@@ -319,6 +344,88 @@ export class SupadataProvider {
       ),
       consent_required: true,
       can_continue: account.remaining_credits >= NATIVE_TRANSCRIPT_CREDITS
+    };
+  }
+
+  async quoteMetadata(): Promise<SupadataMetadataCreditQuote> {
+    const account = await this.getAccount();
+    return {
+      provider: "supadata",
+      mode: "metadata",
+      plan: account.plan,
+      max_credits: account.max_credits,
+      used_credits: account.used_credits,
+      remaining_credits: account.remaining_credits,
+      estimated_credits: 1,
+      remaining_after_estimate: Math.max(0, account.remaining_credits - METADATA_CREDITS),
+      consent_required: true,
+      can_continue: account.remaining_credits >= METADATA_CREDITS
+    };
+  }
+
+  async getMetadataDuration(url: string): Promise<SupadataMetadataDurationResult> {
+    const query = new URLSearchParams({ url });
+    const { response, payload } = await this.request(`/metadata?${query}`);
+    const billableCredits = parseBillableCredits(response.headers) || METADATA_CREDITS;
+    if (!response.ok) {
+      if (isFacebookUrl(url) && looksAuthOrPrivateFailure(response, payload)) {
+        throw new MediaTranscriptError(
+          "UNSUPPORTED_PRIVATE_OR_AUTH_REQUIRED",
+          "The Facebook media is not publicly accessible or requires authentication.",
+          422,
+          false
+        );
+      }
+      throw new MediaTranscriptError(
+        "MANAGED_PROVIDER_METADATA_ERROR",
+        nonEmptyString(payload.details) || nonEmptyString(payload.message) ||
+          "The managed provider could not read media metadata.",
+        response.status >= 500 ? 502 : 422,
+        response.status >= 500 || response.status === 429
+      );
+    }
+    if (payload.platform !== "facebook") {
+      throw new MediaTranscriptError(
+        "MANAGED_PROVIDER_METADATA_INVALID",
+        "The managed provider returned metadata for an unexpected platform.",
+        502,
+        false
+      );
+    }
+    const media = payload.media && typeof payload.media === "object"
+      ? payload.media as Record<string, unknown>
+      : null;
+    const duration = media ? finiteNonNegative(media.duration) : null;
+    if (duration === null || duration <= 0) {
+      throw new MediaTranscriptError(
+        "MANAGED_PROVIDER_METADATA_DURATION_UNAVAILABLE",
+        "The Facebook metadata did not contain a usable video duration.",
+        422,
+        false
+      );
+    }
+    return { duration_seconds: duration, billable_credits: billableCredits };
+  }
+
+  async quoteGenerateForDuration(durationSeconds: number): Promise<SupadataGenerateCreditQuote> {
+    const account = await this.getAccount();
+    const maximumDurationMinutes = Math.max(1, Math.ceil(durationSeconds / 60));
+    const maximumCredits = maximumDurationMinutes * GENERATED_TRANSCRIPT_CREDITS_PER_MINUTE;
+    return {
+      provider: "supadata",
+      mode: "generate",
+      plan: account.plan,
+      max_credits: account.max_credits,
+      used_credits: account.used_credits,
+      remaining_credits: account.remaining_credits,
+      estimated_credits: maximumCredits,
+      maximum_credits: maximumCredits,
+      credits_per_minute: GENERATED_TRANSCRIPT_CREDITS_PER_MINUTE,
+      maximum_duration_minutes: maximumDurationMinutes,
+      remaining_after_estimate: Math.max(0, account.remaining_credits - maximumCredits),
+      conservative_maximum: true,
+      consent_required: true,
+      can_continue: account.remaining_credits >= maximumCredits
     };
   }
 
@@ -407,7 +514,8 @@ export class SupadataProvider {
   }
 
   async getGeneratedTranscript(
-    url: string
+    url: string,
+    approvedMaxCredits = INSTAGRAM_REEL_GENERATE_MAX_CREDITS
   ): Promise<SupadataGeneratedTranscriptResult> {
     const accountBefore = await this.getAccount();
     const query = new URLSearchParams({
@@ -511,10 +619,10 @@ export class SupadataProvider {
     const billableCredits = billedFromHeader ||
       balanceDelta ||
       inferredCreditsFromSegments(preliminary.segments);
-    if (billableCredits > INSTAGRAM_REEL_GENERATE_MAX_CREDITS) {
+    if (billableCredits > approvedMaxCredits) {
       throw new MediaTranscriptError(
         "MANAGED_PROVIDER_AI_CREDIT_CAP_BREACH",
-        "The provider reported AI transcript usage above the approved Instagram Reel maximum.",
+        "The provider reported AI transcript usage above the user-approved maximum.",
         502,
         false
       );

@@ -2,6 +2,7 @@ import { createHash, randomUUID } from "node:crypto";
 import { MediaBetaGate } from "./media_beta.js";
 import {
   isManagedInstagramReelUrl,
+  managedMediaPlatform,
   normalizeManagedMediaUrl
 } from "./managed_media_url.js";
 import {
@@ -14,6 +15,8 @@ import {
   SupadataProvider,
   type SupadataGenerateCreditQuote,
   type SupadataGeneratedTranscriptResult,
+  type SupadataMetadataCreditQuote,
+  type SupadataMetadataDurationResult,
   type SupadataNativeCreditQuote,
   type SupadataNativeTranscriptResult
 } from "./supadata_provider.js";
@@ -41,6 +44,15 @@ export interface ManagedMediaAiInput {
   };
 }
 
+export interface ManagedMediaFacebookMetadataInput {
+  beta_access_code: string;
+  credit_consent: {
+    provider: "supadata";
+    mode: "metadata";
+    max_credits: number;
+  };
+}
+
 export interface ManagedMediaCreditPreflight {
   source_url: string;
   language_hint: MediaLanguageHint;
@@ -58,6 +70,21 @@ export interface ManagedMediaCreditPreflight {
   };
 }
 
+export interface ManagedMediaFacebookMetadataPreflight {
+  job_id: string;
+  source_url: string;
+  provider: "supadata";
+  mode: "metadata";
+  purpose: "facebook_ai_duration";
+  plan: string;
+  credits_available: number;
+  estimated_credits: 1;
+  credits_after_estimate: number;
+  can_continue: boolean;
+  consent_required: true;
+  consent_options: { approve: 1; reject: 2 };
+}
+
 export interface ManagedMediaAiCreditPreflight {
   job_id: string;
   source_url: string;
@@ -71,6 +98,8 @@ export interface ManagedMediaAiCreditPreflight {
   maximum_duration_minutes: number;
   credits_after_estimate: number;
   conservative_maximum: true;
+  estimate_basis: "instagram_reel_ceiling" | "facebook_metadata_duration";
+  media_duration_seconds: number | null;
   can_continue: boolean;
   consent_required: true;
   consent_options: {
@@ -103,6 +132,9 @@ export interface ManagedMediaJobView {
   segment_count: number;
   transcript_characters: number;
   ai_fallback_requires_new_consent: boolean;
+  media_duration_seconds?: number | null;
+  ai_credit_ceiling?: number | null;
+  metadata_credits_charged?: number;
   error: null | {
     code: string;
     message: string;
@@ -149,7 +181,13 @@ export interface ManagedNativeTranscriptProvider {
     languageHint: MediaLanguageHint
   ): Promise<SupadataNativeTranscriptResult>;
   quoteGenerateInstagramReel?(): Promise<SupadataGenerateCreditQuote>;
-  getGeneratedTranscript?(url: string): Promise<SupadataGeneratedTranscriptResult>;
+  quoteMetadata?(): Promise<SupadataMetadataCreditQuote>;
+  getMetadataDuration?(url: string): Promise<SupadataMetadataDurationResult>;
+  quoteGenerateForDuration?(durationSeconds: number): Promise<SupadataGenerateCreditQuote>;
+  getGeneratedTranscript?(
+    url: string,
+    approvedMaxCredits?: number
+  ): Promise<SupadataGeneratedTranscriptResult>;
 }
 
 export interface ManagedMediaServiceOptions {
@@ -304,6 +342,26 @@ export function parseManagedMediaNativeInput(
   };
 }
 
+export function parseManagedMediaFacebookMetadataInput(
+  value: unknown
+): ManagedMediaFacebookMetadataInput | null {
+  if (!value || typeof value !== "object") return null;
+  const input = value as Record<string, unknown>;
+  if (!validAccessCode(input.beta_access_code)) return null;
+  const consent = input.credit_consent;
+  if (!consent || typeof consent !== "object") return null;
+  const record = consent as Record<string, unknown>;
+  if (
+    record.provider !== "supadata" ||
+    record.mode !== "metadata" ||
+    record.max_credits !== 1
+  ) return null;
+  return {
+    beta_access_code: input.beta_access_code,
+    credit_consent: { provider: "supadata", mode: "metadata", max_credits: 1 }
+  };
+}
+
 export function parseManagedMediaAiInput(value: unknown): ManagedMediaAiInput | null {
   if (!value || typeof value !== "object") return null;
   const input = value as Record<string, unknown>;
@@ -316,16 +374,15 @@ export function parseManagedMediaAiInput(value: unknown): ManagedMediaAiInput | 
     record.mode !== "generate" ||
     typeof record.max_credits !== "number" ||
     !Number.isInteger(record.max_credits) ||
-    record.max_credits !== INSTAGRAM_REEL_GENERATE_MAX_CREDITS
-  ) {
-    return null;
-  }
+    record.max_credits < 2 ||
+    record.max_credits > 10000
+  ) return null;
   return {
     beta_access_code: input.beta_access_code,
     credit_consent: {
       provider: "supadata",
       mode: "generate",
-      max_credits: INSTAGRAM_REEL_GENERATE_MAX_CREDITS
+      max_credits: record.max_credits
     }
   };
 }
@@ -379,13 +436,25 @@ export class ManagedMediaService {
   }
 
   private authorizeAiProvider(): void {
-    if (
-      !this.transcriptProvider?.quoteGenerateInstagramReel ||
-      !this.transcriptProvider.getGeneratedTranscript
-    ) {
+    if (!this.transcriptProvider?.getGeneratedTranscript) {
       throw new MediaTranscriptError(
         "MANAGED_AI_PROVIDER_NOT_CONFIGURED",
         "The managed AI transcript provider is not configured.",
+        503,
+        false
+      );
+    }
+  }
+
+  private authorizeFacebookMetadataProvider(): void {
+    if (
+      !this.transcriptProvider?.quoteMetadata ||
+      !this.transcriptProvider.getMetadataDuration ||
+      !this.transcriptProvider.quoteGenerateForDuration
+    ) {
+      throw new MediaTranscriptError(
+        "MANAGED_METADATA_PROVIDER_NOT_CONFIGURED",
+        "The managed Facebook duration provider is not configured.",
         503,
         false
       );
@@ -502,6 +571,158 @@ export class ManagedMediaService {
     };
   }
 
+  async facebookMetadataPreflight(
+    jobId: string,
+    accessCode: string
+  ): Promise<ManagedMediaFacebookMetadataPreflight> {
+    const record = await this.authorizedRecord(jobId, accessCode);
+    this.authorizeFacebookMetadataProvider();
+    if (record.job.status !== "AWAITING_AI_CONSENT") {
+      throw new MediaTranscriptError(
+        "MEDIA_AI_CONSENT_NOT_APPLICABLE",
+        "Facebook AI duration preflight is allowed only after native transcript unavailability.",
+        409,
+        false
+      );
+    }
+    if (managedMediaPlatform(record.job.source_url) !== "facebook") {
+      throw new MediaTranscriptError(
+        "MEDIA_AI_SOURCE_NOT_SUPPORTED",
+        "Facebook duration preflight applies only to public Facebook media.",
+        422,
+        false
+      );
+    }
+    if ((record.job.media_duration_seconds ?? null) !== null) {
+      throw new MediaTranscriptError(
+        "MEDIA_AI_ESTIMATE_ALREADY_AVAILABLE",
+        "Facebook media duration has already been obtained for this job.",
+        409,
+        false
+      );
+    }
+    const quote = await this.transcriptProvider!.quoteMetadata!();
+    return {
+      job_id: record.job.job_id,
+      source_url: record.job.source_url,
+      provider: "supadata",
+      mode: "metadata",
+      purpose: "facebook_ai_duration",
+      plan: quote.plan,
+      credits_available: quote.remaining_credits,
+      estimated_credits: 1,
+      credits_after_estimate: quote.remaining_after_estimate,
+      can_continue: quote.can_continue,
+      consent_required: true,
+      consent_options: { approve: 1, reject: 2 }
+    };
+  }
+
+  async startFacebookMetadata(
+    jobId: string,
+    input: ManagedMediaFacebookMetadataInput
+  ): Promise<ManagedMediaJobView> {
+    const record = await this.authorizedRecord(jobId, input.beta_access_code);
+    this.authorizeFacebookMetadataProvider();
+    if ((record.job.media_duration_seconds ?? null) !== null) {
+      return this.publicJob(record.job, true);
+    }
+    if (
+      record.job.status !== "AWAITING_AI_CONSENT" ||
+      managedMediaPlatform(record.job.source_url) !== "facebook"
+    ) {
+      throw new MediaTranscriptError(
+        "MEDIA_AI_ESTIMATE_NOT_APPLICABLE",
+        "Facebook duration lookup is allowed only for a Facebook job awaiting AI consent.",
+        409,
+        false
+      );
+    }
+    const quote = await this.transcriptProvider!.quoteMetadata!();
+    if (!quote.can_continue) {
+      throw new MediaTranscriptError(
+        "MANAGED_PROVIDER_CREDITS_EXHAUSTED",
+        "No provider credit is available for the approved Facebook metadata request.",
+        429,
+        false
+      );
+    }
+    const startedAt = new Date().toISOString();
+    const processing: ManagedMediaStoredRecord = {
+      ...record,
+      job: {
+        ...record.job,
+        status: "PROCESSING",
+        updated_at: startedAt,
+        credit_charge_uncertain: true,
+        error: null
+      },
+      expiresAt: this.expiryFrom(startedAt)
+    };
+    await this.store.put(processing);
+    this.inFlight.add(record.requestKey);
+    try {
+      const metadata = await this.transcriptProvider!.getMetadataDuration!(
+        record.job.source_url
+      );
+      const aiQuote = await this.transcriptProvider!.quoteGenerateForDuration!(
+        metadata.duration_seconds
+      );
+      const updatedAt = new Date().toISOString();
+      const updated: ManagedMediaStoredRecord = {
+        ...processing,
+        job: {
+          ...processing.job,
+          status: "AWAITING_AI_CONSENT",
+          updated_at: updatedAt,
+          credits_charged: record.job.credits_charged + metadata.billable_credits,
+          credits_remaining_estimate: Math.max(
+            0,
+            quote.remaining_credits - metadata.billable_credits
+          ),
+          credit_charge_uncertain: false,
+          media_duration_seconds: metadata.duration_seconds,
+          ai_credit_ceiling: aiQuote.maximum_credits,
+          metadata_credits_charged:
+            (record.job.metadata_credits_charged ?? 0) + metadata.billable_credits,
+          error: null
+        },
+        expiresAt: this.expiryFrom(updatedAt)
+      };
+      await this.store.put(updated);
+      return this.publicJob(updated.job, false);
+    } catch (error) {
+      const normalized = error instanceof MediaTranscriptError
+        ? error
+        : new MediaTranscriptError(
+          "MANAGED_PROVIDER_METADATA_FAILED",
+          "Managed Facebook metadata processing failed.",
+          500,
+          false
+        );
+      const updatedAt = new Date().toISOString();
+      const failed: ManagedMediaStoredRecord = {
+        ...processing,
+        job: {
+          ...processing.job,
+          status: "FAILED",
+          updated_at: updatedAt,
+          credit_charge_uncertain: true,
+          error: {
+            code: normalized.code,
+            message: normalized.message,
+            retryable: false
+          }
+        },
+        expiresAt: this.expiryFrom(updatedAt)
+      };
+      await this.store.put(failed);
+      return this.publicJob(failed.job, false);
+    } finally {
+      this.inFlight.delete(record.requestKey);
+    }
+  }
+
   async aiPreflight(
     jobId: string,
     accessCode: string
@@ -516,15 +737,54 @@ export class ManagedMediaService {
         false
       );
     }
-    if (!isManagedInstagramReelUrl(record.job.source_url)) {
+    const platform = managedMediaPlatform(record.job.source_url);
+    let quote: SupadataGenerateCreditQuote;
+    let estimateBasis: ManagedMediaAiCreditPreflight["estimate_basis"];
+    let mediaDurationSeconds: number | null = null;
+    if (isManagedInstagramReelUrl(record.job.source_url)) {
+      if (!this.transcriptProvider!.quoteGenerateInstagramReel) {
+        throw new MediaTranscriptError(
+          "MANAGED_AI_PROVIDER_NOT_CONFIGURED",
+          "Instagram AI quoting is not configured.",
+          503,
+          false
+        );
+      }
+      quote = await this.transcriptProvider!.quoteGenerateInstagramReel();
+      estimateBasis = "instagram_reel_ceiling";
+    } else if (platform === "facebook") {
+      if (
+        (record.job.media_duration_seconds ?? null) === null ||
+        (record.job.ai_credit_ceiling ?? null) === null
+      ) {
+        throw new MediaTranscriptError(
+          "MEDIA_AI_ESTIMATE_REQUIRED",
+          "Facebook AI requires a consent-gated metadata duration lookup first.",
+          409,
+          false
+        );
+      }
+      if (!this.transcriptProvider!.quoteGenerateForDuration) {
+        throw new MediaTranscriptError(
+          "MANAGED_AI_PROVIDER_NOT_CONFIGURED",
+          "Facebook AI quoting is not configured.",
+          503,
+          false
+        );
+      }
+      quote = await this.transcriptProvider!.quoteGenerateForDuration(
+        record.job.media_duration_seconds!
+      );
+      mediaDurationSeconds = record.job.media_duration_seconds!;
+      estimateBasis = "facebook_metadata_duration";
+    } else {
       throw new MediaTranscriptError(
         "MEDIA_AI_SOURCE_NOT_SUPPORTED",
-        "The current AI fallback is limited to canonical public Instagram Reel URLs.",
+        "AI fallback is not enabled for this media source.",
         422,
         false
       );
     }
-    const quote = await this.transcriptProvider!.quoteGenerateInstagramReel!();
     return {
       job_id: record.job.job_id,
       source_url: record.job.source_url,
@@ -538,6 +798,8 @@ export class ManagedMediaService {
       maximum_duration_minutes: quote.maximum_duration_minutes,
       credits_after_estimate: quote.remaining_after_estimate,
       conservative_maximum: true,
+      estimate_basis: estimateBasis,
+      media_duration_seconds: mediaDurationSeconds,
       can_continue: quote.can_continue,
       consent_required: true,
       consent_options: { approve: 1, reject: 2 }
@@ -593,6 +855,9 @@ export class ManagedMediaService {
       segment_count: 0,
       transcript_characters: 0,
       ai_fallback_requires_new_consent: true,
+      media_duration_seconds: null,
+      ai_credit_ceiling: null,
+      metadata_credits_charged: 0,
       error: null
     };
     const record: ManagedMediaStoredRecord = {
@@ -699,20 +964,51 @@ export class ManagedMediaService {
         false
       );
     }
-    if (!isManagedInstagramReelUrl(record.job.source_url)) {
+
+    const platform = managedMediaPlatform(record.job.source_url);
+    let quote: SupadataGenerateCreditQuote;
+    if (isManagedInstagramReelUrl(record.job.source_url)) {
+      if (!this.transcriptProvider!.quoteGenerateInstagramReel) {
+        throw new MediaTranscriptError(
+          "MANAGED_AI_PROVIDER_NOT_CONFIGURED",
+          "Instagram AI quoting is not configured.",
+          503,
+          false
+        );
+      }
+      quote = await this.transcriptProvider!.quoteGenerateInstagramReel();
+    } else if (platform === "facebook") {
+      if ((record.job.media_duration_seconds ?? null) === null) {
+        throw new MediaTranscriptError(
+          "MEDIA_AI_ESTIMATE_REQUIRED",
+          "Facebook AI requires an approved metadata duration lookup before generation.",
+          409,
+          false
+        );
+      }
+      if (!this.transcriptProvider!.quoteGenerateForDuration) {
+        throw new MediaTranscriptError(
+          "MANAGED_AI_PROVIDER_NOT_CONFIGURED",
+          "Facebook AI quoting is not configured.",
+          503,
+          false
+        );
+      }
+      quote = await this.transcriptProvider!.quoteGenerateForDuration(
+        record.job.media_duration_seconds!
+      );
+    } else {
       throw new MediaTranscriptError(
         "MEDIA_AI_SOURCE_NOT_SUPPORTED",
-        "The current AI fallback is limited to canonical public Instagram Reel URLs.",
+        "AI fallback is not enabled for this media source.",
         422,
         false
       );
     }
-
-    const quote = await this.transcriptProvider!.quoteGenerateInstagramReel!();
     if (!quote.can_continue) {
       throw new MediaTranscriptError(
         "MANAGED_PROVIDER_CREDITS_EXHAUSTED",
-        "The managed provider balance is below the conservative approved AI credit ceiling.",
+        "The managed provider balance is below the approved AI credit ceiling.",
         429,
         false
       );
@@ -720,7 +1016,7 @@ export class ManagedMediaService {
     if (input.credit_consent.max_credits !== quote.maximum_credits) {
       throw new MediaTranscriptError(
         "MEDIA_AI_CREDIT_CONSENT_REQUIRED",
-        "A separate explicit AI credit consent matching the current conservative maximum is required.",
+        "A separate explicit AI credit consent matching the current maximum is required.",
         409,
         false
       );
@@ -744,7 +1040,8 @@ export class ManagedMediaService {
     this.inFlight.add(record.requestKey);
     try {
       const result = await this.transcriptProvider!.getGeneratedTranscript!(
-        record.job.source_url
+        record.job.source_url,
+        quote.maximum_credits
       );
       const updatedAt = new Date().toISOString();
       const updated: ManagedMediaStoredRecord = {
