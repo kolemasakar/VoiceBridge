@@ -176,6 +176,17 @@ function isInstagramUrl(value: string): boolean {
   }
 }
 
+function isFacebookUrl(value: string): boolean {
+  try {
+    const host = new URL(value).hostname.toLowerCase();
+    return host === "facebook.com" ||
+      host.endsWith(".facebook.com") ||
+      host === "fb.watch";
+  } catch {
+    return false;
+  }
+}
+
 function looksAuthOrPrivateFailure(
   response: Response,
   payload: SupadataTranscriptResponse
@@ -186,7 +197,7 @@ function looksAuthOrPrivateFailure(
     nonEmptyString(payload.message),
     nonEmptyString(payload.details)
   ].filter((value): value is string => Boolean(value)).join(" ").toLowerCase();
-  return /private|login|log in|sign in|authentication|authorization|not publicly accessible/.test(message);
+  return /private|friends[- ]only|login|log in|sign in|authentication|authorization|not publicly accessible|requires membership/.test(message);
 }
 
 function inferredCreditsFromSegments(segments: MediaTranscriptSegment[]): number {
@@ -356,10 +367,14 @@ export class SupadataProvider {
     }
 
     if (!response.ok) {
-      if (isInstagramUrl(url) && looksAuthOrPrivateFailure(response, payload)) {
+      if (
+        (isInstagramUrl(url) || isFacebookUrl(url)) &&
+        looksAuthOrPrivateFailure(response, payload)
+      ) {
+        const platform = isFacebookUrl(url) ? "Facebook" : "Instagram";
         throw new MediaTranscriptError(
           "UNSUPPORTED_PRIVATE_OR_AUTH_REQUIRED",
-          "The Instagram media is not publicly accessible or requires authentication.",
+          `The ${platform} media is not publicly accessible or requires authentication.`,
           422,
           false
         );
