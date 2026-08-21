@@ -97,7 +97,7 @@ function actionHeaders(): Record<string, string> {
   };
 }
 
-test("managed HTTP preflight reports credit balance and blocks spend without consent", async () => {
+test("managed HTTP injects owner access after Action auth and preserves credit consent gate", async () => {
   const provider = new FakeManagedProvider();
   const service = new ManagedMediaService(
     new MediaBetaGate([ACCESS_CODE]),
@@ -117,7 +117,6 @@ test("managed HTTP preflight reports credit balance and blocks spend without con
       headers: actionHeaders(),
       body: JSON.stringify({
         url: "https://youtu.be/abc123",
-        beta_access_code: ACCESS_CODE,
         language_hint: "auto"
       })
     });
@@ -134,7 +133,6 @@ test("managed HTTP preflight reports credit balance and blocks spend without con
       headers: actionHeaders(),
       body: JSON.stringify({
         url: "https://youtu.be/abc123",
-        beta_access_code: ACCESS_CODE,
         language_hint: "auto"
       })
     });
@@ -150,7 +148,6 @@ test("managed HTTP preflight reports credit balance and blocks spend without con
       headers: actionHeaders(),
       body: JSON.stringify({
         url: "https://youtu.be/abc123",
-        beta_access_code: ACCESS_CODE,
         language_hint: "auto",
         credit_consent: {
           provider: "supadata",
@@ -174,6 +171,44 @@ test("managed HTTP preflight reports credit balance and blocks spend without con
     assert.equal(segments.status, 200);
     const page = await segments.json() as { segments?: unknown[] };
     assert.equal(page.segments?.length, 1);
+  } finally {
+    await close(server);
+  }
+});
+
+test("managed HTTP still rejects missing or invalid Action bearer before owner code injection", async () => {
+  const provider = new FakeManagedProvider();
+  const service = new ManagedMediaService(
+    new MediaBetaGate([ACCESS_CODE]),
+    null,
+    provider
+  );
+  const handler = createManagedMediaHttpHandler(CONFIG, service);
+  const server = createServer(async (request, response) => {
+    if (await handler.handle(request, response)) return;
+    response.statusCode = 404;
+    response.end();
+  });
+  const baseUrl = await listen(server);
+  try {
+    const missing = await fetch(`${baseUrl}/api/v1/media/managed/preflight`, {
+      method: "POST",
+      headers: { "content-type": "application/json", connection: "close" },
+      body: JSON.stringify({ url: "https://youtu.be/abc123" })
+    });
+    assert.equal(missing.status, 401);
+
+    const invalid = await fetch(`${baseUrl}/api/v1/media/managed/preflight`, {
+      method: "POST",
+      headers: {
+        authorization: "Bearer wrong-token",
+        "content-type": "application/json",
+        connection: "close"
+      },
+      body: JSON.stringify({ url: "https://youtu.be/abc123" })
+    });
+    assert.equal(invalid.status, 401);
+    assert.equal(provider.transcriptCalls, 0);
   } finally {
     await close(server);
   }
@@ -203,6 +238,8 @@ test("managed server preserves legacy health and exposes disabled managed capabi
     assert.equal(capabilityBody.configured, false);
     assert.equal(capabilityBody.explicit_user_consent_required, true);
     assert.equal(capabilityBody.automatic_ai_fallback, false);
+    assert.equal(capabilityBody.user_beta_access_code_required, false);
+    assert.equal(capabilityBody.owner_access_injected_server_side, true);
   } finally {
     await close(server);
   }
