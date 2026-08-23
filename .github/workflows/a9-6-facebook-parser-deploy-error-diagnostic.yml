@@ -1,0 +1,58 @@
+name: A9.6 Facebook Parser Deploy Error Diagnostic
+
+on:
+  push:
+    branches:
+      - agent/krc-media-transcript
+    paths:
+      - .github/workflows/a9-6-facebook-parser-deploy-error-diagnostic.yml
+
+permissions:
+  contents: read
+  issues: write
+  pull-requests: write
+
+jobs:
+  diagnose:
+    runs-on: ubuntu-latest
+    env:
+      RENDER_API_KEY: ${{ secrets.RENDER_API_KEY }}
+      GH_TOKEN: ${{ github.token }}
+      RENDER_API_BASE: https://api.render.com/v1
+      SERVICE_ID: srv-da1kic5bedkc73d6fk60
+      EXPECTED_SHA: f6b32c2a03425deaecadd10fc902671d62eaab5d
+    steps:
+      - name: Read deploy failure metadata only
+        id: diag
+        shell: bash
+        run: |
+          set -euo pipefail
+          test -n "${RENDER_API_KEY:-}"
+          echo "::add-mask::$RENDER_API_KEY"
+          code="$(curl -sS -o /tmp/deploys.json -w '%{http_code}' \
+            "${RENDER_API_BASE}/services/${SERVICE_ID}/deploys?limit=10" \
+            -H 'Accept: application/json' \
+            -H "Authorization: Bearer ${RENDER_API_KEY}")"
+          [[ "$code" == 200 ]]
+          entry="$(jq -c --arg sha "$EXPECTED_SHA" '[.[] | select((.deploy.commit.id // .commit.id // .deploy.commitId // .commitId // "") == $sha)][0] // {}' /tmp/deploys.json)"
+          status="$(jq -r '.deploy.status // .status // "not_found"' <<<"$entry")"
+          deploy_id="$(jq -r '.deploy.id // .id // "unknown"' <<<"$entry")"
+          error_message="$(jq -r '.deploy.errorMessage // .errorMessage // .deploy.error_message // .error_message // "none"' <<<"$entry")"
+          finished_at="$(jq -r '.deploy.finishedAt // .finishedAt // "unknown"' <<<"$entry")"
+          error_message="$(printf '%s' "$error_message" | tr '\r\n' '  ' | sed -E 's/(Bearer|token|secret|password|key)[=: ][^ ]+/<redacted>/Ig')"
+          [[ ${#error_message} -le 1200 ]] || error_message="${error_message:0:1200}"
+          echo "status=$status" >> "$GITHUB_OUTPUT"
+          echo "deploy_id=$deploy_id" >> "$GITHUB_OUTPUT"
+          echo "finished_at=$finished_at" >> "$GITHUB_OUTPUT"
+          echo "error_message=$error_message" >> "$GITHUB_OUTPUT"
+
+      - name: Report safe deploy metadata
+        env:
+          STATUS: ${{ steps.diag.outputs.status }}
+          DEPLOY_ID: ${{ steps.diag.outputs.deploy_id }}
+          FINISHED_AT: ${{ steps.diag.outputs.finished_at }}
+          ERROR_MESSAGE: ${{ steps.diag.outputs.error_message }}
+        shell: bash
+        run: |
+          set -euo pipefail
+          gh pr comment 28 --repo kolemasakar/VoiceBridge --body "A9.6 Facebook parser deploy failure metadata: status=\`${STATUS}\`, deploy_id=\`${DEPLOY_ID}\`, finished_at=\`${FINISHED_AT}\`, error_message=\`${ERROR_MESSAGE}\`. Read-only Render deploy metadata only; no Supadata or billable media endpoint was called."
