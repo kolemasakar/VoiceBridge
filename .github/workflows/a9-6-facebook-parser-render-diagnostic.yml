@@ -1,0 +1,80 @@
+name: A9.6 Facebook Parser Render Diagnostic
+
+on:
+  push:
+    branches:
+      - agent/krc-media-transcript
+    paths:
+      - .github/workflows/a9-6-facebook-parser-render-diagnostic.yml
+
+permissions:
+  contents: read
+  issues: write
+  pull-requests: write
+
+jobs:
+  diagnose:
+    runs-on: ubuntu-latest
+    env:
+      RENDER_API_KEY: ${{ secrets.RENDER_API_KEY }}
+      GH_TOKEN: ${{ github.token }}
+      RENDER_API_BASE: https://api.render.com/v1
+      SERVICE_ID: srv-da1kic5bedkc73d6fk60
+      SERVICE_NAME: voicebridge-krc-media-beta-kolemasakar
+      REQUIRED_BRANCH: agent/krc-media-transcript
+      BETA_BASE_URL: https://voicebridge-krc-media-beta-kolemasakar.onrender.com
+      EXPECTED_SHA: f6b32c2a03425deaecadd10fc902671d62eaab5d
+    steps:
+      - name: Inspect isolated Render target only
+        id: inspect
+        shell: bash
+        run: |
+          set +e
+          test -n "${RENDER_API_KEY:-}" || exit 2
+          echo "::add-mask::$RENDER_API_KEY"
+
+          service_http="$(curl -sS -o /tmp/service.json -w '%{http_code}' \
+            "${RENDER_API_BASE}/services/${SERVICE_ID}" \
+            -H 'Accept: application/json' \
+            -H "Authorization: Bearer ${RENDER_API_KEY}")"
+          service_name="$(jq -r '.name // "unknown"' /tmp/service.json 2>/dev/null)"
+          service_branch="$(jq -r '.branch // "unknown"' /tmp/service.json 2>/dev/null)"
+
+          deploy_http="$(curl -sS -o /tmp/deploys.json -w '%{http_code}' \
+            "${RENDER_API_BASE}/services/${SERVICE_ID}/deploys?limit=5" \
+            -H 'Accept: application/json' \
+            -H "Authorization: Bearer ${RENDER_API_KEY}")"
+          latest_status="$(jq -r '.[0].deploy.status // .[0].status // "unknown"' /tmp/deploys.json 2>/dev/null)"
+          latest_sha="$(jq -r '.[0].deploy.commit.id // .[0].commit.id // .[0].deploy.commitId // .[0].commitId // "unknown"' /tmp/deploys.json 2>/dev/null)"
+          expected_status="$(jq -r --arg sha "$EXPECTED_SHA" '[.[] | select((.deploy.commit.id // .commit.id // .deploy.commitId // .commitId // "") == $sha)][0] | (.deploy.status // .status // "not_found")' /tmp/deploys.json 2>/dev/null)"
+
+          health_http="$(curl -sS --max-time 30 -o /tmp/health.json -w '%{http_code}' \
+            "${BETA_BASE_URL}/health" || true)"
+          health_value="$(jq -r '.status // .ok // "unknown"' /tmp/health.json 2>/dev/null)"
+
+          echo "service_http=$service_http" >> "$GITHUB_OUTPUT"
+          echo "service_name=$service_name" >> "$GITHUB_OUTPUT"
+          echo "service_branch=$service_branch" >> "$GITHUB_OUTPUT"
+          echo "deploy_http=$deploy_http" >> "$GITHUB_OUTPUT"
+          echo "latest_status=$latest_status" >> "$GITHUB_OUTPUT"
+          echo "latest_sha=$latest_sha" >> "$GITHUB_OUTPUT"
+          echo "expected_status=$expected_status" >> "$GITHUB_OUTPUT"
+          echo "health_http=$health_http" >> "$GITHUB_OUTPUT"
+          echo "health_value=$health_value" >> "$GITHUB_OUTPUT"
+          exit 0
+
+      - name: Report diagnostic
+        env:
+          SERVICE_HTTP: ${{ steps.inspect.outputs.service_http }}
+          SERVICE_NAME_ACTUAL: ${{ steps.inspect.outputs.service_name }}
+          SERVICE_BRANCH_ACTUAL: ${{ steps.inspect.outputs.service_branch }}
+          DEPLOY_HTTP: ${{ steps.inspect.outputs.deploy_http }}
+          LATEST_STATUS: ${{ steps.inspect.outputs.latest_status }}
+          LATEST_SHA: ${{ steps.inspect.outputs.latest_sha }}
+          EXPECTED_STATUS: ${{ steps.inspect.outputs.expected_status }}
+          HEALTH_HTTP: ${{ steps.inspect.outputs.health_http }}
+          HEALTH_VALUE: ${{ steps.inspect.outputs.health_value }}
+        shell: bash
+        run: |
+          set -euo pipefail
+          gh pr comment 28 --repo kolemasakar/VoiceBridge --body "A9.6 Facebook parser Render diagnostic: service_http=\`${SERVICE_HTTP}\`, service=\`${SERVICE_NAME_ACTUAL}\`, branch=\`${SERVICE_BRANCH_ACTUAL}\`, deploy_http=\`${DEPLOY_HTTP}\`, latest_status=\`${LATEST_STATUS}\`, latest_sha=\`${LATEST_SHA}\`, expected_parser_sha_status=\`${EXPECTED_STATUS}\`, health_http=\`${HEALTH_HTTP}\`, health=\`${HEALTH_VALUE}\`. Render/service reads only; no Supadata or billable media endpoint was called. Production/main were not targeted."
