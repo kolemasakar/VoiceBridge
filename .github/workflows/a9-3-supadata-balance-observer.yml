@@ -36,3 +36,5 @@ jobs:
           [[ "$max" =~ ^[0-9]+$ && "$used" =~ ^[0-9]+$ ]]
           available=$((max-used))
           gh pr comment 28 --repo kolemasakar/VoiceBridge --body "A9.3 direct Supadata balance observer: **SUCCESS**. Plan: \`${plan}\`; available credits: \`${available}\`. This observer called account \`/me\` only; it did not call transcript APIs or mutate Render."
+
+# trigger: 2026-08-23T13:01+03:00 fresh post-hardening balance read
