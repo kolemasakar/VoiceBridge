@@ -1,0 +1,215 @@
+name: A9.6 Facebook Current AI Request
+
+on:
+  push:
+    branches:
+      - agent/krc-media-transcript
+    paths:
+      - .github/workflows/a9-6-facebook-current-ai-request.yml
+
+permissions:
+  contents: read
+  issues: write
+  pull-requests: write
+
+concurrency:
+  group: a9-6-facebook-current-ai-request
+  cancel-in-progress: false
+
+env:
+  RENDER_API_BASE: https://api.render.com/v1
+  SERVICE_ID: srv-da1kic5bedkc73d6fk60
+  SERVICE_NAME: voicebridge-krc-media-beta-kolemasakar
+  REQUIRED_BRANCH: agent/krc-media-transcript
+  BETA_BASE_URL: https://voicebridge-krc-media-beta-kolemasakar.onrender.com
+  FACEBOOK_URL: https://www.facebook.com/reel/1114235920664408
+  JOB_ID: KRCM_1e99b074-fdf6-4144-9278-0e66e9a79713
+  EXPECTED_BEFORE: '84'
+  EXPECTED_MAX: '2'
+  EXPECTED_AFTER_MAX: '82'
+  EXPECTED_DURATION: '22'
+
+jobs:
+  run:
+    runs-on: ubuntu-latest
+    env:
+      RENDER_API_KEY: ${{ secrets.RENDER_API_KEY }}
+      GH_TOKEN: ${{ github.token }}
+    steps:
+      - name: Enforce isolated target and read Action bearer
+        id: action
+        shell: bash
+        run: |
+          set -euo pipefail
+          test -n "${RENDER_API_KEY:-}"
+          echo "::add-mask::$RENDER_API_KEY"
+          [[ "$GITHUB_REF_NAME" == "$REQUIRED_BRANCH" ]]
+
+          tmp="$(mktemp)"
+          code="$(curl -sS -o "$tmp" -w '%{http_code}' \
+            "${RENDER_API_BASE}/services/${SERVICE_ID}" \
+            -H 'Accept: application/json' \
+            -H "Authorization: Bearer ${RENDER_API_KEY}")"
+          [[ "$code" == 200 ]]
+          [[ "$(jq -r '.name // empty' "$tmp")" == "$SERVICE_NAME" ]]
+          [[ "$(jq -r '.branch // empty' "$tmp")" == "$REQUIRED_BRANCH" ]]
+          rm -f "$tmp"
+
+          tmp="$(mktemp)"
+          code="$(curl -sS -o "$tmp" -w '%{http_code}' \
+            "${RENDER_API_BASE}/services/${SERVICE_ID}/env-vars/KRC_MEDIA_ACTION_TOKEN" \
+            -H 'Accept: application/json' \
+            -H "Authorization: Bearer ${RENDER_API_KEY}")"
+          [[ "$code" == 200 ]]
+          token="$(jq -r '(.envVar.value // .value // empty)' "$tmp")"
+          rm -f "$tmp"
+          test -n "$token"
+          echo "::add-mask::$token"
+          echo "token=$token" >> "$GITHUB_OUTPUT"
+
+      - name: Guard exact current durable job without provider call
+        env:
+          ACTION_TOKEN: ${{ steps.action.outputs.token }}
+        shell: bash
+        run: |
+          set -euo pipefail
+          payload="$(jq -nc --arg url "$FACEBOOK_URL" '{url:$url,language_hint:"auto"}')"
+          code="$(curl -sS --max-time 60 -o /tmp/lookup.json -w '%{http_code}' \
+            -X POST "${BETA_BASE_URL}/api/v1/media/managed/lookup" \
+            -H 'Accept: application/json' \
+            -H 'Content-Type: application/json' \
+            -H "Authorization: Bearer ${ACTION_TOKEN}" \
+            --data "$payload")"
+          [[ "$code" == 200 ]]
+          jq -e --arg job "$JOB_ID" --argjson duration "$EXPECTED_DURATION" --argjson max "$EXPECTED_MAX" '
+            .job_id == $job and
+            .status == "AWAITING_AI_CONSENT" and
+            .provider == "supadata" and
+            .provider_mode == "native" and
+            .credits_charged == 2 and
+            .segment_count == 0 and
+            .metadata_credits_charged == 1 and
+            .media_duration_seconds == $duration and
+            .ai_credit_ceiling == $max
+          ' /tmp/lookup.json >/dev/null
+
+      - name: Recheck exact approved AI quote
+        id: quote
+        env:
+          ACTION_TOKEN: ${{ steps.action.outputs.token }}
+        shell: bash
+        run: |
+          set -euo pipefail
+          code="$(curl -sS --max-time 60 -o /tmp/quote.json -w '%{http_code}' \
+            "${BETA_BASE_URL}/api/v1/media/managed/transcriptions/${JOB_ID}/ai-preflight" \
+            -H 'Accept: application/json' \
+            -H "Authorization: Bearer ${ACTION_TOKEN}")"
+          [[ "$code" == 200 ]]
+          jq -e --argjson duration "$EXPECTED_DURATION" --argjson max "$EXPECTED_MAX" '
+            .provider == "supadata" and
+            .mode == "generate" and
+            .estimate_basis == "facebook_metadata_duration" and
+            .media_duration_seconds == $duration and
+            .maximum_credits == $max and
+            .credits_per_minute == 2 and
+            .consent_required == true and
+            .can_continue == true
+          ' /tmp/quote.json >/dev/null
+          available="$(jq -r '.credits_available' /tmp/quote.json)"
+          maximum="$(jq -r '.maximum_credits' /tmp/quote.json)"
+          after="$(jq -r '.credits_after_estimate' /tmp/quote.json)"
+          [[ "$available" == "$EXPECTED_BEFORE" ]]
+          [[ "$maximum" == "$EXPECTED_MAX" ]]
+          [[ "$after" == "$EXPECTED_AFTER_MAX" ]]
+          echo "available=$available" >> "$GITHUB_OUTPUT"
+          echo "maximum=$maximum" >> "$GITHUB_OUTPUT"
+          echo "after=$after" >> "$GITHUB_OUTPUT"
+
+      - name: Execute exactly one approved Facebook AI request
+        id: ai
+        env:
+          ACTION_TOKEN: ${{ steps.action.outputs.token }}
+        shell: bash
+        run: |
+          set -euo pipefail
+          payload='{"credit_consent":{"provider":"supadata","mode":"generate","max_credits":2}}'
+          code="$(curl -sS --max-time 240 -o /tmp/result.json -w '%{http_code}' \
+            -X POST "${BETA_BASE_URL}/api/v1/media/managed/transcriptions/${JOB_ID}/ai" \
+            -H 'Accept: application/json' \
+            -H 'Content-Type: application/json' \
+            -H "Authorization: Bearer ${ACTION_TOKEN}" \
+            --data "$payload")"
+          status="$(jq -r '.status // "unknown"' /tmp/result.json 2>/dev/null || echo unknown)"
+          provider_mode="$(jq -r '.provider_mode // "unknown"' /tmp/result.json 2>/dev/null || echo unknown)"
+          cumulative="$(jq -r '.credits_charged // "unknown"' /tmp/result.json 2>/dev/null || echo unknown)"
+          segments="$(jq -r '.segment_count // "0"' /tmp/result.json 2>/dev/null || echo 0)"
+          chars="$(jq -r '.transcript_characters // "0"' /tmp/result.json 2>/dev/null || echo 0)"
+          language="$(jq -r '.detected_language // "unknown"' /tmp/result.json 2>/dev/null || echo unknown)"
+          uncertain="$(jq -r '.credit_charge_uncertain // "unknown"' /tmp/result.json 2>/dev/null || echo unknown)"
+          error_code="$(jq -r '.error.code // "none"' /tmp/result.json 2>/dev/null || echo none)"
+          echo "http=$code" >> "$GITHUB_OUTPUT"
+          echo "status=$status" >> "$GITHUB_OUTPUT"
+          echo "provider_mode=$provider_mode" >> "$GITHUB_OUTPUT"
+          echo "cumulative=$cumulative" >> "$GITHUB_OUTPUT"
+          echo "segments=$segments" >> "$GITHUB_OUTPUT"
+          echo "chars=$chars" >> "$GITHUB_OUTPUT"
+          echo "language=$language" >> "$GITHUB_OUTPUT"
+          echo "uncertain=$uncertain" >> "$GITHUB_OUTPUT"
+          echo "error_code=$error_code" >> "$GITHUB_OUTPUT"
+          [[ "$code" == 200 ]]
+
+      - name: Verify post-request balance using free preflight
+        id: after
+        if: always() && steps.ai.outcome != 'skipped'
+        env:
+          ACTION_TOKEN: ${{ steps.action.outputs.token }}
+        shell: bash
+        run: |
+          set -euo pipefail
+          payload="$(jq -nc --arg url "$FACEBOOK_URL" '{url:$url,language_hint:"auto"}')"
+          code="$(curl -sS --max-time 60 -o /tmp/post.json -w '%{http_code}' \
+            -X POST "${BETA_BASE_URL}/api/v1/media/managed/preflight" \
+            -H 'Accept: application/json' \
+            -H 'Content-Type: application/json' \
+            -H "Authorization: Bearer ${ACTION_TOKEN}" \
+            --data "$payload")"
+          [[ "$code" == 200 ]]
+          balance="$(jq -r '.credits_available' /tmp/post.json)"
+          echo "balance=$balance" >> "$GITHUB_OUTPUT"
+
+      - name: Read transcript segments from durable storage if completed
+        id: durable
+        if: always() && steps.ai.outputs.status == 'COMPLETED'
+        env:
+          ACTION_TOKEN: ${{ steps.action.outputs.token }}
+        shell: bash
+        run: |
+          set -euo pipefail
+          code="$(curl -sS --max-time 60 -o /tmp/segments.json -w '%{http_code}' \
+            "${BETA_BASE_URL}/api/v1/media/managed/transcriptions/${JOB_ID}/segments?cursor=0&limit=50" \
+            -H 'Accept: application/json' \
+            -H "Authorization: Bearer ${ACTION_TOKEN}")"
+          [[ "$code" == 200 ]]
+          count="$(jq -r '(.segments // []) | length' /tmp/segments.json)"
+          [[ "$count" -gt 0 ]]
+          echo "count=$count" >> "$GITHUB_OUTPUT"
+
+      - name: Report current Facebook AI request
+        if: always()
+        env:
+          HTTP: ${{ steps.ai.outputs.http }}
+          STATUS: ${{ steps.ai.outputs.status }}
+          PROVIDER_MODE: ${{ steps.ai.outputs.provider_mode }}
+          CUMULATIVE: ${{ steps.ai.outputs.cumulative }}
+          SEGMENTS: ${{ steps.ai.outputs.segments }}
+          CHARS: ${{ steps.ai.outputs.chars }}
+          LANGUAGE: ${{ steps.ai.outputs.language }}
+          UNCERTAIN: ${{ steps.ai.outputs.uncertain }}
+          ERROR_CODE: ${{ steps.ai.outputs.error_code }}
+          BALANCE_AFTER: ${{ steps.after.outputs.balance }}
+          DURABLE_COUNT: ${{ steps.durable.outputs.count }}
+        shell: bash
+        run: |
+          set -euo pipefail
+          body="A9.6 Facebook current AI request: **${{ job.status == 'success' && 'SUCCESS' || 'FAILURE' }}**. Explicit owner authorization: exactly one AI generate request with hard max \`2\` Supadata credits. Preflight \`84\` -> worst-case \`82\`; http=\`${HTTP:-unknown}\`; job=\`${JOB_ID}\`; status=\`${STATUS:-unknown}\`; provider_mode=\`${PROVIDER_MODE:-unknown}\`; cumulative_job_credits=\`${CUMULATIVE:-unknown}\`; segments=\`${SEGMENTS:-unknown}\`; transcript_characters=\`${CHARS:-unknown}\`; detected_language=\`${LANGUAGE:-unknown}\`; charge_uncertain=\`${UNCERTAIN:-unknown}\`; error=\`${ERROR_CODE:-none}\`; provider_balance_after=\`${BALANCE_AFTER:-unknown}\`; durable_segments_read=\`${DURABLE_COUNT:-0}\`. No second AI start, native retry, metadata retry, production, main, merge, or automatic retry was executed."
+          gh pr comment 28 --repo kolemasakar/VoiceBridge --body "$body"
