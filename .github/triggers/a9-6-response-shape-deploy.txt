@@ -1,4 +1,4 @@
-sha=605e9c69985a57131400478fa33118c18b3f676f
+sha=e5e2d968d87c6fdbefbcad70ecd05395cf61cec1
 scope=isolated-beta-only
 provider_calls=forbidden
-retrigger=2026-08-23T13:56+03:00-failure-accounting-v2
+retrigger=2026-08-23T16:01+03:00-a9-7-c-isolated-deploy
