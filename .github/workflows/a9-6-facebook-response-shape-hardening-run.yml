@@ -29,9 +29,14 @@ jobs:
           fetch-depth: 0
 
       - name: Apply deterministic patch
+        id: patch
+        continue-on-error: true
         run: python scripts/a9_6_response_shape_hardening.py
 
       - name: Build and test full cloud suite
+        id: check
+        if: steps.patch.outcome == 'success'
+        continue-on-error: true
         working-directory: src/cloud
         run: |
           set -euo pipefail
@@ -39,6 +44,9 @@ jobs:
           npm run check
 
       - name: Verify exact patch scope
+        id: scope
+        if: steps.patch.outcome == 'success' && steps.check.outcome == 'success'
+        continue-on-error: true
         run: |
           set -euo pipefail
           git diff --check
@@ -50,6 +58,8 @@ jobs:
 
       - name: Commit validated hardening
         id: commit
+        if: steps.patch.outcome == 'success' && steps.check.outcome == 'success' && steps.scope.outcome == 'success'
+        continue-on-error: true
         run: |
           set -euo pipefail
           git config user.name "github-actions[bot]"
@@ -63,11 +73,23 @@ jobs:
         if: always()
         env:
           COMMIT_SHA: ${{ steps.commit.outputs.sha }}
+          PATCH_OUTCOME: ${{ steps.patch.outcome }}
+          CHECK_OUTCOME: ${{ steps.check.outcome }}
+          SCOPE_OUTCOME: ${{ steps.scope.outcome }}
+          COMMIT_OUTCOME: ${{ steps.commit.outcome }}
         run: |
           set -euo pipefail
-          if [[ "${{ job.status }}" == "success" ]]; then
-            body="A9.6 Supadata response-shape hardening: **PASS**. Commit=\`${COMMIT_SHA}\`. Bounded recursive result unwrapping, chunk-language fallback, normalized async status handling, and shape-only invalid-payload diagnostics added. Full cloud build/tests passed. Diagnostics contain structure/types only and do not log transcript text. No Supadata/provider/preflight/transcript/metadata/AI endpoint was called. Production/main were not targeted."
+          if [[ "$PATCH_OUTCOME" == "success" && "$CHECK_OUTCOME" == "success" && "$SCOPE_OUTCOME" == "success" && "$COMMIT_OUTCOME" == "success" ]]; then
+            body="A9.6 Supadata response-shape hardening: **PASS**. Commit=\`${COMMIT_SHA}\`. patch=\`${PATCH_OUTCOME}\`, cloud_check=\`${CHECK_OUTCOME}\`, scope=\`${SCOPE_OUTCOME}\`, commit=\`${COMMIT_OUTCOME}\`. Bounded recursive result unwrapping, chunk-language fallback, normalized async status handling, and shape-only invalid-payload diagnostics added. Diagnostics contain structure/types only and do not log transcript text. No Supadata/provider/preflight/transcript/metadata/AI endpoint was called. Production/main were not targeted."
           else
-            body="A9.6 Supadata response-shape hardening: **FAILURE**. No Supadata/provider/preflight/transcript/metadata/AI endpoint was called. Production/main were not targeted."
+            body="A9.6 Supadata response-shape hardening: **FAILURE**. patch=\`${PATCH_OUTCOME}\`, cloud_check=\`${CHECK_OUTCOME}\`, scope=\`${SCOPE_OUTCOME}\`, commit=\`${COMMIT_OUTCOME}\`. No Supadata/provider/preflight/transcript/metadata/AI endpoint was called. Production/main were not targeted."
           fi
           gh pr comment 28 --repo kolemasakar/VoiceBridge --body "$body"
+
+      - name: Fail job if validation did not pass
+        if: always()
+        run: |
+          [[ "${{ steps.patch.outcome }}" == "success" ]]
+          [[ "${{ steps.check.outcome }}" == "success" ]]
+          [[ "${{ steps.scope.outcome }}" == "success" ]]
+          [[ "${{ steps.commit.outcome }}" == "success" ]]
