@@ -1,0 +1,3 @@
+trigger=2026-08-23T12:17+03:00
+scope=isolated-beta-only
+provider_calls=forbidden
