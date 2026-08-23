@@ -1,7 +1,0 @@
-scope=code-only-free
-providers=forbidden
-render=forbidden
-production=forbidden
-main=forbidden
-trigger=2026-08-23T14:39+03:00
-retrigger=registered-workflow
