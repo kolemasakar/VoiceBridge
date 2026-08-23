@@ -1,0 +1,5 @@
+A9.7-H1 approved one real Facebook Cobalt acceptance.
+Target: https://www.facebook.com/reel/1114235920664408/
+Exactly one managed facebook-fallback start endpoint.
+No paid continuation, ScrapeCreators, or Supadata.
+AssemblyAI only if Cobalt returns media.
