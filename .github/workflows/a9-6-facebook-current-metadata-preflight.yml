@@ -6,6 +6,7 @@ on:
       - agent/krc-media-transcript
     paths:
       - .github/workflows/a9-6-facebook-current-metadata-preflight.yml
+      - .github/triggers/a9-6-current-metadata-preflight.txt
 
 permissions:
   contents: read
