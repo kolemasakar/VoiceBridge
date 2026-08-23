@@ -521,6 +521,7 @@ export class ManagedMediaService {
       expiresAt: this.expiryFrom(updatedAt)
     };
     interrupted.expiresAt = this.expiryFrom(updatedAt, interrupted.job);
+    interrupted.expiresAt = this.expiryFrom(updatedAt, interrupted.job);
     await this.store.put(interrupted);
     return interrupted;
   }
@@ -692,6 +693,7 @@ export class ManagedMediaService {
       expiresAt: this.expiryFrom(startedAt)
     };
     processing.expiresAt = this.expiryFrom(processing.job.updated_at, processing.job);
+    processing.expiresAt = this.expiryFrom(processing.job.updated_at, processing.job);
     await this.store.put(processing);
     this.inFlight.add(record.requestKey);
     try {
@@ -723,6 +725,7 @@ export class ManagedMediaService {
         expiresAt: this.expiryFrom(updatedAt)
       };
       updated.expiresAt = this.expiryFrom(updated.job.updated_at, updated.job);
+    updated.expiresAt = this.expiryFrom(updated.job.updated_at, updated.job);
     await this.store.put(updated);
       return this.publicJob(updated.job, false);
     } catch (error) {
@@ -751,6 +754,7 @@ export class ManagedMediaService {
         expiresAt: this.expiryFrom(updatedAt)
       };
       failed.expiresAt = this.expiryFrom(failed.job.updated_at, failed.job);
+    failed.expiresAt = this.expiryFrom(failed.job.updated_at, failed.job);
     await this.store.put(failed);
       return this.publicJob(failed.job, false);
     } finally {
@@ -903,6 +907,7 @@ export class ManagedMediaService {
       expiresAt: this.expiryFrom(now)
     };
     record.expiresAt = this.expiryFrom(job.updated_at, job);
+    record.expiresAt = this.expiryFrom(job.updated_at, job);
     const reservation = await this.store.reserve(record);
     if (!reservation.created) {
       const resolved = reservation.record.job.status === "PROCESSING" &&
@@ -949,6 +954,7 @@ export class ManagedMediaService {
         expiresAt: this.expiryFrom(updatedAt)
       };
       updated.expiresAt = this.expiryFrom(updated.job.updated_at, updated.job);
+    updated.expiresAt = this.expiryFrom(updated.job.updated_at, updated.job);
     await this.store.put(updated);
       return this.publicJob(updated.job, false);
     } catch (error) {
@@ -977,6 +983,7 @@ export class ManagedMediaService {
         expiresAt: this.expiryFrom(updatedAt)
       };
       failed.expiresAt = this.expiryFrom(failed.job.updated_at, failed.job);
+    failed.expiresAt = this.expiryFrom(failed.job.updated_at, failed.job);
     await this.store.put(failed);
       return this.publicJob(failed.job, false);
     } finally {
@@ -1075,6 +1082,7 @@ export class ManagedMediaService {
       expiresAt: this.expiryFrom(startedAt)
     };
     processing.expiresAt = this.expiryFrom(processing.job.updated_at, processing.job);
+    processing.expiresAt = this.expiryFrom(processing.job.updated_at, processing.job);
     await this.store.put(processing);
     this.inFlight.add(record.requestKey);
     try {
@@ -1105,6 +1113,7 @@ export class ManagedMediaService {
         expiresAt: this.expiryFrom(updatedAt)
       };
       updated.expiresAt = this.expiryFrom(updated.job.updated_at, updated.job);
+    updated.expiresAt = this.expiryFrom(updated.job.updated_at, updated.job);
     await this.store.put(updated);
       return this.publicJob(updated.job, false);
     } catch (error) {
@@ -1133,6 +1142,7 @@ export class ManagedMediaService {
         expiresAt: this.expiryFrom(updatedAt)
       };
       failed.expiresAt = this.expiryFrom(failed.job.updated_at, failed.job);
+    failed.expiresAt = this.expiryFrom(failed.job.updated_at, failed.job);
     await this.store.put(failed);
       return this.publicJob(failed.job, false);
     } finally {
