@@ -28,386 +28,259 @@ jobs:
           ref: agent/krc-media-transcript
           fetch-depth: 0
 
-      - name: Apply parser hardening and safe shape diagnostics
+      - name: Apply failure accounting and empty-result classification
         shell: bash
         run: |
           set -euo pipefail
           python - <<'PY'
           from pathlib import Path
 
-          source_path = Path("src/cloud/src/supadata_provider.ts")
-          source = source_path.read_text()
+          provider_path = Path('src/cloud/src/supadata_provider.ts')
+          provider = provider_path.read_text()
+          old = '''  if (!language || segments.length === 0) {
+    emitSafeTranscriptShape(rawPayload, context);
+    throw new MediaTranscriptError(
+      "MANAGED_PROVIDER_TRANSCRIPT_INVALID",
+      "The managed transcript provider returned an empty or invalid transcript.",
+      502,
+      true
+    );
+  }
+'''
+          new = '''  if (Array.isArray(payload.content) && payload.content.length === 0) {
+    emitSafeTranscriptShape(rawPayload, context);
+    throw new MediaTranscriptError(
+      "MANAGED_PROVIDER_TRANSCRIPT_EMPTY",
+      "The managed transcript provider returned an empty transcript.",
+      422,
+      false
+    );
+  }
+  if (!language || segments.length === 0) {
+    emitSafeTranscriptShape(rawPayload, context);
+    throw new MediaTranscriptError(
+      "MANAGED_PROVIDER_TRANSCRIPT_INVALID",
+      "The managed transcript provider returned an invalid transcript payload.",
+      502,
+      true
+    );
+  }
+'''
+          if old not in provider:
+            raise SystemExit('provider classification anchor not found')
+          provider_path.write_text(provider.replace(old, new, 1))
 
-          old_block = '''function unwrapTranscriptPayload(
-            payload: SupadataTranscriptResponse
-          ): SupadataTranscriptResponse {
-            const nested = payload.result;
-            if (!nested || typeof nested !== "object" || Array.isArray(nested)) {
-              return payload;
-            }
-            return {
-              ...payload,
-              ...(nested as SupadataTranscriptResponse)
-            };
+          service_path = Path('src/cloud/src/managed_media_service.ts')
+          service = service_path.read_text()
+          anchor = '''  async preflight(
+    input: ManagedMediaPreflightInput
+  ): Promise<ManagedMediaCreditPreflight> {
+'''
+          helper = '''  private async reconcileAiFailureCharge(
+    record: ManagedMediaStoredRecord,
+    quote: SupadataGenerateCreditQuote
+  ): Promise<{ billableCredits: number; remainingCredits: number; certain: boolean }> {
+    try {
+      const platform = managedMediaPlatform(record.job.source_url);
+      let afterQuote: SupadataGenerateCreditQuote | null = null;
+      if (isManagedInstagramReelUrl(record.job.source_url)) {
+        if (!this.transcriptProvider?.quoteGenerateInstagramReel) {
+          return { billableCredits: 0, remainingCredits: quote.remaining_credits, certain: false };
+        }
+        afterQuote = await this.transcriptProvider.quoteGenerateInstagramReel();
+      } else if (
+        platform === "facebook" &&
+        (record.job.media_duration_seconds ?? null) !== null &&
+        this.transcriptProvider?.quoteGenerateForDuration
+      ) {
+        afterQuote = await this.transcriptProvider.quoteGenerateForDuration(
+          record.job.media_duration_seconds!
+        );
+      }
+      if (!afterQuote) {
+        return { billableCredits: 0, remainingCredits: quote.remaining_credits, certain: false };
+      }
+      return {
+        billableCredits: Math.max(0, quote.remaining_credits - afterQuote.remaining_credits),
+        remainingCredits: afterQuote.remaining_credits,
+        certain: true
+      };
+    } catch {
+      return { billableCredits: 0, remainingCredits: quote.remaining_credits, certain: false };
+    }
+  }
+
+'''
+          if anchor not in service:
+            raise SystemExit('service helper anchor not found')
+          service = service.replace(anchor, helper + anchor, 1)
+
+          old_catch = '''    } catch (error) {
+      const normalized = error instanceof MediaTranscriptError
+        ? error
+        : new MediaTranscriptError(
+          "MANAGED_PROVIDER_AI_TRANSCRIPT_FAILED",
+          "Managed AI transcript processing failed.",
+          500,
+          false
+        );
+      const updatedAt = new Date().toISOString();
+      const failed: ManagedMediaStoredRecord = {
+        ...processing,
+        job: {
+          ...processing.job,
+          status: "FAILED",
+          updated_at: updatedAt,
+          credit_charge_uncertain: true,
+          error: {
+            code: normalized.code,
+            message: normalized.message,
+            retryable: false
           }
-
-          function parseTranscriptResult(
-            payload: SupadataTranscriptResponse,
-            billableCredits: number
-          ): SupadataGeneratedTranscriptResult {
-            payload = unwrapTranscriptPayload(payload);
-            const language = nonEmptyString(payload.lang);
-            const segments = parseSegments(payload.content);
-            const availableLanguages = Array.isArray(payload.availableLangs)
-              ? payload.availableLangs.flatMap((value) => {
-                  const languageValue = nonEmptyString(value);
-                  return languageValue ? [languageValue] : [];
-                })
-              : [];
-            if (!language || segments.length === 0) {
-              throw new MediaTranscriptError(
-                "MANAGED_PROVIDER_TRANSCRIPT_INVALID",
-                "The managed transcript provider returned an empty or invalid transcript.",
-                502,
-                true
-              );
-            }
-            return {
-              status: "completed",
-              language,
-              available_languages: availableLanguages,
-              segments,
-              transcript_text: segments.map((segment) => segment.text).join(" "),
-              billable_credits: billableCredits
-            };
+        },
+        expiresAt: this.expiryFrom(updatedAt)
+      };
+'''
+          new_catch = '''    } catch (error) {
+      const normalized = error instanceof MediaTranscriptError
+        ? error
+        : new MediaTranscriptError(
+          "MANAGED_PROVIDER_AI_TRANSCRIPT_FAILED",
+          "Managed AI transcript processing failed.",
+          500,
+          false
+        );
+      const reconciliation = await this.reconcileAiFailureCharge(record, quote);
+      const capBreached = reconciliation.billableCredits > input.credit_consent.max_credits;
+      const updatedAt = new Date().toISOString();
+      const failed: ManagedMediaStoredRecord = {
+        ...processing,
+        job: {
+          ...processing.job,
+          status: "FAILED",
+          updated_at: updatedAt,
+          credits_charged: record.job.credits_charged + reconciliation.billableCredits,
+          credits_remaining_estimate: reconciliation.remainingCredits,
+          credit_charge_uncertain: !reconciliation.certain,
+          error: {
+            code: capBreached ? "MANAGED_PROVIDER_AI_CREDIT_CAP_BREACH" : normalized.code,
+            message: capBreached
+              ? "The provider balance moved by more credits than the user-approved AI maximum."
+              : normalized.message,
+            retryable: false
           }
-          '''
+        },
+        expiresAt: this.expiryFrom(updatedAt)
+      };
+'''
+          if old_catch not in service:
+            raise SystemExit('AI catch anchor not found')
+          service_path.write_text(service.replace(old_catch, new_catch, 1))
 
-          new_block = '''function valueType(value: unknown): string {
-            if (value === null) return "null";
-            if (Array.isArray(value)) return "array";
-            return typeof value;
-          }
+          provider_test_path = Path('src/cloud/tests/supadata_provider.test.ts')
+          provider_tests = provider_test_path.read_text()
+          import_line = 'import { MediaTranscriptError } from "../src/media_transcript.js";\n'
+          if import_line not in provider_tests:
+            anchor_import = 'import { SupadataProvider } from "../src/supadata_provider.js";\n'
+            if anchor_import not in provider_tests:
+              raise SystemExit('provider test import anchor not found')
+            provider_tests = provider_tests.replace(anchor_import, anchor_import + import_line, 1)
+          if 'Supadata classifies HTTP 200 empty generated transcript separately' not in provider_tests:
+            provider_tests += r'''
 
-          function objectKeys(value: unknown): string[] {
-            if (!value || typeof value !== "object" || Array.isArray(value)) return [];
-            return Object.keys(value as Record<string, unknown>).sort();
-          }
+test("Supadata classifies HTTP 200 empty generated transcript separately", async () => {
+  let accountReads = 0;
+  await withMockServer((request, response) => {
+    const url = new URL(request.url || "/", "http://localhost");
+    if (url.pathname === "/me") {
+      accountReads += 1;
+      response.writeHead(200, { "content-type": "application/json" });
+      response.end(JSON.stringify({ organizationId: "org-empty", plan: "Free", maxCredits: 100, usedCredits: 22 }));
+      return;
+    }
+    assert.equal(url.pathname, "/transcript");
+    response.writeHead(200, { "content-type": "application/json", "x-billable-requests": "2" });
+    response.end(JSON.stringify({ lang: "uk", availableLangs: ["uk"], content: [] }));
+  }, async (baseUrl) => {
+    const provider = new SupadataProvider("test-key", baseUrl, 0, 2);
+    await assert.rejects(
+      provider.getGeneratedTranscript("https://www.facebook.com/reel/empty-result/", 2),
+      (error: unknown) => {
+        assert.ok(error instanceof MediaTranscriptError);
+        assert.equal(error.code, "MANAGED_PROVIDER_TRANSCRIPT_EMPTY");
+        assert.equal(error.retryable, false);
+        return true;
+      }
+    );
+    assert.equal(accountReads, 1);
+  });
+});
+'''
+          provider_test_path.write_text(provider_tests)
 
-          function nestedResultDepth(payload: SupadataTranscriptResponse): number {
-            let depth = 0;
-            let current: unknown = payload.result;
-            while (current && typeof current === "object" && !Array.isArray(current) && depth < 8) {
-              depth += 1;
-              current = (current as SupadataTranscriptResponse).result;
-            }
-            if (Array.isArray(current)) depth += 1;
-            return depth;
-          }
+          facebook_test_path = Path('src/cloud/tests/managed_media_facebook.test.ts')
+          facebook_tests = facebook_test_path.read_text()
+          import_line = 'import { MediaTranscriptError } from "../src/media_transcript.js";\n'
+          if import_line not in facebook_tests:
+            anchor_import = 'import { MediaBetaGate } from "../src/media_beta.js";\n'
+            if anchor_import not in facebook_tests:
+              raise SystemExit('facebook test import anchor not found')
+            facebook_tests = facebook_tests.replace(anchor_import, anchor_import + import_line, 1)
+          if 'Facebook AI failure reconciles provider charge and preserves empty-transcript classification' not in facebook_tests:
+            facebook_tests += r'''
 
-          function unwrapTranscriptPayload(
-            payload: SupadataTranscriptResponse
-          ): SupadataTranscriptResponse {
-            let merged: SupadataTranscriptResponse = { ...payload };
-            let nested: unknown = payload.result;
-            let depth = 0;
-            while (nested && typeof nested === "object" && !Array.isArray(nested) && depth < 4) {
-              const nestedPayload = nested as SupadataTranscriptResponse;
-              merged = { ...merged, ...nestedPayload };
-              nested = nestedPayload.result;
-              depth += 1;
-            }
-            if (Array.isArray(nested) && !Array.isArray(merged.content)) {
-              merged = { ...merged, content: nested };
-            } else if (Array.isArray(payload.result) && !Array.isArray(merged.content)) {
-              merged = { ...merged, content: payload.result };
-            }
-            return merged;
-          }
+class FacebookEmptyAiProvider implements ManagedNativeTranscriptProvider {
+  aiCalls = 0;
+  aiFailed = false;
+  async quoteNative() {
+    return { provider: "supadata" as const, mode: "native" as const, plan: "Free", max_credits: 100, used_credits: 19, remaining_credits: 81, estimated_credits: 1 as const, remaining_after_estimate: 80, consent_required: true as const, can_continue: true };
+  }
+  async getNativeTranscript() {
+    return { status: "unavailable" as const, billable_credits: 1 };
+  }
+  async quoteMetadata() {
+    return { provider: "supadata" as const, mode: "metadata" as const, plan: "Free", max_credits: 100, used_credits: 20, remaining_credits: 80, estimated_credits: 1 as const, remaining_after_estimate: 79, consent_required: true as const, can_continue: true };
+  }
+  async getMetadataDuration() {
+    return { duration_seconds: 22, billable_credits: 1 };
+  }
+  async quoteGenerateForDuration(durationSeconds: number) {
+    assert.equal(durationSeconds, 22);
+    const remaining = this.aiFailed ? 78 : 80;
+    return { provider: "supadata" as const, mode: "generate" as const, plan: "Free", max_credits: 100, used_credits: 100 - remaining, remaining_credits: remaining, estimated_credits: 2, maximum_credits: 2, credits_per_minute: 2, maximum_duration_minutes: 1, remaining_after_estimate: Math.max(0, remaining - 2), conservative_maximum: true as const, consent_required: true as const, can_continue: remaining >= 2 };
+  }
+  async getGeneratedTranscript(_url: string, approvedMaxCredits?: number) {
+    this.aiCalls += 1;
+    assert.equal(approvedMaxCredits, 2);
+    this.aiFailed = true;
+    throw new MediaTranscriptError("MANAGED_PROVIDER_TRANSCRIPT_EMPTY", "The managed transcript provider returned an empty transcript.", 422, false);
+  }
+}
 
-          function inferTranscriptLanguage(
-            payload: SupadataTranscriptResponse,
-            content: unknown
-          ): string | null {
-            const explicit = nonEmptyString(payload.lang);
-            if (explicit) return explicit;
-            if (!Array.isArray(content)) return null;
-            const languages = new Set<string>();
-            for (const value of content) {
-              if (!value || typeof value !== "object" || Array.isArray(value)) continue;
-              const language = nonEmptyString((value as SupadataTranscriptChunk).lang);
-              if (language) languages.add(language);
-            }
-            return languages.size === 1 ? [...languages][0] ?? null : null;
-          }
-
-          function safeTranscriptPayloadShape(payload: SupadataTranscriptResponse): Record<string, unknown> {
-            const unwrapped = unwrapTranscriptPayload(payload);
-            const content = unwrapped.content;
-            const firstItem = Array.isArray(content) && content.length > 0 ? content[0] : null;
-            const firstItemKeys = objectKeys(firstItem);
-            const firstItemTypes = firstItem && typeof firstItem === "object" && !Array.isArray(firstItem)
-              ? Object.fromEntries(firstItemKeys.map((key) => [
-                  key,
-                  valueType((firstItem as Record<string, unknown>)[key])
-                ]))
-              : {};
-            const firstResult = payload.result && typeof payload.result === "object" && !Array.isArray(payload.result)
-              ? payload.result as SupadataTranscriptResponse
-              : null;
-            return {
-              top_level_keys: objectKeys(payload),
-              status: nonEmptyString(payload.status),
-              result_type: valueType(payload.result),
-              result_keys: objectKeys(payload.result),
-              nested_result_type: valueType(firstResult?.result),
-              nested_result_depth: nestedResultDepth(payload),
-              content_type: valueType(content),
-              content_length: Array.isArray(content) ? content.length : null,
-              content_item_keys: firstItemKeys,
-              content_item_types: firstItemTypes,
-              lang_type: valueType(unwrapped.lang),
-              available_langs_type: valueType(unwrapped.availableLangs)
-            };
-          }
-
-          function emitSafeTranscriptShape(
-            payload: SupadataTranscriptResponse,
-            context: { phase: string; http_status?: number } | null
-          ): void {
-            console.warn(
-              "KRC_SUPADATA_TRANSCRIPT_SHAPE",
-              JSON.stringify({
-                phase: context?.phase ?? "unknown",
-                http_status: context?.http_status ?? null,
-                ...safeTranscriptPayloadShape(payload)
-              })
-            );
-          }
-
-          function parseTranscriptResult(
-            payload: SupadataTranscriptResponse,
-            billableCredits: number,
-            context: { phase: string; http_status?: number } | null = null
-          ): SupadataGeneratedTranscriptResult {
-            const rawPayload = payload;
-            payload = unwrapTranscriptPayload(payload);
-            const language = inferTranscriptLanguage(payload, payload.content);
-            const segments = parseSegments(payload.content);
-            const explicitAvailableLanguages = Array.isArray(payload.availableLangs)
-              ? payload.availableLangs.flatMap((value) => {
-                  const languageValue = nonEmptyString(value);
-                  return languageValue ? [languageValue] : [];
-                })
-              : [];
-            const availableLanguages = explicitAvailableLanguages.length > 0
-              ? explicitAvailableLanguages
-              : language ? [language] : [];
-            if (!language || segments.length === 0) {
-              emitSafeTranscriptShape(rawPayload, context);
-              throw new MediaTranscriptError(
-                "MANAGED_PROVIDER_TRANSCRIPT_INVALID",
-                "The managed transcript provider returned an empty or invalid transcript.",
-                502,
-                true
-              );
-            }
-            return {
-              status: "completed",
-              language,
-              available_languages: availableLanguages,
-              segments,
-              transcript_text: segments.map((segment) => segment.text).join(" "),
-              billable_credits: billableCredits
-            };
-          }
-          '''
-
-          if old_block not in source:
-            raise SystemExit("parser block not found; refusing non-deterministic patch")
-          source = source.replace(old_block, new_block, 1)
-
-          old_native = '''    const result = parseTranscriptResult(
-              payload,
-              billableCredits || NATIVE_TRANSCRIPT_CREDITS
-            );'''
-          new_native = '''    const result = parseTranscriptResult(
-              payload,
-              billableCredits || NATIVE_TRANSCRIPT_CREDITS,
-              { phase: "native", http_status: response.status }
-            );'''
-          if old_native not in source:
-            raise SystemExit("native parse call not found")
-          source = source.replace(old_native, new_native, 1)
-
-          old_initial = '''    let payload = initial.payload;
-            if (initial.response.status === 202 || nonEmptyString(payload.jobId)) {'''
-          new_initial = '''    let payload = unwrapTranscriptPayload(initial.payload);
-            let finalHttpStatus = initial.response.status;
-            if (initial.response.status === 202 || nonEmptyString(payload.jobId)) {'''
-          if old_initial not in source:
-            raise SystemExit("generated initial payload block not found")
-          source = source.replace(old_initial, new_initial, 1)
-
-          old_poll = '''        const status = nonEmptyString(polled.payload.status);
-                if (status === "queued" || status === "active") continue;
-                if (status === "failed") {'''
-          new_poll = '''        const polledPayload = unwrapTranscriptPayload(polled.payload);
-                const status = nonEmptyString(polledPayload.status)?.toLowerCase() ?? null;
-                if (status === "queued" || status === "active") continue;
-                if (status === "failed") {'''
-          if old_poll not in source:
-            raise SystemExit("poll status block not found")
-          source = source.replace(old_poll, new_poll, 1)
-
-          old_completed = '''        if (status === "completed") {
-                  payload = polled.payload;
-                  billedFromHeader = billedFromHeader || parseBillableCredits(polled.response.headers);
-                  completed = true;
-                  break;
-                }
-                throw new MediaTranscriptError('''
-          new_completed = '''        if (status === "completed") {
-                  payload = polledPayload;
-                  finalHttpStatus = polled.response.status;
-                  billedFromHeader = billedFromHeader || parseBillableCredits(polled.response.headers);
-                  completed = true;
-                  break;
-                }
-                emitSafeTranscriptShape(polled.payload, {
-                  phase: "generate-poll-status",
-                  http_status: polled.response.status
-                });
-                throw new MediaTranscriptError('''
-          if old_completed not in source:
-            raise SystemExit("completed poll block not found")
-          source = source.replace(old_completed, new_completed, 1)
-
-          old_final = '''    const preliminary = parseTranscriptResult(payload, billedFromHeader);'''
-          new_final = '''    const preliminary = parseTranscriptResult(
-              payload,
-              billedFromHeader,
-              { phase: "generate-final", http_status: finalHttpStatus }
-            );'''
-          if old_final not in source:
-            raise SystemExit("generated final parse call not found")
-          source = source.replace(old_final, new_final, 1)
-          source_path.write_text(source)
-
-          test_path = Path("src/cloud/tests/supadata_provider.test.ts")
-          tests = test_path.read_text()
-          marker = 'test("Supadata generated transcript accepts deeply nested result and infers chunk language"'
-          if marker not in tests:
-            tests += r'''
-
-          test("Supadata generated transcript accepts deeply nested result and infers chunk language", async () => {
-            let accountReads = 0;
-            await withMockServer((request, response) => {
-              const url = new URL(request.url || "/", "http://localhost");
-              if (url.pathname === "/me") {
-                accountReads += 1;
-                response.writeHead(200, { "content-type": "application/json" });
-                response.end(JSON.stringify({
-                  organizationId: "org-fb-deep",
-                  plan: "Free",
-                  maxCredits: 100,
-                  usedCredits: accountReads === 1 ? 20 : 22
-                }));
-                return;
-              }
-              if (url.pathname === "/transcript") {
-                response.writeHead(202, {
-                  "content-type": "application/json",
-                  "x-billable-requests": "2"
-                });
-                response.end(JSON.stringify({ jobId: "job-fb-deep" }));
-                return;
-              }
-              assert.equal(url.pathname, "/transcript/job-fb-deep");
-              response.writeHead(200, { "content-type": "application/json" });
-              response.end(JSON.stringify({
-                status: "COMPLETED",
-                result: {
-                  result: {
-                    content: [
-                      { text: "Deep nested transcript", offset: 0, duration: 22000, lang: "uk" }
-                    ]
-                  }
-                }
-              }));
-            }, async (baseUrl) => {
-              const provider = new SupadataProvider("test-key", baseUrl, 0, 2);
-              const result = await provider.getGeneratedTranscript(
-                "https://www.facebook.com/reel/1234567890/",
-                2
-              );
-              assert.equal(result.status, "completed");
-              assert.equal(result.billable_credits, 2);
-              assert.equal(result.language, "uk");
-              assert.deepEqual(result.available_languages, ["uk"]);
-              assert.equal(result.segments.length, 1);
-              assert.equal(result.segments[0]?.end_ms, 22000);
-              assert.equal(accountReads, 2);
-            });
-          });
-
-          test("Supadata invalid transcript diagnostic exposes shape but never transcript text", async () => {
-            const secretTranscriptText = "DO-NOT-LOG-TRANSCRIPT-TEXT";
-            const warnings: string[] = [];
-            const originalWarn = console.warn;
-            console.warn = (...values: unknown[]) => {
-              warnings.push(values.map((value) => String(value)).join(" "));
-            };
-            try {
-              await withMockServer((request, response) => {
-                const url = new URL(request.url || "/", "http://localhost");
-                if (url.pathname === "/me") {
-                  response.writeHead(200, { "content-type": "application/json" });
-                  response.end(JSON.stringify({
-                    organizationId: "org-shape",
-                    plan: "Free",
-                    maxCredits: 100,
-                    usedCredits: 22
-                  }));
-                  return;
-                }
-                assert.equal(url.pathname, "/transcript");
-                response.writeHead(200, {
-                  "content-type": "application/json",
-                  "x-billable-requests": "2"
-                });
-                response.end(JSON.stringify({
-                  status: "completed",
-                  result: {
-                    content: [
-                      { text: secretTranscriptText, offset: "invalid", duration: 22000 }
-                    ]
-                  }
-                }));
-              }, async (baseUrl) => {
-                const provider = new SupadataProvider("test-key", baseUrl, 0, 2);
-                await assert.rejects(
-                  provider.getGeneratedTranscript(
-                    "https://www.facebook.com/reel/shape-only/",
-                    2
-                  ),
-                  /empty or invalid transcript/
-                );
-              });
-            } finally {
-              console.warn = originalWarn;
-            }
-            assert.equal(warnings.length, 1);
-            assert.match(warnings[0] ?? "", /KRC_SUPADATA_TRANSCRIPT_SHAPE/);
-            assert.match(warnings[0] ?? "", /"content_length":1/);
-            assert.match(warnings[0] ?? "", /"content_item_keys":\["duration","offset","text"\]/);
-            assert.doesNotMatch(warnings[0] ?? "", new RegExp(secretTranscriptText));
-          });
-          '''
-            test_path.write_text(tests)
+test("Facebook AI failure reconciles provider charge and preserves empty-transcript classification", async () => {
+  const provider = new FacebookEmptyAiProvider();
+  const service = new ManagedMediaService(new MediaBetaGate([ACCESS_CODE]), null, provider);
+  const native = await service.startNative({ url: "https://www.facebook.com/reel/empty-result/", language_hint: "auto", beta_access_code: ACCESS_CODE, credit_consent: { provider: "supadata", mode: "native", max_credits: 1 } });
+  assert.equal(native.status, "AWAITING_AI_CONSENT");
+  const metadata = await service.startFacebookMetadata(native.job_id, { beta_access_code: ACCESS_CODE, credit_consent: { provider: "supadata", mode: "metadata", max_credits: 1 } });
+  assert.equal(metadata.media_duration_seconds, 22);
+  assert.equal(metadata.ai_credit_ceiling, 2);
+  assert.equal(metadata.credits_charged, 2);
+  const failed = await service.startAi(native.job_id, { beta_access_code: ACCESS_CODE, credit_consent: { provider: "supadata", mode: "generate", max_credits: 2 } });
+  assert.equal(failed.status, "FAILED");
+  assert.equal(failed.provider_mode, "generate");
+  assert.equal(failed.credits_charged, 4);
+  assert.equal(failed.credits_remaining_estimate, 78);
+  assert.equal(failed.credit_charge_uncertain, false);
+  assert.equal(failed.error?.code, "MANAGED_PROVIDER_TRANSCRIPT_EMPTY");
+  assert.equal(failed.error?.retryable, false);
+  assert.equal(provider.aiCalls, 1);
+});
+'''
+          facebook_test_path.write_text(facebook_tests)
           PY
 
-      - name: Build and run full cloud tests
+      - name: Build and run full cloud checks
         working-directory: src/cloud
         shell: bash
         run: |
@@ -415,7 +288,8 @@ jobs:
           npm ci
           npm run check
 
-      - name: Verify patch scope
+      - name: Verify scope and commit
+        id: commit
         shell: bash
         run: |
           set -euo pipefail
@@ -423,32 +297,21 @@ jobs:
           changed="$(git diff --name-only)"
           printf '%s\n' "$changed"
           [[ "$changed" == *"src/cloud/src/supadata_provider.ts"* ]]
+          [[ "$changed" == *"src/cloud/src/managed_media_service.ts"* ]]
           [[ "$changed" == *"src/cloud/tests/supadata_provider.test.ts"* ]]
-          count="$(printf '%s\n' "$changed" | sed '/^$/d' | wc -l | tr -d ' ')"
-          [[ "$count" == 2 ]]
-
-      - name: Commit validated hardening
-        id: commit
-        shell: bash
-        run: |
-          set -euo pipefail
+          [[ "$changed" == *"src/cloud/tests/managed_media_facebook.test.ts"* ]]
+          [[ "$(printf '%s\n' "$changed" | sed '/^$/d' | wc -l)" -eq 4 ]]
           git config user.name "github-actions[bot]"
           git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
-          git add src/cloud/src/supadata_provider.ts src/cloud/tests/supadata_provider.test.ts
-          git commit -m "A9.6: harden Supadata response-shape parsing"
+          git add src/cloud/src/supadata_provider.ts src/cloud/src/managed_media_service.ts src/cloud/tests/supadata_provider.test.ts src/cloud/tests/managed_media_facebook.test.ts
+          git commit -m "A9.6: reconcile failed AI charges and classify empty transcripts"
           git push origin HEAD:agent/krc-media-transcript
-          echo "sha=$(git rev-parse HEAD)" >> "$GITHUB_OUTPUT"
+          echo "code_sha=$(git rev-parse HEAD)" >> "$GITHUB_OUTPUT"
 
-      - name: Report result
+      - name: Report
         if: always()
-        env:
-          COMMIT_SHA: ${{ steps.commit.outputs.sha }}
         shell: bash
+        env:
+          CODE_SHA: ${{ steps.commit.outputs.code_sha }}
         run: |
-          set -euo pipefail
-          if [[ "${{ job.status }}" == "success" ]]; then
-            body="A9.6 Supadata response-shape hardening: **PASS**. Commit=\`${COMMIT_SHA}\`. Added bounded recursive result unwrapping, chunk-language fallback, normalized async status handling, and shape-only invalid-payload diagnostics that do not log transcript text. Full cloud build/tests passed. No Supadata/provider/preflight/transcript/metadata/AI endpoint was called. Production/main were not targeted."
-          else
-            body="A9.6 Supadata response-shape hardening: **FAILURE**. No Supadata/provider/preflight/transcript/metadata/AI endpoint was called. Production/main were not targeted."
-          fi
-          gh pr comment 28 --repo kolemasakar/VoiceBridge --body "$body"
+          gh pr comment 28 --repo kolemasakar/VoiceBridge --body "A9.6 Facebook failure-accounting hardening: status=\`${{ job.status }}\`; code_sha=\`${CODE_SHA:-none}\`; empty_response_code=\`MANAGED_PROVIDER_TRANSCRIPT_EMPTY\`; AI failure balance reconciliation added; full cloud check executed before commit. No Render/provider/preflight/transcript/metadata/AI call was executed by this workflow."
