@@ -1,0 +1,183 @@
+name: A9.6 Facebook New Job Metadata Approved Once
+
+on:
+  push:
+    branches:
+      - agent/krc-media-transcript
+    paths:
+      - .github/triggers/a9-6-facebook-newjob-metadata-approved-once.txt
+
+permissions:
+  contents: read
+  issues: write
+  pull-requests: write
+
+concurrency:
+  group: a9-6-facebook-newjob-metadata-approved-once
+  cancel-in-progress: false
+
+env:
+  RENDER_API_BASE: https://api.render.com/v1
+  SERVICE_ID: srv-da1kic5bedkc73d6fk60
+  SERVICE_NAME: voicebridge-krc-media-beta-kolemasakar
+  REQUIRED_BRANCH: agent/krc-media-transcript
+  REQUIRED_CODE_SHA: 98368918c683c52b0635d73da4b1e55005dd99e6
+  BETA_BASE_URL: https://voicebridge-krc-media-beta-kolemasakar.onrender.com
+  JOB_ID: KRCM_e502967f-05cb-44ec-bb65-cdc014181d5d
+  REQUIRED_AVAILABLE_BEFORE: "81"
+  REQUIRED_AVAILABLE_AFTER: "80"
+
+jobs:
+  metadata-once:
+    runs-on: ubuntu-latest
+    env:
+      RENDER_API_KEY: ${{ secrets.RENDER_API_KEY }}
+      GH_TOKEN: ${{ github.token }}
+    steps:
+      - name: Verify isolated beta and exact live source
+        id: gate
+        shell: bash
+        run: |
+          set -euo pipefail
+          test -n "${RENDER_API_KEY:-}"
+          echo "::add-mask::$RENDER_API_KEY"
+          [[ "$GITHUB_REF_NAME" == "$REQUIRED_BRANCH" ]]
+          service_http="$(curl -sS --max-time 30 -o /tmp/service.json -w '%{http_code}' \
+            "${RENDER_API_BASE}/services/${SERVICE_ID}" \
+            -H 'Accept: application/json' \
+            -H "Authorization: Bearer ${RENDER_API_KEY}")"
+          [[ "$service_http" == 200 ]]
+          [[ "$(jq -r '.name // empty' /tmp/service.json)" == "$SERVICE_NAME" ]]
+          [[ "$(jq -r '.branch // empty' /tmp/service.json)" == "$REQUIRED_BRANCH" ]]
+          deploy_http="$(curl -sS --max-time 30 -o /tmp/deploys.json -w '%{http_code}' \
+            "${RENDER_API_BASE}/services/${SERVICE_ID}/deploys?limit=10" \
+            -H 'Accept: application/json' \
+            -H "Authorization: Bearer ${RENDER_API_KEY}")"
+          [[ "$deploy_http" == 200 ]]
+          live_sha="$(jq -r '[.[] | (.deploy // .) | select(.status == "live")][0] | (.commit.id // .commitId // empty)' /tmp/deploys.json)"
+          [[ "$live_sha" == "$REQUIRED_CODE_SHA" ]]
+          echo "live_sha=$live_sha" >> "$GITHUB_OUTPUT"
+
+      - name: Read and mask Action bearer
+        id: action
+        shell: bash
+        run: |
+          set -euo pipefail
+          code="$(curl -sS --max-time 30 -o /tmp/env.json -w '%{http_code}' \
+            "${RENDER_API_BASE}/services/${SERVICE_ID}/env-vars/KRC_MEDIA_ACTION_TOKEN" \
+            -H 'Accept: application/json' \
+            -H "Authorization: Bearer ${RENDER_API_KEY}")"
+          [[ "$code" == 200 ]]
+          token="$(jq -r '(.envVar.value // .value // empty)' /tmp/env.json)"
+          test -n "$token"
+          echo "::add-mask::$token"
+          echo "token=$token" >> "$GITHUB_OUTPUT"
+
+      - name: Verify exact durable job read-only
+        id: before
+        env:
+          ACTION_TOKEN: ${{ steps.action.outputs.token }}
+        shell: bash
+        run: |
+          set -euo pipefail
+          code="$(curl -sS --max-time 60 -o /tmp/job-before.json -w '%{http_code}' \
+            "${BETA_BASE_URL}/api/v1/media/managed/transcriptions/${JOB_ID}" \
+            -H 'Accept: application/json' \
+            -H "Authorization: Bearer ${ACTION_TOKEN}")"
+          [[ "$code" == 200 ]]
+          jq -e '.job_id == env.JOB_ID and .status == "AWAITING_AI_CONSENT" and .provider_mode == "native" and (.credits_charged // 0) == 1 and (.metadata_credits_charged // 0) == 0 and (.credit_charge_uncertain // false) == false' /tmp/job-before.json >/dev/null
+          echo "status=$(jq -r '.status' /tmp/job-before.json)" >> "$GITHUB_OUTPUT"
+
+      - name: Recheck approved metadata quote
+        id: quote
+        env:
+          ACTION_TOKEN: ${{ steps.action.outputs.token }}
+        shell: bash
+        run: |
+          set -euo pipefail
+          code="$(curl -sS --max-time 60 -o /tmp/meta-quote.json -w '%{http_code}' \
+            "${BETA_BASE_URL}/api/v1/media/managed/transcriptions/${JOB_ID}/facebook-ai-estimate-preflight" \
+            -H 'Accept: application/json' \
+            -H "Authorization: Bearer ${ACTION_TOKEN}")"
+          [[ "$code" == 200 ]]
+          jq -e '.provider == "supadata" and .mode == "metadata" and .purpose == "facebook_ai_duration" and .estimated_credits == 1 and .consent_required == true and .can_continue == true' /tmp/meta-quote.json >/dev/null
+          available="$(jq -r '.credits_available' /tmp/meta-quote.json)"
+          after="$(jq -r '.credits_after_estimate' /tmp/meta-quote.json)"
+          [[ "$available" == "$REQUIRED_AVAILABLE_BEFORE" ]]
+          [[ "$after" == "$REQUIRED_AVAILABLE_AFTER" ]]
+          echo "available=$available" >> "$GITHUB_OUTPUT"
+          echo "after=$after" >> "$GITHUB_OUTPUT"
+
+      - name: Execute exactly one approved metadata-duration request
+        id: metadata
+        env:
+          ACTION_TOKEN: ${{ steps.action.outputs.token }}
+        shell: bash
+        run: |
+          set +e
+          payload='{"credit_consent":{"provider":"supadata","mode":"metadata","max_credits":1}}'
+          curl_rc=0
+          code="$(curl -sS --connect-timeout 20 --max-time 180 -o /tmp/meta-result.json -w '%{http_code}' \
+            -X POST "${BETA_BASE_URL}/api/v1/media/managed/transcriptions/${JOB_ID}/facebook-ai-estimate" \
+            -H 'Accept: application/json' \
+            -H 'Content-Type: application/json' \
+            -H "Authorization: Bearer ${ACTION_TOKEN}" \
+            --data "$payload")" || curl_rc=$?
+          echo "attempts=1" >> "$GITHUB_OUTPUT"
+          echo "curl_rc=$curl_rc" >> "$GITHUB_OUTPUT"
+          echo "http=${code:-000}" >> "$GITHUB_OUTPUT"
+          echo "status=$(jq -r '.status // "unknown"' /tmp/meta-result.json 2>/dev/null)" >> "$GITHUB_OUTPUT"
+          echo "metadata_credits=$(jq -r '.metadata_credits_charged // "unknown"' /tmp/meta-result.json 2>/dev/null)" >> "$GITHUB_OUTPUT"
+          echo "cumulative=$(jq -r '.credits_charged // "unknown"' /tmp/meta-result.json 2>/dev/null)" >> "$GITHUB_OUTPUT"
+          echo "duration=$(jq -r '.media_duration_seconds // "unknown"' /tmp/meta-result.json 2>/dev/null)" >> "$GITHUB_OUTPUT"
+          echo "ceiling=$(jq -r '.ai_credit_ceiling // "unknown"' /tmp/meta-result.json 2>/dev/null)" >> "$GITHUB_OUTPUT"
+          echo "uncertain=$(jq -r 'if has("credit_charge_uncertain") then (.credit_charge_uncertain|tostring) else "unknown" end' /tmp/meta-result.json 2>/dev/null)" >> "$GITHUB_OUTPUT"
+          echo "error=$(jq -r '.error.code // .error_code // "none"' /tmp/meta-result.json 2>/dev/null)" >> "$GITHUB_OUTPUT"
+          exit 0
+
+      - name: Read AI quote only after successful metadata response
+        id: ai
+        if: steps.metadata.outputs.http == '200' && steps.metadata.outputs.metadata_credits == '1'
+        env:
+          ACTION_TOKEN: ${{ steps.action.outputs.token }}
+        shell: bash
+        run: |
+          set +e
+          code="$(curl -sS --max-time 60 -o /tmp/ai-quote.json -w '%{http_code}' \
+            "${BETA_BASE_URL}/api/v1/media/managed/transcriptions/${JOB_ID}/ai-preflight" \
+            -H 'Accept: application/json' \
+            -H "Authorization: Bearer ${ACTION_TOKEN}" || true)"
+          echo "http=${code:-000}" >> "$GITHUB_OUTPUT"
+          echo "available=$(jq -r '.credits_available // "unknown"' /tmp/ai-quote.json 2>/dev/null)" >> "$GITHUB_OUTPUT"
+          echo "maximum=$(jq -r '.maximum_credits // "unknown"' /tmp/ai-quote.json 2>/dev/null)" >> "$GITHUB_OUTPUT"
+          echo "after=$(jq -r '.credits_after_estimate // "unknown"' /tmp/ai-quote.json 2>/dev/null)" >> "$GITHUB_OUTPUT"
+          echo "minutes=$(jq -r '.maximum_duration_minutes // "unknown"' /tmp/ai-quote.json 2>/dev/null)" >> "$GITHUB_OUTPUT"
+          echo "can_continue=$(jq -r '.can_continue // "unknown"' /tmp/ai-quote.json 2>/dev/null)" >> "$GITHUB_OUTPUT"
+          exit 0
+
+      - name: Report exact one-shot metadata result
+        if: always()
+        env:
+          LIVE_SHA: ${{ steps.gate.outputs.live_sha }}
+          BEFORE: ${{ steps.quote.outputs.available }}
+          QUOTED_AFTER: ${{ steps.quote.outputs.after }}
+          ATTEMPTS: ${{ steps.metadata.outputs.attempts }}
+          CURL_RC: ${{ steps.metadata.outputs.curl_rc }}
+          HTTP: ${{ steps.metadata.outputs.http }}
+          STATUS: ${{ steps.metadata.outputs.status }}
+          META_CREDITS: ${{ steps.metadata.outputs.metadata_credits }}
+          CUMULATIVE: ${{ steps.metadata.outputs.cumulative }}
+          DURATION: ${{ steps.metadata.outputs.duration }}
+          CEILING: ${{ steps.metadata.outputs.ceiling }}
+          UNCERTAIN: ${{ steps.metadata.outputs.uncertain }}
+          ERROR_CODE: ${{ steps.metadata.outputs.error }}
+          AI_HTTP: ${{ steps.ai.outputs.http }}
+          AI_AVAILABLE: ${{ steps.ai.outputs.available }}
+          AI_MAX: ${{ steps.ai.outputs.maximum }}
+          AI_AFTER: ${{ steps.ai.outputs.after }}
+          AI_MINUTES: ${{ steps.ai.outputs.minutes }}
+          AI_CAN_CONTINUE: ${{ steps.ai.outputs.can_continue }}
+        shell: bash
+        run: |
+          set -euo pipefail
+          gh pr comment 28 --repo kolemasakar/VoiceBridge --body "A9.6 Facebook fresh-job metadata-duration request: **ONE-SHOT RESULT**. Explicit owner authorization: exactly one metadata request for \`${JOB_ID}\`, hard max \`1\` Supadata credit. live_sha=\`${LIVE_SHA:-unknown}\`; balance_before=\`${BEFORE:-unknown}\`, quoted_after=\`${QUOTED_AFTER:-unknown}\`; billable_capable_attempts=\`${ATTEMPTS:-0}\`; curl_rc=\`${CURL_RC:-unknown}\`; metadata_http=\`${HTTP:-unknown}\`; status=\`${STATUS:-unknown}\`; metadata_credits_charged=\`${META_CREDITS:-unknown}\`; cumulative_job_credits=\`${CUMULATIVE:-unknown}\`; duration_seconds=\`${DURATION:-unknown}\`; ai_credit_ceiling=\`${CEILING:-unknown}\`; charge_uncertain=\`${UNCERTAIN:-unknown}\`; error=\`${ERROR_CODE:-none}\`. Free AI preflight: http=\`${AI_HTTP:-skipped}\`, available=\`${AI_AVAILABLE:-unknown}\`, maximum_credits=\`${AI_MAX:-unknown}\`, worst_case_after=\`${AI_AFTER:-unknown}\`, maximum_duration_minutes=\`${AI_MINUTES:-unknown}\`, can_continue=\`${AI_CAN_CONTINUE:-unknown}\`. No AI start, transcript retry, automatic replay, production, main, or merge action was executed."
