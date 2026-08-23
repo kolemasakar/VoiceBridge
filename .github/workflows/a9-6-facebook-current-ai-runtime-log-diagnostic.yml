@@ -1,4 +1,4 @@
-name: A9.7-I Facebook E2E Read-Only Diagnostic
+name: A9.7-I Facebook E2E Request-Log Diagnostic
 
 on:
   push:
@@ -24,23 +24,20 @@ jobs:
       WINDOW_START: 2026-08-23T17:00:00Z
       WINDOW_END: 2026-08-23T17:20:00Z
     steps:
-      - name: Read VoiceBridge and Cobalt runtime logs only
-        id: logs
+      - name: Read Render HTTP request logs only
+        id: requests
         shell: bash
         run: |
           set -euo pipefail
           test -n "${RENDER_API_KEY:-}"
           echo "::add-mask::$RENDER_API_KEY"
 
-          read_logs() {
+          read_requests() {
             local service_id="$1"
             local prefix="$2"
             local service_json="/tmp/${prefix}_service.json"
-            local logs_json="/tmp/${prefix}_logs.json"
-            local all_txt="/tmp/${prefix}_all.txt"
-            local filtered_txt="/tmp/${prefix}_filtered.txt"
-            local safe_txt="/tmp/${prefix}_safe.txt"
-
+            local logs_json="/tmp/${prefix}_requests.json"
+            local safe_txt="/tmp/${prefix}_requests_safe.txt"
             local service_code
             service_code="$(curl -sS -o "$service_json" -w '%{http_code}' \
               "${RENDER_API_BASE}/services/${service_id}" \
@@ -50,7 +47,6 @@ jobs:
             local owner_id
             owner_id="$(jq -r '.ownerId // .owner.id // empty' "$service_json")"
             test -n "$owner_id"
-
             local logs_code
             logs_code="$(curl -sS -G -o "$logs_json" -w '%{http_code}' \
               "${RENDER_API_BASE}/logs" \
@@ -58,47 +54,37 @@ jobs:
               -H "Authorization: Bearer ${RENDER_API_KEY}" \
               --data-urlencode "ownerId=${owner_id}" \
               --data-urlencode "resource=${service_id}" \
-              --data-urlencode "type=app" \
+              --data-urlencode "type=request" \
               --data-urlencode "startTime=${WINDOW_START}" \
               --data-urlencode "endTime=${WINDOW_END}" \
               --data-urlencode "direction=forward" \
-              --data-urlencode "limit=500")"
-            echo "${prefix}_logs_code=$logs_code" >> "$GITHUB_OUTPUT"
+              --data-urlencode "limit=100")"
+            echo "${prefix}_request_logs_code=$logs_code" >> "$GITHUB_OUTPUT"
             if [[ "$logs_code" != 200 ]]; then
-              printf 'logs_api_http_%s\n' "$logs_code" > "$safe_txt"
+              printf 'request_logs_http_%s\n' "$logs_code" > "$safe_txt"
               return
             fi
-
-            jq -r '.. | objects | (.message? // .text? // empty) | strings' "$logs_json" > "$all_txt" || true
-            grep -Ei 'facebook|cobalt|fallback|retriev|KRCM_|assemblyai|managed|error|failed|failure|timeout|rate|auth|api|request|response|status' "$all_txt" \
-              | tail -n 120 > "$filtered_txt" || true
-            if [[ ! -s "$filtered_txt" ]]; then
-              tail -n 80 "$all_txt" > "$filtered_txt" || true
-            fi
-            sed -E \
-              -e 's/(Bearer[[:space:]]+)[A-Za-z0-9._~+\/-]+/\1<redacted>/Ig' \
-              -e 's/((token|secret|password|api[_-]?key|key)[=:][[:space:]]*)[^[:space:]]+/\1<redacted>/Ig' \
-              -e 's/(Api-Key:[[:space:]]*)[^[:space:]]+/\1<redacted>/Ig' \
-              -e 's#(postgres(ql)?://)[^@[:space:]]+@#\1<redacted>@#Ig' \
-              "$filtered_txt" | head -c 9000 > "$safe_txt"
+            jq -c '
+              .. | objects |
+              select((.method? != null) or (.statusCode? != null) or (.path? != null) or (.labels?.method? != null) or (.labels?.statusCode? != null) or (.labels?.path? != null)) |
+              {timestamp:(.timestamp // .time // null), method:(.method // .labels.method // null), status:(.statusCode // .labels.statusCode // null), path:(.path // .labels.path // null), host:(.host // .labels.host // null), message:(.message // .text // null)}
+            ' "$logs_json" | tail -n 50 > "$safe_txt" || true
+            [[ -s "$safe_txt" ]] || printf 'no_request_log_records\n' > "$safe_txt"
           }
 
-          read_logs "$VOICEBRIDGE_SERVICE_ID" voicebridge
-          read_logs "$COBALT_SERVICE_ID" cobalt
+          read_requests "$VOICEBRIDGE_SERVICE_ID" voicebridge
+          read_requests "$COBALT_SERVICE_ID" cobalt
+          vb="$(tr '\n' '|' < /tmp/voicebridge_requests_safe.txt | sed 's/`/_/g' | head -c 6000)"
+          cb="$(tr '\n' '|' < /tmp/cobalt_requests_safe.txt | sed 's/`/_/g' | head -c 6000)"
+          echo "voicebridge_requests=$vb" >> "$GITHUB_OUTPUT"
+          echo "cobalt_requests=$cb" >> "$GITHUB_OUTPUT"
 
-          vb="$(tr '\n' '|' < /tmp/voicebridge_safe.txt | sed 's/`/_/g')"
-          cb="$(tr '\n' '|' < /tmp/cobalt_safe.txt | sed 's/`/_/g')"
-          [[ -n "$vb" ]] || vb="no_matching_log_lines"
-          [[ -n "$cb" ]] || cb="no_matching_log_lines"
-          echo "voicebridge_excerpt=$vb" >> "$GITHUB_OUTPUT"
-          echo "cobalt_excerpt=$cb" >> "$GITHUB_OUTPUT"
-
-      - name: Report read-only diagnostic
+      - name: Report request-log diagnostic
         env:
-          VB_CODE: ${{ steps.logs.outputs.voicebridge_logs_code }}
-          CB_CODE: ${{ steps.logs.outputs.cobalt_logs_code }}
-          VB: ${{ steps.logs.outputs.voicebridge_excerpt }}
-          CB: ${{ steps.logs.outputs.cobalt_excerpt }}
+          VB_CODE: ${{ steps.requests.outputs.voicebridge_request_logs_code }}
+          CB_CODE: ${{ steps.requests.outputs.cobalt_request_logs_code }}
+          VB: ${{ steps.requests.outputs.voicebridge_requests }}
+          CB: ${{ steps.requests.outputs.cobalt_requests }}
         shell: bash
         run: |
-          gh pr comment 28 --repo kolemasakar/VoiceBridge --body "A9.7-I NEW-chat Facebook E2E read-only diagnostic (2026-08-23T17:00Z..17:20Z): VoiceBridge logs HTTP=\`${VB_CODE}\`; Cobalt logs HTTP=\`${CB_CODE}\`. VoiceBridge safe excerpt=\`${VB}\`. Cobalt safe excerpt=\`${CB}\`. Read-only Render app logs only; NO facebook-fallback POST, provider retry, AssemblyAI, ScrapeCreators, Supadata, deploy, or env mutation was executed by this diagnostic."
+          gh pr comment 28 --repo kolemasakar/VoiceBridge --body "A9.7-I E2E Render request-log diagnostic: VoiceBridge request logs HTTP=\`${VB_CODE}\`, records=\`${VB}\`; Cobalt request logs HTTP=\`${CB_CODE}\`, records=\`${CB}\`. Render logs API reads only; no media/provider endpoint, deploy, env mutation, or retry was executed."
