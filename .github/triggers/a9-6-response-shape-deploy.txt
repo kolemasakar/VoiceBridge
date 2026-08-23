@@ -1,4 +1,4 @@
-sha=98368918c683c52b0635d73da4b1e55005dd99e6
+sha=605e9c69985a57131400478fa33118c18b3f676f
 scope=isolated-beta-only
 provider_calls=forbidden
-retrigger=2026-08-23T13:21+03:00-failed-retry
+retrigger=2026-08-23T13:56+03:00-failure-accounting
