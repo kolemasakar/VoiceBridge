@@ -9,7 +9,8 @@ on:
       - main
 
 permissions:
-  contents: read
+  contents: write
+  pull-requests: write
 
 jobs:
   cloud:
@@ -131,3 +132,73 @@ jobs:
               raise SystemExit('Non-ASCII Markdown: ' + ', '.join(failures))
           print('ASCII Markdown validation passed')
           PY
+
+  a9-7-i-diag-fix:
+    if: github.event_name == 'pull_request' && github.event.pull_request.head.ref == 'agent/krc-media-transcript'
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    steps:
+      - name: Checkout branch
+        uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803
+        with:
+          ref: agent/krc-media-transcript
+      - name: Set up Node.js
+        uses: actions/setup-node@249970729cb0ef3589644e2896645e5dc5ba9c38
+        with:
+          node-version: "24"
+          cache: npm
+          cache-dependency-path: src/cloud/package-lock.json
+      - name: Apply diagnostics patch
+        shell: bash
+        run: |
+          python - <<'PY'
+          from pathlib import Path
+          def r(path, old, new):
+              p=Path(path); s=p.read_text(encoding='utf-8'); n=s.count(old)
+              if n != 1: raise SystemExit(f'{path}: expected 1 match, got {n}')
+              p.write_text(s.replace(old,new,1),encoding='utf-8')
+          f='src/cloud/src/facebook_media_retrieval.ts'
+          r(f,'export type FacebookMediaRetrievalProvider = "cobalt" | "scrapecreators";\n','export type FacebookMediaRetrievalProvider = "cobalt" | "scrapecreators";\nexport type FacebookRetrievalHttpStatusClass = "2xx" | "4xx" | "5xx" | null;\n')
+          r(f,'    readonly provider: FacebookMediaRetrievalProvider | null = null,\n    readonly creditsCharged: number | null = null,\n    readonly creditsRemaining: number | null = null\n','    readonly provider: FacebookMediaRetrievalProvider | null = null,\n    readonly creditsCharged: number | null = null,\n    readonly creditsRemaining: number | null = null,\n    readonly providerHttpStatusClass: FacebookRetrievalHttpStatusClass = null\n')
+          r(f,'async function jsonResponse(response: Response): Promise<Record<string, unknown>> {\n','function httpStatusClass(status: number): FacebookRetrievalHttpStatusClass {\n  if (status >= 200 && status < 300) return "2xx";\n  if (status >= 400 && status < 500) return "4xx";\n  if (status >= 500 && status < 600) return "5xx";\n  return null;\n}\n\nasync function jsonResponse(\n  response: Response,\n  provider: FacebookMediaRetrievalProvider\n): Promise<Record<string, unknown>> {\n')
+          r(f,'      502,\n      false\n    );\n  }\n}\n\nexport function parseFacebookRetrievalCreditConsent','      502,\n      false,\n      provider,\n      null,\n      null,\n      httpStatusClass(response.status)\n    );\n  }\n}\n\nexport function parseFacebookRetrievalCreditConsent')
+          r(f,'    const payload = await jsonResponse(response);\n    if (!response.ok) {\n','    const payload = await jsonResponse(response, "cobalt");\n    if (!response.ok) {\n')
+          r(f,'        response.status >= 500,\n        "cobalt"\n      );','        response.status >= 500,\n        "cobalt",\n        null,\n        null,\n        httpStatusClass(response.status)\n      );')
+          r(f,'        422,\n        false,\n        "cobalt"\n      );\n    }\n\n    return {','        422,\n        false,\n        "cobalt",\n        null,\n        null,\n        httpStatusClass(response.status)\n      );\n    }\n\n    return {')
+          r(f,'    const payload = await jsonResponse(response);\n    const charged = finiteNumber(payload.credits_charged);\n','    const payload = await jsonResponse(response, "scrapecreators");\n    const charged = finiteNumber(payload.credits_charged);\n')
+          f='src/cloud/src/facebook_managed_pipeline.ts'
+          r(f,'import {\n  type FacebookMediaAsset,\n  type FacebookMediaRetriever,\n  type FacebookRetrievalCreditConsent\n} from "./facebook_media_retrieval.js";','import {\n  FacebookMediaRetrievalError,\n  type FacebookMediaAsset,\n  type FacebookMediaRetrievalProvider,\n  type FacebookMediaRetriever,\n  type FacebookRetrievalCreditConsent,\n  type FacebookRetrievalHttpStatusClass\n} from "./facebook_media_retrieval.js";')
+          r(f,'export interface ManagedFacebookPipeline {\n  readonly configured: boolean;\n  freeRetrieve(sourceUrl: string): Promise<FacebookMediaAsset | null>;','export interface ManagedFacebookFreeRetrievalFailure {\n  kind: "failure";\n  error_code: string;\n  provider: FacebookMediaRetrievalProvider | null;\n  http_status_class: FacebookRetrievalHttpStatusClass;\n}\n\nexport type ManagedFacebookFreeRetrievalResult =\n  | FacebookMediaAsset\n  | ManagedFacebookFreeRetrievalFailure\n  | null;\n\nexport interface ManagedFacebookPipeline {\n  readonly configured: boolean;\n  freeRetrieve(sourceUrl: string): Promise<ManagedFacebookFreeRetrievalResult>;')
+          r(f,'  async freeRetrieve(sourceUrl: string): Promise<FacebookMediaAsset | null> {\n    if (!this.freeRetriever) return null;\n    try {\n      return await this.freeRetriever.retrieve(sourceUrl);\n    } catch {\n      return null;\n    }\n  }','  async freeRetrieve(sourceUrl: string): Promise<ManagedFacebookFreeRetrievalResult> {\n    if (!this.freeRetriever) {\n      return { kind: "failure", error_code: "FACEBOOK_FREE_RETRIEVER_NOT_CONFIGURED", provider: null, http_status_class: null };\n    }\n    try {\n      return await this.freeRetriever.retrieve(sourceUrl);\n    } catch (error) {\n      if (error instanceof FacebookMediaRetrievalError) {\n        return { kind: "failure", error_code: error.code, provider: error.provider ?? this.freeRetriever.provider, http_status_class: error.providerHttpStatusClass };\n      }\n      return { kind: "failure", error_code: "FACEBOOK_FREE_RETRIEVAL_UNKNOWN", provider: this.freeRetriever.provider, http_status_class: null };\n    }\n  }')
+          f='src/cloud/src/managed_media_service.ts'
+          r(f,'  type FacebookMediaAsset,\n  type FacebookRetrievalCreditConsent,\n  type FacebookRetrievalCreditPreflight\n} from "./facebook_media_retrieval.js";','  type FacebookMediaAsset,\n  type FacebookMediaRetrievalProvider,\n  type FacebookRetrievalCreditConsent,\n  type FacebookRetrievalCreditPreflight,\n  type FacebookRetrievalHttpStatusClass\n} from "./facebook_media_retrieval.js";')
+          r(f,'  retrieval_provider?: "cobalt" | "scrapecreators" | null;\n  retrieval_credits_charged?: number;','  retrieval_provider?: "cobalt" | "scrapecreators" | null;\n  free_retrieval_error_code?: string | null;\n  free_retrieval_provider?: FacebookMediaRetrievalProvider | null;\n  free_retrieval_http_status_class?: FacebookRetrievalHttpStatusClass;\n  retrieval_credits_charged?: number;')
+          old='''      const asset = await this.facebookPipeline!.freeRetrieve(sourceUrl);\n      if (!asset) {\n        const updatedAt = new Date().toISOString();\n        const waiting: ManagedMediaStoredRecord = {\n          ...record,\n          job: {\n            ...job,\n            status: "AWAITING_RETRIEVAL_CONSENT",\n            updated_at: updatedAt,\n            credit_charge_uncertain: false,\n            error: null\n          },\n          expiresAt: this.expiryFrom(updatedAt, job)\n        };\n        await this.store.put(waiting);\n        return this.publicJob(waiting.job, false);\n      }\n      return await this.completeFacebookFallback(record, asset, input.language_hint);'''
+          new='''      const freeResult = await this.facebookPipeline!.freeRetrieve(sourceUrl);\n      if (!freeResult || ("kind" in freeResult && freeResult.kind === "failure")) {\n        const diagnostic = freeResult && "kind" in freeResult ? freeResult : null;\n        const updatedAt = new Date().toISOString();\n        const errorCode = diagnostic?.error_code ?? "FACEBOOK_FREE_RETRIEVAL_NO_ASSET";\n        const waiting: ManagedMediaStoredRecord = {\n          ...record,\n          job: {\n            ...job,\n            status: "AWAITING_RETRIEVAL_CONSENT",\n            updated_at: updatedAt,\n            credit_charge_uncertain: false,\n            free_retrieval_error_code: errorCode,\n            free_retrieval_provider: diagnostic?.provider ?? null,\n            free_retrieval_http_status_class: diagnostic?.http_status_class ?? null,\n            error: null\n          },\n          expiresAt: this.expiryFrom(updatedAt, job)\n        };\n        console.warn(JSON.stringify({ event: "facebook_free_retrieval_failed", job_id: job.job_id, provider: waiting.job.free_retrieval_provider ?? null, error_code: errorCode, http_status_class: waiting.job.free_retrieval_http_status_class ?? null }));\n        await this.store.put(waiting);\n        return this.publicJob(waiting.job, false);\n      }\n      return await this.completeFacebookFallback(record, freeResult, input.language_hint);'''
+          r(f,old,new)
+          f='src/cloud/tests/managed_facebook_fallback.test.ts'
+          r(f,'  FacebookMediaRetrievalError,\n  type FacebookMediaAsset,\n  type FacebookRetrievalCreditConsent\n} from "../src/facebook_media_retrieval.js";','  FacebookMediaRetrievalError,\n  type FacebookMediaAsset,\n  type FacebookMediaRetriever,\n  type FacebookRetrievalCreditConsent,\n  type FacebookRetrievalHttpStatusClass\n} from "../src/facebook_media_retrieval.js";')
+          r(f,'import type {\n  ManagedFacebookPipeline,\n  ManagedFacebookSttResult\n} from "../src/facebook_managed_pipeline.js";','import {\n  AssemblyAiFacebookMediaStt,\n  DefaultManagedFacebookPipeline,\n  type ManagedFacebookPipeline,\n  type ManagedFacebookSttResult\n} from "../src/facebook_managed_pipeline.js";')
+          marker='test("Facebook fallback request key is stable, owner-isolated, and separate from URL spelling", () => {'
+          add='''test("free Cobalt failure classes persist safe diagnostics without leaking sensitive payloads", async () => {\n  const cases: Array<{ code: string; httpStatus: number; statusClass: FacebookRetrievalHttpStatusClass }> = [\n    { code: "FACEBOOK_COBALT_UNREACHABLE", httpStatus: 502, statusClass: null },\n    { code: "FACEBOOK_COBALT_FAILED", httpStatus: 422, statusClass: "4xx" },\n    { code: "FACEBOOK_RETRIEVAL_INVALID_JSON", httpStatus: 502, statusClass: "2xx" },\n    { code: "FACEBOOK_COBALT_NO_DIRECT_MEDIA", httpStatus: 422, statusClass: "2xx" }\n  ];\n  for (const item of cases) {\n    const retriever: FacebookMediaRetriever = { provider: "cobalt", async retrieve() { throw new FacebookMediaRetrievalError(item.code, "sensitive provider body https://private.example/?token=SECRET", item.httpStatus, false, "cobalt", null, null, item.statusClass); } };\n    const pipeline = new DefaultManagedFacebookPipeline(retriever, null, new AssemblyAiFacebookMediaStt("mock-only-key"));\n    const app = service(pipeline, new DurableTestStore());\n    const warnings: string[] = []; const originalWarn = console.warn; console.warn = (...args: unknown[]) => warnings.push(args.map(String).join(" "));\n    let waiting; try { waiting = await app.startFacebookFallback({ url: FACEBOOK_URL, language_hint: "auto", beta_access_code: ACCESS_CODE }); } finally { console.warn = originalWarn; }\n    assert.equal(waiting.status, "AWAITING_RETRIEVAL_CONSENT");\n    assert.equal(waiting.credits_charged, 0);\n    assert.equal(waiting.free_retrieval_error_code, item.code);\n    assert.equal(waiting.free_retrieval_provider, "cobalt");\n    assert.equal(waiting.free_retrieval_http_status_class, item.statusClass);\n    assert.equal(waiting.error, null);\n    const log = warnings.join("\\n"); assert.match(log, /facebook_free_retrieval_failed/); assert.match(log, new RegExp(item.code));\n    assert.doesNotMatch(log, /facebook\\.com|private\\.example|SECRET|OWNER_A97B_TEST_2026/);\n  }\n});\n\n'''
+          r(f,marker,add+marker)
+          PY
+      - name: Install cloud dependencies
+        working-directory: src/cloud
+        run: npm ci
+      - name: Full cloud check
+        working-directory: src/cloud
+        run: npm run check
+      - name: Scope gate
+        run: |
+          set -euo pipefail
+          git diff --name-only
+          test "$(git diff --name-only | wc -l)" -eq 4
+          ! git diff | grep -E 'SCRAPECREATORS_API_KEY|SUPADATA_API_KEY|ASSEMBLYAI_API_KEY|KRC_MEDIA_COBALT_API_KEY'
+      - name: Commit hardened code
+        run: |
+          git config user.name 'github-actions[bot]'
+          git config user.email '41898282+github-actions[bot]@users.noreply.github.com'
+          git add src/cloud/src/facebook_media_retrieval.ts src/cloud/src/facebook_managed_pipeline.ts src/cloud/src/managed_media_service.ts src/cloud/tests/managed_facebook_fallback.test.ts
+          git commit -m 'A9.7-I preserve free Cobalt failure diagnostics'
+          git push origin HEAD:agent/krc-media-transcript
