@@ -1,4 +1,4 @@
-name: A9.6 Facebook Current AI Runtime Log Diagnostic
+name: A9.7-I Facebook E2E Read-Only Diagnostic
 
 on:
   push:
@@ -19,60 +19,86 @@ jobs:
       RENDER_API_KEY: ${{ secrets.RENDER_API_KEY }}
       GH_TOKEN: ${{ github.token }}
       RENDER_API_BASE: https://api.render.com/v1
-      SERVICE_ID: srv-da1kic5bedkc73d6fk60
-      FAILURE_START: 2026-08-23T10:48:30Z
-      FAILURE_END: 2026-08-23T10:52:30Z
+      VOICEBRIDGE_SERVICE_ID: srv-da1kic5bedkc73d6fk60
+      COBALT_SERVICE_ID: srv-da5ggq6k1f9s738j8d8g
+      WINDOW_START: 2026-08-23T17:00:00Z
+      WINDOW_END: 2026-08-23T17:20:00Z
     steps:
-      - name: Read isolated runtime logs
+      - name: Read VoiceBridge and Cobalt runtime logs only
         id: logs
         shell: bash
         run: |
           set -euo pipefail
           test -n "${RENDER_API_KEY:-}"
           echo "::add-mask::$RENDER_API_KEY"
-          service_code="$(curl -sS -o /tmp/service.json -w '%{http_code}' \
-            "${RENDER_API_BASE}/services/${SERVICE_ID}" \
-            -H 'Accept: application/json' \
-            -H "Authorization: Bearer ${RENDER_API_KEY}")"
-          [[ "$service_code" == 200 ]]
-          owner_id="$(jq -r '.ownerId // .owner.id // empty' /tmp/service.json)"
-          test -n "$owner_id"
-          logs_code="$(curl -sS -G -o /tmp/logs.json -w '%{http_code}' \
-            "${RENDER_API_BASE}/logs" \
-            -H 'Accept: application/json' \
-            -H "Authorization: Bearer ${RENDER_API_KEY}" \
-            --data-urlencode "ownerId=${owner_id}" \
-            --data-urlencode "resource=${SERVICE_ID}" \
-            --data-urlencode "type=app" \
-            --data-urlencode "startTime=${FAILURE_START}" \
-            --data-urlencode "endTime=${FAILURE_END}" \
-            --data-urlencode "direction=forward" \
-            --data-urlencode "limit=300")"
-          if [[ "$logs_code" != 200 ]]; then
-            echo "logs_code=$logs_code" >> "$GITHUB_OUTPUT"
-            echo "diagnostic=logs_api_http_${logs_code}" >> "$GITHUB_OUTPUT"
-            exit 0
-          fi
-          jq -r '.. | objects | (.message? // .text? // empty) | strings' /tmp/logs.json \
-            | grep -Ei 'supadata|managed|transcript|provider|generate|invalid|empty|error|failed|failure|credit|shape|keys|types|KRCM_e502967f' \
-            | tail -n 50 > /tmp/errors.txt || true
-          if [[ ! -s /tmp/errors.txt ]]; then
-            jq -r '.. | objects | (.message? // .text? // empty) | strings' /tmp/logs.json | tail -n 30 > /tmp/errors.txt || true
-          fi
-          sed -E \
-            -e 's/(Bearer[[:space:]]+)[A-Za-z0-9._~+\/-]+/\1<redacted>/Ig' \
-            -e 's/((token|secret|password|api[_-]?key|key)[=:][[:space:]]*)[^[:space:]]+/\1<redacted>/Ig' \
-            -e 's#(postgres(ql)?://)[^@[:space:]]+@#\1<redacted>@#Ig' \
-            /tmp/errors.txt | head -c 7000 > /tmp/safe.txt
-          diagnostic="$(cat /tmp/safe.txt | tr '\n' '|' | sed 's/`/_/g')"
-          [[ -n "$diagnostic" ]] || diagnostic="no_message_fields_found"
-          echo "logs_code=$logs_code" >> "$GITHUB_OUTPUT"
-          echo "diagnostic=$diagnostic" >> "$GITHUB_OUTPUT"
 
-      - name: Report
+          read_logs() {
+            local service_id="$1"
+            local prefix="$2"
+            local service_json="/tmp/${prefix}_service.json"
+            local logs_json="/tmp/${prefix}_logs.json"
+            local all_txt="/tmp/${prefix}_all.txt"
+            local filtered_txt="/tmp/${prefix}_filtered.txt"
+            local safe_txt="/tmp/${prefix}_safe.txt"
+
+            local service_code
+            service_code="$(curl -sS -o "$service_json" -w '%{http_code}' \
+              "${RENDER_API_BASE}/services/${service_id}" \
+              -H 'Accept: application/json' \
+              -H "Authorization: Bearer ${RENDER_API_KEY}")"
+            [[ "$service_code" == 200 ]]
+            local owner_id
+            owner_id="$(jq -r '.ownerId // .owner.id // empty' "$service_json")"
+            test -n "$owner_id"
+
+            local logs_code
+            logs_code="$(curl -sS -G -o "$logs_json" -w '%{http_code}' \
+              "${RENDER_API_BASE}/logs" \
+              -H 'Accept: application/json' \
+              -H "Authorization: Bearer ${RENDER_API_KEY}" \
+              --data-urlencode "ownerId=${owner_id}" \
+              --data-urlencode "resource=${service_id}" \
+              --data-urlencode "type=app" \
+              --data-urlencode "startTime=${WINDOW_START}" \
+              --data-urlencode "endTime=${WINDOW_END}" \
+              --data-urlencode "direction=forward" \
+              --data-urlencode "limit=500")"
+            echo "${prefix}_logs_code=$logs_code" >> "$GITHUB_OUTPUT"
+            if [[ "$logs_code" != 200 ]]; then
+              printf 'logs_api_http_%s\n' "$logs_code" > "$safe_txt"
+              return
+            fi
+
+            jq -r '.. | objects | (.message? // .text? // empty) | strings' "$logs_json" > "$all_txt" || true
+            grep -Ei 'facebook|cobalt|fallback|retriev|KRCM_|assemblyai|managed|error|failed|failure|timeout|rate|auth|api|request|response|status' "$all_txt" \
+              | tail -n 120 > "$filtered_txt" || true
+            if [[ ! -s "$filtered_txt" ]]; then
+              tail -n 80 "$all_txt" > "$filtered_txt" || true
+            fi
+            sed -E \
+              -e 's/(Bearer[[:space:]]+)[A-Za-z0-9._~+\/-]+/\1<redacted>/Ig' \
+              -e 's/((token|secret|password|api[_-]?key|key)[=:][[:space:]]*)[^[:space:]]+/\1<redacted>/Ig' \
+              -e 's/(Api-Key:[[:space:]]*)[^[:space:]]+/\1<redacted>/Ig' \
+              -e 's#(postgres(ql)?://)[^@[:space:]]+@#\1<redacted>@#Ig' \
+              "$filtered_txt" | head -c 9000 > "$safe_txt"
+          }
+
+          read_logs "$VOICEBRIDGE_SERVICE_ID" voicebridge
+          read_logs "$COBALT_SERVICE_ID" cobalt
+
+          vb="$(tr '\n' '|' < /tmp/voicebridge_safe.txt | sed 's/`/_/g')"
+          cb="$(tr '\n' '|' < /tmp/cobalt_safe.txt | sed 's/`/_/g')"
+          [[ -n "$vb" ]] || vb="no_matching_log_lines"
+          [[ -n "$cb" ]] || cb="no_matching_log_lines"
+          echo "voicebridge_excerpt=$vb" >> "$GITHUB_OUTPUT"
+          echo "cobalt_excerpt=$cb" >> "$GITHUB_OUTPUT"
+
+      - name: Report read-only diagnostic
         env:
-          LOGS_CODE: ${{ steps.logs.outputs.logs_code }}
-          DIAGNOSTIC: ${{ steps.logs.outputs.diagnostic }}
+          VB_CODE: ${{ steps.logs.outputs.voicebridge_logs_code }}
+          CB_CODE: ${{ steps.logs.outputs.cobalt_logs_code }}
+          VB: ${{ steps.logs.outputs.voicebridge_excerpt }}
+          CB: ${{ steps.logs.outputs.cobalt_excerpt }}
         shell: bash
         run: |
-          gh pr comment 28 --repo kolemasakar/VoiceBridge --body "A9.6 Facebook fresh-job AI runtime diagnostic: logs_http=\`${LOGS_CODE}\`; safe_runtime_excerpt=\`${DIAGNOSTIC}\`. Read-only isolated Render logs only; no Supadata/preflight/transcript/metadata/AI start or retry was executed."
+          gh pr comment 28 --repo kolemasakar/VoiceBridge --body "A9.7-I NEW-chat Facebook E2E read-only diagnostic (2026-08-23T17:00Z..17:20Z): VoiceBridge logs HTTP=\`${VB_CODE}\`; Cobalt logs HTTP=\`${CB_CODE}\`. VoiceBridge safe excerpt=\`${VB}\`. Cobalt safe excerpt=\`${CB}\`. Read-only Render app logs only; NO facebook-fallback POST, provider retry, AssemblyAI, ScrapeCreators, Supadata, deploy, or env mutation was executed by this diagnostic."
