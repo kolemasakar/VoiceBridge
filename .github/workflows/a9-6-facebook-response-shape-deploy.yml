@@ -6,6 +6,7 @@ on:
       - agent/krc-media-transcript
     paths:
       - .github/triggers/a9-6-response-shape-deploy.txt
+      - .github/workflows/a9-6-facebook-response-shape-deploy.yml
 
 permissions:
   contents: read
