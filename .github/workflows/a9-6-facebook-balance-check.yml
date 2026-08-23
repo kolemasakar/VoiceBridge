@@ -15,6 +15,9 @@ permissions:
 env:
   RENDER_API_BASE: https://api.render.com/v1
   SERVICE_ID: srv-da1kic5bedkc73d6fk60
+  SERVICE_NAME: voicebridge-krc-media-beta-kolemasakar
+  REQUIRED_BRANCH: agent/krc-media-transcript
+  EXPECTED_SHA: b88e710526d3cc7feaa982368fdab584ee096389
   BETA_BASE_URL: https://voicebridge-krc-media-beta-kolemasakar.onrender.com
   FACEBOOK_URL: https://www.facebook.com/reel/1114235920664408/
 
@@ -25,48 +28,112 @@ jobs:
       RENDER_API_KEY: ${{ secrets.RENDER_API_KEY }}
       GH_TOKEN: ${{ github.token }}
     steps:
-      - name: Read balance using free preflight only
+      - name: Diagnose service and run free preflight only
         id: balance
         shell: bash
         run: |
           set +e
           result=unknown
           reason=none
-          preflight_http=unknown
+          service_http=unknown
+          service_name=unknown
+          service_branch=unknown
+          deploy_http=unknown
+          latest_status=unknown
+          latest_sha=unknown
+          token_http=unknown
+          capability_http=unknown
+          facebook_capability=unknown
+          preflight_http=skipped
           error_code=none
           estimated=unknown
           after=unknown
           consent=unknown
           can_continue=unknown
+
           if [[ -z "${RENDER_API_KEY:-}" ]]; then
             reason=render_key_missing
           else
             echo "::add-mask::$RENDER_API_KEY"
-            tmp="$(mktemp)"
-            code="$(curl -sS -o "$tmp" -w '%{http_code}' "${RENDER_API_BASE}/services/${SERVICE_ID}/env-vars/KRC_MEDIA_ACTION_TOKEN" -H 'Accept: application/json' -H "Authorization: Bearer ${RENDER_API_KEY}")"
-            token="$(jq -r '(.envVar.value // .value // empty)' "$tmp" 2>/dev/null)"
-            rm -f "$tmp"
-            if [[ "$code" != 200 || -z "$token" ]]; then
+
+            service_http="$(curl -sS --max-time 30 -o /tmp/service.json -w '%{http_code}' \
+              "${RENDER_API_BASE}/services/${SERVICE_ID}" \
+              -H 'Accept: application/json' \
+              -H "Authorization: Bearer ${RENDER_API_KEY}" || true)"
+            service_name="$(jq -r '.name // "unknown"' /tmp/service.json 2>/dev/null)"
+            service_branch="$(jq -r '.branch // "unknown"' /tmp/service.json 2>/dev/null)"
+
+            deploy_http="$(curl -sS --max-time 30 -o /tmp/deploys.json -w '%{http_code}' \
+              "${RENDER_API_BASE}/services/${SERVICE_ID}/deploys?limit=5" \
+              -H 'Accept: application/json' \
+              -H "Authorization: Bearer ${RENDER_API_KEY}" || true)"
+            latest_status="$(jq -r '.[0].deploy.status // .[0].status // "unknown"' /tmp/deploys.json 2>/dev/null)"
+            latest_sha="$(jq -r '.[0].deploy.commit.id // .[0].commit.id // .[0].deploy.commitId // .[0].commitId // "unknown"' /tmp/deploys.json 2>/dev/null)"
+
+            token_http="$(curl -sS --max-time 30 -o /tmp/token.json -w '%{http_code}' \
+              "${RENDER_API_BASE}/services/${SERVICE_ID}/env-vars/KRC_MEDIA_ACTION_TOKEN" \
+              -H 'Accept: application/json' \
+              -H "Authorization: Bearer ${RENDER_API_KEY}" || true)"
+            token="$(jq -r '(.envVar.value // .value // empty)' /tmp/token.json 2>/dev/null)"
+
+            if [[ "$service_http" != 200 || "$service_name" != "$SERVICE_NAME" || "$service_branch" != "$REQUIRED_BRANCH" ]]; then
+              reason=render_service_mismatch
+            elif [[ "$latest_status" != live || "$latest_sha" != "$EXPECTED_SHA" ]]; then
+              reason=unexpected_live_deploy
+            elif [[ "$token_http" != 200 || -z "$token" ]]; then
               reason=token_lookup_failed
             else
               echo "::add-mask::$token"
-              payload="$(jq -nc --arg url "$FACEBOOK_URL" '{url:$url,language_hint:"auto"}')"
-              code="$(curl -sS --max-time 60 -o /tmp/preflight.json -w '%{http_code}' -X POST "${BETA_BASE_URL}/api/v1/media/managed/preflight" -H 'Accept: application/json' -H 'Content-Type: application/json' -H "Authorization: Bearer ${token}" --data "$payload")"
-              preflight_http="$code"
-              if [[ "$code" == 200 ]]; then
-                result="$(jq -r '.credits_available // "unknown"' /tmp/preflight.json)"
-                estimated="$(jq -r '.estimated_credits // "unknown"' /tmp/preflight.json)"
-                after="$(jq -r '.credits_after_estimate // "unknown"' /tmp/preflight.json)"
-                consent="$(jq -r '.consent_required // "unknown"' /tmp/preflight.json)"
-                can_continue="$(jq -r '.can_continue // "unknown"' /tmp/preflight.json)"
+
+              for attempt in 1 2 3; do
+                capability_http="$(curl -sS --connect-timeout 15 --max-time 75 -o /tmp/capability.json -w '%{http_code}' \
+                  "${BETA_BASE_URL}/api/v1/media/managed" \
+                  -H 'Accept: application/json' \
+                  -H "Authorization: Bearer ${token}" || true)"
+                [[ "$capability_http" == 200 ]] && break
+                sleep 5
+              done
+
+              if [[ "$capability_http" == 200 ]]; then
+                facebook_capability="$(jq -r '(.configured == true and .facebook_ai_fallback == true)' /tmp/capability.json 2>/dev/null)"
+                if [[ "$facebook_capability" == true ]]; then
+                  payload="$(jq -nc --arg url "$FACEBOOK_URL" '{url:$url,language_hint:"auto"}')"
+                  preflight_http="$(curl -sS --connect-timeout 15 --max-time 90 -o /tmp/preflight.json -w '%{http_code}' \
+                    -X POST "${BETA_BASE_URL}/api/v1/media/managed/preflight" \
+                    -H 'Accept: application/json' \
+                    -H 'Content-Type: application/json' \
+                    -H "Authorization: Bearer ${token}" \
+                    --data "$payload" || true)"
+                  if [[ "$preflight_http" == 200 ]]; then
+                    result="$(jq -r '.credits_available // "unknown"' /tmp/preflight.json)"
+                    estimated="$(jq -r '.estimated_credits // "unknown"' /tmp/preflight.json)"
+                    after="$(jq -r '.credits_after_estimate // "unknown"' /tmp/preflight.json)"
+                    consent="$(jq -r '.consent_required // "unknown"' /tmp/preflight.json)"
+                    can_continue="$(jq -r '.can_continue // "unknown"' /tmp/preflight.json)"
+                  else
+                    reason=preflight_failed
+                    error_code="$(jq -r '.error.code // "unknown"' /tmp/preflight.json 2>/dev/null)"
+                  fi
+                else
+                  reason=capability_invalid
+                fi
               else
-                reason=preflight_failed
-                error_code="$(jq -r '.error.code // "unknown"' /tmp/preflight.json 2>/dev/null)"
+                reason=capability_unreachable
               fi
             fi
           fi
+
           echo "result=$result" >> "$GITHUB_OUTPUT"
           echo "reason=$reason" >> "$GITHUB_OUTPUT"
+          echo "service_http=$service_http" >> "$GITHUB_OUTPUT"
+          echo "service_name=$service_name" >> "$GITHUB_OUTPUT"
+          echo "service_branch=$service_branch" >> "$GITHUB_OUTPUT"
+          echo "deploy_http=$deploy_http" >> "$GITHUB_OUTPUT"
+          echo "latest_status=$latest_status" >> "$GITHUB_OUTPUT"
+          echo "latest_sha=$latest_sha" >> "$GITHUB_OUTPUT"
+          echo "token_http=$token_http" >> "$GITHUB_OUTPUT"
+          echo "capability_http=$capability_http" >> "$GITHUB_OUTPUT"
+          echo "facebook_capability=$facebook_capability" >> "$GITHUB_OUTPUT"
           echo "preflight_http=$preflight_http" >> "$GITHUB_OUTPUT"
           echo "error_code=$error_code" >> "$GITHUB_OUTPUT"
           echo "estimated=$estimated" >> "$GITHUB_OUTPUT"
@@ -75,11 +142,20 @@ jobs:
           echo "can_continue=$can_continue" >> "$GITHUB_OUTPUT"
           exit 0
 
-      - name: Report balance
+      - name: Report diagnostic
         if: always()
         env:
           RESULT: ${{ steps.balance.outputs.result }}
           REASON: ${{ steps.balance.outputs.reason }}
+          SERVICE_HTTP: ${{ steps.balance.outputs.service_http }}
+          SERVICE_NAME_ACTUAL: ${{ steps.balance.outputs.service_name }}
+          SERVICE_BRANCH_ACTUAL: ${{ steps.balance.outputs.service_branch }}
+          DEPLOY_HTTP: ${{ steps.balance.outputs.deploy_http }}
+          LATEST_STATUS: ${{ steps.balance.outputs.latest_status }}
+          LATEST_SHA: ${{ steps.balance.outputs.latest_sha }}
+          TOKEN_HTTP: ${{ steps.balance.outputs.token_http }}
+          CAPABILITY_HTTP: ${{ steps.balance.outputs.capability_http }}
+          FACEBOOK_CAPABILITY: ${{ steps.balance.outputs.facebook_capability }}
           PREFLIGHT_HTTP: ${{ steps.balance.outputs.preflight_http }}
           ERROR_CODE: ${{ steps.balance.outputs.error_code }}
           ESTIMATED: ${{ steps.balance.outputs.estimated }}
@@ -88,6 +164,6 @@ jobs:
           CAN_CONTINUE: ${{ steps.balance.outputs.can_continue }}
         shell: bash
         run: |
-          gh pr comment 28 --repo kolemasakar/VoiceBridge --body "A9.6 Facebook fresh free preflight diagnostic: provider_balance=\`${RESULT:-unknown}\`, reason=\`${REASON:-unknown}\`, preflight_http=\`${PREFLIGHT_HTTP:-unknown}\`, error_code=\`${ERROR_CODE:-unknown}\`, estimated_credits=\`${ESTIMATED:-unknown}\`, expected_after=\`${AFTER:-unknown}\`, consent_required=\`${CONSENT:-unknown}\`, can_continue=\`${CAN_CONTINUE:-unknown}\`. Free preflight only; no metadata, transcript, or AI start request was executed."
+          gh pr comment 28 --repo kolemasakar/VoiceBridge --body "A9.6 Facebook fresh free connectivity/preflight diagnostic: reason=\`${REASON:-unknown}\`; service_http=\`${SERVICE_HTTP:-unknown}\`, service=\`${SERVICE_NAME_ACTUAL:-unknown}\`, branch=\`${SERVICE_BRANCH_ACTUAL:-unknown}\`; deploy_http=\`${DEPLOY_HTTP:-unknown}\`, latest_status=\`${LATEST_STATUS:-unknown}\`, latest_sha=\`${LATEST_SHA:-unknown}\`; token_http=\`${TOKEN_HTTP:-unknown}\`; managed_capability_http=\`${CAPABILITY_HTTP:-unknown}\`, facebook_capability_ok=\`${FACEBOOK_CAPABILITY:-unknown}\`; preflight_http=\`${PREFLIGHT_HTTP:-unknown}\`, error_code=\`${ERROR_CODE:-unknown}\`; provider_balance=\`${RESULT:-unknown}\`, estimated_credits=\`${ESTIMATED:-unknown}\`, expected_after=\`${AFTER:-unknown}\`, consent_required=\`${CONSENT:-unknown}\`, can_continue=\`${CAN_CONTINUE:-unknown}\`. Capability retries and one free preflight at most; no metadata, transcript, or AI start request was executed. Production/main were not targeted."
 
-# trigger: 2026-08-23T13:06+03:00 fresh free Facebook preflight diagnostic retry
+# trigger: 2026-08-23T13:06+03:00 connectivity gated free preflight
