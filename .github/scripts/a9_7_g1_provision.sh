@@ -132,10 +132,10 @@ unauth_http="$(curl -sS --max-time 30 -o /tmp/unauth.json -w '%{http_code}' \
   -H 'Content-Type: application/json' \
   --data '{"url":"https://cobalt-auth-gate.invalid/"}' || true)"
 unauth_code="$(jq -r '.error.code // .error // empty' /tmp/unauth.json 2>/dev/null || true)"
-[[ "$unauth_http" == 401 ]]
-[[ "$unauth_code" == *auth* ]]
+echo "A9.7-G1 unauth_http=${unauth_http} unauth_code=${unauth_code:-none}"
 
-phase=outputs
+# Persist only non-secret diagnostic outputs before the gate assertions so a
+# failed assertion remains auditable without printing response bodies.
 {
   echo "created=$created"
   echo "service_id=$service_id"
@@ -150,5 +150,8 @@ phase=outputs
   echo "unauth_http=$unauth_http"
   echo "unauth_code=$unauth_code"
 } >> "$GITHUB_OUTPUT"
+
+[[ "$unauth_http" == 401 ]]
+[[ "$unauth_code" == *auth* ]]
 
 phase=done
