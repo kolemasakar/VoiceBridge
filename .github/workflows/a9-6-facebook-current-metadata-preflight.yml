@@ -18,9 +18,9 @@ env:
   SERVICE_NAME: voicebridge-krc-media-beta-kolemasakar
   REQUIRED_BRANCH: agent/krc-media-transcript
   BETA_BASE_URL: https://voicebridge-krc-media-beta-kolemasakar.onrender.com
-  JOB_ID: KRCM_1e99b074-fdf6-4144-9278-0e66e9a79713
-  REQUIRED_AVAILABLE: "85"
-  REQUIRED_AFTER: "84"
+  JOB_ID: KRCM_e502967f-05cb-44ec-bb65-cdc014181d5d
+  REQUIRED_AVAILABLE: "81"
+  REQUIRED_AFTER: "80"
 
 jobs:
   preflight:
@@ -111,6 +111,6 @@ jobs:
           if [[ "${{ job.status }}" == "success" ]]; then
             body="A9.6 Facebook current metadata-duration preflight: **SUCCESS**. job=\`${JOB_ID}\`, status=\`${JOB_STATUS}\`, provider_balance=\`${AVAILABLE}\`, estimated_metadata_credits=\`${ESTIMATED}\`, credits_after_estimate=\`${AFTER}\`, existing_metadata_credits=\`${META_CREDITS}\`. Free preflight only. No metadata start, AI start, transcript retry, production, main, or merge action was executed."
           else
-            body="A9.6 Facebook current metadata-duration preflight: **FAILURE**. Free/read-only checks only; no metadata start, AI start, transcript retry, production, main, or merge action was executed."
+            body="A9.6 Facebook current metadata-duration preflight: **FAILURE**. job=\`${JOB_ID}\`. Free/read-only checks only; no metadata start, AI start, transcript retry, production, main, or merge action was executed."
           fi
           gh pr comment 28 --repo kolemasakar/VoiceBridge --body "$body"
