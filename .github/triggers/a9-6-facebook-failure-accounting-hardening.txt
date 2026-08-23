@@ -1,0 +1,4 @@
+scope=isolated-beta-source-only
+provider_calls=forbidden
+credits=0
+purpose=reconcile-failed-ai-charge-and-classify-empty-transcript
