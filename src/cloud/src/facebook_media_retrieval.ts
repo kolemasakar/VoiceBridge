@@ -4,6 +4,7 @@ import { MediaTranscriptError } from "./media_transcript.js";
 export const SCRAPECREATORS_FACEBOOK_POST_MAX_CREDITS = 1 as const;
 
 export type FacebookMediaRetrievalProvider = "cobalt" | "scrapecreators";
+export type FacebookRetrievalHttpStatusClass = "2xx" | "4xx" | "5xx" | null;
 
 export interface FacebookMediaAsset {
   source_url: string;
@@ -42,7 +43,8 @@ export class FacebookMediaRetrievalError extends MediaTranscriptError {
     retryable: boolean,
     readonly provider: FacebookMediaRetrievalProvider | null = null,
     readonly creditsCharged: number | null = null,
-    readonly creditsRemaining: number | null = null
+    readonly creditsRemaining: number | null = null,
+    readonly providerHttpStatusClass: FacebookRetrievalHttpStatusClass = null
   ) {
     super(code, message, httpStatus, retryable);
   }
@@ -107,7 +109,17 @@ function safeMediaUrl(value: unknown, baseUrl?: string): string | null {
   return parsed.toString();
 }
 
-async function jsonResponse(response: Response): Promise<Record<string, unknown>> {
+function httpStatusClass(status: number): FacebookRetrievalHttpStatusClass {
+  if (status >= 200 && status < 300) return "2xx";
+  if (status >= 400 && status < 500) return "4xx";
+  if (status >= 500 && status < 600) return "5xx";
+  return null;
+}
+
+async function jsonResponse(
+  response: Response,
+  provider: FacebookMediaRetrievalProvider
+): Promise<Record<string, unknown>> {
   const text = await response.text();
   if (!text) return {};
   try {
@@ -120,7 +132,11 @@ async function jsonResponse(response: Response): Promise<Record<string, unknown>
       "FACEBOOK_RETRIEVAL_INVALID_JSON",
       "The Facebook media retrieval provider returned invalid JSON.",
       502,
-      false
+      false,
+      provider,
+      null,
+      null,
+      httpStatusClass(response.status)
     );
   }
 }
@@ -201,14 +217,17 @@ export class CobaltFacebookRetriever implements FacebookMediaRetriever {
       );
     }
 
-    const payload = await jsonResponse(response);
+    const payload = await jsonResponse(response, "cobalt");
     if (!response.ok) {
       throw new FacebookMediaRetrievalError(
         "FACEBOOK_COBALT_FAILED",
         "The self-hosted Facebook retrieval service rejected the public media request.",
         response.status >= 500 ? 502 : 422,
         response.status >= 500,
-        "cobalt"
+        "cobalt",
+        null,
+        null,
+        httpStatusClass(response.status)
       );
     }
 
@@ -235,7 +254,10 @@ export class CobaltFacebookRetriever implements FacebookMediaRetriever {
         "The self-hosted retrieval attempt did not return a directly usable Facebook video asset.",
         422,
         false,
-        "cobalt"
+        "cobalt",
+        null,
+        null,
+        httpStatusClass(response.status)
       );
     }
 
@@ -303,7 +325,7 @@ export class ScrapeCreatorsFacebookRetriever implements FacebookMediaRetriever {
       );
     }
 
-    const payload = await jsonResponse(response);
+    const payload = await jsonResponse(response, "scrapecreators");
     const charged = finiteNumber(payload.credits_charged);
     const remaining = finiteNumber(payload.credits_remaining);
     if (charged === null || !Number.isInteger(charged) || charged < 0) {

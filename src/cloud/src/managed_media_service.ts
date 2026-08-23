@@ -15,10 +15,15 @@ import {
   facebookRetrievalCreditPreflight,
   parseFacebookRetrievalCreditConsent,
   type FacebookMediaAsset,
+  type FacebookMediaRetrievalProvider,
   type FacebookRetrievalCreditConsent,
-  type FacebookRetrievalCreditPreflight
+  type FacebookRetrievalCreditPreflight,
+  type FacebookRetrievalHttpStatusClass
 } from "./facebook_media_retrieval.js";
-import type { ManagedFacebookPipeline } from "./facebook_managed_pipeline.js";
+import {
+  isManagedFacebookFreeRetrievalFailure,
+  type ManagedFacebookPipeline
+} from "./facebook_managed_pipeline.js";
 import {
   INSTAGRAM_REEL_GENERATE_MAX_CREDITS,
   SupadataProvider,
@@ -160,6 +165,9 @@ export interface ManagedMediaJobView {
   ai_credit_ceiling?: number | null;
   metadata_credits_charged?: number;
   retrieval_provider?: "cobalt" | "scrapecreators" | null;
+  free_retrieval_error_code?: string | null;
+  free_retrieval_provider?: FacebookMediaRetrievalProvider | null;
+  free_retrieval_http_status_class?: FacebookRetrievalHttpStatusClass;
   retrieval_credits_charged?: number;
   stt_seconds_charged?: number;
   provider_data_deleted?: boolean | null;
@@ -1043,9 +1051,13 @@ export class ManagedMediaService {
 
     this.inFlight.add(requestKey);
     try {
-      const asset = await this.facebookPipeline!.freeRetrieve(sourceUrl);
-      if (!asset) {
+      const freeResult = await this.facebookPipeline!.freeRetrieve(sourceUrl);
+      const diagnostic = isManagedFacebookFreeRetrievalFailure(freeResult)
+        ? freeResult
+        : null;
+      if (!freeResult || diagnostic) {
         const updatedAt = new Date().toISOString();
+        const errorCode = diagnostic?.error_code ?? "FACEBOOK_FREE_RETRIEVAL_NO_ASSET";
         const waiting: ManagedMediaStoredRecord = {
           ...record,
           job: {
@@ -1053,14 +1065,27 @@ export class ManagedMediaService {
             status: "AWAITING_RETRIEVAL_CONSENT",
             updated_at: updatedAt,
             credit_charge_uncertain: false,
+            free_retrieval_error_code: errorCode,
+            free_retrieval_provider: diagnostic?.provider ?? null,
+            free_retrieval_http_status_class: diagnostic?.http_status_class ?? null,
             error: null
           },
           expiresAt: this.expiryFrom(updatedAt, job)
         };
+        console.warn(JSON.stringify({
+          event: "facebook_free_retrieval_failed",
+          job_id: job.job_id,
+          provider: waiting.job.free_retrieval_provider ?? null,
+          error_code: errorCode,
+          http_status_class: waiting.job.free_retrieval_http_status_class ?? null
+        }));
         await this.store.put(waiting);
         return this.publicJob(waiting.job, false);
       }
-      return await this.completeFacebookFallback(record, asset, input.language_hint);
+      if (isManagedFacebookFreeRetrievalFailure(freeResult)) {
+        throw new Error("Unreachable Facebook retrieval failure state.");
+      }
+      return await this.completeFacebookFallback(record, freeResult, input.language_hint);
     } catch (error) {
       const normalized = error instanceof MediaTranscriptError
         ? error

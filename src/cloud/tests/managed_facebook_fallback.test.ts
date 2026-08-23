@@ -3,11 +3,15 @@ import { test } from "node:test";
 import {
   FacebookMediaRetrievalError,
   type FacebookMediaAsset,
-  type FacebookRetrievalCreditConsent
+  type FacebookMediaRetriever,
+  type FacebookRetrievalCreditConsent,
+  type FacebookRetrievalHttpStatusClass
 } from "../src/facebook_media_retrieval.js";
-import type {
-  ManagedFacebookPipeline,
-  ManagedFacebookSttResult
+import {
+  AssemblyAiFacebookMediaStt,
+  DefaultManagedFacebookPipeline,
+  type ManagedFacebookPipeline,
+  type ManagedFacebookSttResult
 } from "../src/facebook_managed_pipeline.js";
 import { MediaBetaGate } from "../src/media_beta.js";
 import {
@@ -450,6 +454,67 @@ test("STT quota is reserved before STT side effect and preserves paid retrieval 
   assert.equal(failed.credit_charge_uncertain, false);
   assert.equal(paidCalls, 1);
   assert.equal(sttAfterReserve, 0);
+});
+
+test("free Cobalt failure classes persist safe diagnostics without leaking sensitive payloads", async () => {
+  const cases: Array<{
+    code: string;
+    httpStatus: number;
+    statusClass: FacebookRetrievalHttpStatusClass;
+  }> = [
+    { code: "FACEBOOK_COBALT_UNREACHABLE", httpStatus: 502, statusClass: null },
+    { code: "FACEBOOK_COBALT_FAILED", httpStatus: 422, statusClass: "4xx" },
+    { code: "FACEBOOK_RETRIEVAL_INVALID_JSON", httpStatus: 502, statusClass: "2xx" },
+    { code: "FACEBOOK_COBALT_NO_DIRECT_MEDIA", httpStatus: 422, statusClass: "2xx" }
+  ];
+
+  for (const item of cases) {
+    const retriever: FacebookMediaRetriever = {
+      provider: "cobalt",
+      async retrieve() {
+        throw new FacebookMediaRetrievalError(
+          item.code,
+          "sensitive provider body https://private.example/?token=SECRET",
+          item.httpStatus,
+          false,
+          "cobalt",
+          null,
+          null,
+          item.statusClass
+        );
+      }
+    };
+    const pipeline = new DefaultManagedFacebookPipeline(
+      retriever,
+      null,
+      new AssemblyAiFacebookMediaStt("mock-only-key")
+    );
+    const app = service(pipeline, new DurableTestStore());
+    const warnings: string[] = [];
+    const originalWarn = console.warn;
+    console.warn = (...args: unknown[]) => warnings.push(args.map(String).join(" "));
+    let waiting;
+    try {
+      waiting = await app.startFacebookFallback({
+        url: FACEBOOK_URL,
+        language_hint: "auto",
+        beta_access_code: ACCESS_CODE
+      });
+    } finally {
+      console.warn = originalWarn;
+    }
+
+    assert.equal(waiting.status, "AWAITING_RETRIEVAL_CONSENT");
+    assert.equal(waiting.credits_charged, 0);
+    assert.equal(waiting.free_retrieval_error_code, item.code);
+    assert.equal(waiting.free_retrieval_provider, "cobalt");
+    assert.equal(waiting.free_retrieval_http_status_class, item.statusClass);
+    assert.equal(waiting.error, null);
+    const log = warnings.join("\n");
+    assert.match(log, /facebook_free_retrieval_failed/);
+    assert.match(log, new RegExp(item.code));
+    assert.doesNotMatch(log, /facebook\.com|private\.example|SECRET|OWNER_A97B_TEST_2026/);
+  }
 });
 
 test("Facebook fallback request key is stable, owner-isolated, and separate from URL spelling", () => {

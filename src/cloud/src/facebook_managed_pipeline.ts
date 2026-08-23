@@ -3,9 +3,12 @@ import { mkdtemp, readFile, rm, stat, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import {
+  FacebookMediaRetrievalError,
   type FacebookMediaAsset,
+  type FacebookMediaRetrievalProvider,
   type FacebookMediaRetriever,
-  type FacebookRetrievalCreditConsent
+  type FacebookRetrievalCreditConsent,
+  type FacebookRetrievalHttpStatusClass
 } from "./facebook_media_retrieval.js";
 import {
   MediaTranscriptError,
@@ -44,9 +47,27 @@ export interface ManagedFacebookSttResult {
   segments: MediaTranscriptSegment[];
 }
 
+export interface ManagedFacebookFreeRetrievalFailure {
+  kind: "failure";
+  error_code: string;
+  provider: FacebookMediaRetrievalProvider | null;
+  http_status_class: FacebookRetrievalHttpStatusClass;
+}
+
+export type ManagedFacebookFreeRetrievalResult =
+  | FacebookMediaAsset
+  | ManagedFacebookFreeRetrievalFailure
+  | null;
+
+export function isManagedFacebookFreeRetrievalFailure(
+  value: ManagedFacebookFreeRetrievalResult
+): value is ManagedFacebookFreeRetrievalFailure {
+  return value !== null && "kind" in value && value.kind === "failure";
+}
+
 export interface ManagedFacebookPipeline {
   readonly configured: boolean;
-  freeRetrieve(sourceUrl: string): Promise<FacebookMediaAsset | null>;
+  freeRetrieve(sourceUrl: string): Promise<ManagedFacebookFreeRetrievalResult>;
   paidRetrieve(
     sourceUrl: string,
     consent: FacebookRetrievalCreditConsent
@@ -383,12 +404,32 @@ export class DefaultManagedFacebookPipeline implements ManagedFacebookPipeline {
     this.configured = stt.configured && Boolean(freeRetriever || paidRetriever);
   }
 
-  async freeRetrieve(sourceUrl: string): Promise<FacebookMediaAsset | null> {
-    if (!this.freeRetriever) return null;
+  async freeRetrieve(sourceUrl: string): Promise<ManagedFacebookFreeRetrievalResult> {
+    if (!this.freeRetriever) {
+      return {
+        kind: "failure",
+        error_code: "FACEBOOK_FREE_RETRIEVER_NOT_CONFIGURED",
+        provider: null,
+        http_status_class: null
+      };
+    }
     try {
       return await this.freeRetriever.retrieve(sourceUrl);
-    } catch {
-      return null;
+    } catch (error) {
+      if (error instanceof FacebookMediaRetrievalError) {
+        return {
+          kind: "failure",
+          error_code: error.code,
+          provider: error.provider ?? this.freeRetriever.provider,
+          http_status_class: error.providerHttpStatusClass
+        };
+      }
+      return {
+        kind: "failure",
+        error_code: "FACEBOOK_FREE_RETRIEVAL_UNKNOWN",
+        provider: this.freeRetriever.provider,
+        http_status_class: null
+      };
     }
   }
 
