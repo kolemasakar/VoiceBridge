@@ -1,0 +1,266 @@
+name: A9.6 Facebook Fresh Job AI Approved
+
+on:
+  push:
+    branches:
+      - agent/krc-media-transcript
+    paths:
+      - .github/triggers/a9-6-facebook-fresh-job-ai-approved.txt
+
+permissions:
+  contents: read
+  issues: write
+  pull-requests: write
+
+concurrency:
+  group: a9-6-facebook-fresh-job-ai-approved
+  cancel-in-progress: false
+
+env:
+  RENDER_API_BASE: https://api.render.com/v1
+  SERVICE_ID: srv-da1kic5bedkc73d6fk60
+  SERVICE_NAME: voicebridge-krc-media-beta-kolemasakar
+  REQUIRED_BRANCH: agent/krc-media-transcript
+  REQUIRED_CODE_SHA: 98368918c683c52b0635d73da4b1e55005dd99e6
+  BETA_BASE_URL: https://voicebridge-krc-media-beta-kolemasakar.onrender.com
+  FACEBOOK_URL: https://www.facebook.com/reel/1114235920664408/
+  JOB_ID: KRCM_e502967f-05cb-44ec-bb65-cdc014181d5d
+  EXPECTED_BEFORE: '80'
+  EXPECTED_MAX: '2'
+  EXPECTED_AFTER_MAX: '78'
+  EXPECTED_DURATION: '22'
+
+jobs:
+  one-shot-ai:
+    runs-on: ubuntu-latest
+    env:
+      RENDER_API_KEY: ${{ secrets.RENDER_API_KEY }}
+      GH_TOKEN: ${{ github.token }}
+    steps:
+      - name: Verify isolated beta and exact live source
+        id: gate
+        shell: bash
+        run: |
+          set -euo pipefail
+          test -n "${RENDER_API_KEY:-}"
+          echo "::add-mask::$RENDER_API_KEY"
+          [[ "$GITHUB_REF_NAME" == "$REQUIRED_BRANCH" ]]
+
+          code="$(curl -sS --max-time 30 -o /tmp/service.json -w '%{http_code}' \
+            "${RENDER_API_BASE}/services/${SERVICE_ID}" \
+            -H 'Accept: application/json' \
+            -H "Authorization: Bearer ${RENDER_API_KEY}")"
+          [[ "$code" == 200 ]]
+          [[ "$(jq -r '.name // empty' /tmp/service.json)" == "$SERVICE_NAME" ]]
+          [[ "$(jq -r '.branch // empty' /tmp/service.json)" == "$REQUIRED_BRANCH" ]]
+
+          code="$(curl -sS --max-time 30 -o /tmp/deploys.json -w '%{http_code}' \
+            "${RENDER_API_BASE}/services/${SERVICE_ID}/deploys?limit=10" \
+            -H 'Accept: application/json' \
+            -H "Authorization: Bearer ${RENDER_API_KEY}")"
+          [[ "$code" == 200 ]]
+          latest_live_sha="$(jq -r '[.[] | (.deploy // .) | select(.status == "live")][0] | (.commit.id // .commitId // empty)' /tmp/deploys.json)"
+          [[ "$latest_live_sha" == "$REQUIRED_CODE_SHA" ]]
+          echo "live_sha=$latest_live_sha" >> "$GITHUB_OUTPUT"
+
+      - name: Read and mask Action bearer
+        id: action
+        shell: bash
+        run: |
+          set -euo pipefail
+          code="$(curl -sS --max-time 30 -o /tmp/env.json -w '%{http_code}' \
+            "${RENDER_API_BASE}/services/${SERVICE_ID}/env-vars/KRC_MEDIA_ACTION_TOKEN" \
+            -H 'Accept: application/json' \
+            -H "Authorization: Bearer ${RENDER_API_KEY}")"
+          [[ "$code" == 200 ]]
+          token="$(jq -r '(.envVar.value // .value // empty)' /tmp/env.json)"
+          test -n "$token"
+          echo "::add-mask::$token"
+          echo "token=$token" >> "$GITHUB_OUTPUT"
+
+      - name: Guard exact durable job read-only
+        id: before
+        env:
+          ACTION_TOKEN: ${{ steps.action.outputs.token }}
+        shell: bash
+        run: |
+          set -euo pipefail
+          code="$(curl -sS --max-time 60 -o /tmp/job-before.json -w '%{http_code}' \
+            "${BETA_BASE_URL}/api/v1/media/managed/transcriptions/${JOB_ID}" \
+            -H 'Accept: application/json' \
+            -H "Authorization: Bearer ${ACTION_TOKEN}")"
+          [[ "$code" == 200 ]]
+          jq -e --arg job "$JOB_ID" --argjson duration "$EXPECTED_DURATION" --argjson max "$EXPECTED_MAX" '
+            .job_id == $job and
+            .status == "AWAITING_AI_CONSENT" and
+            .provider == "supadata" and
+            .provider_mode == "native" and
+            .credits_charged == 2 and
+            .segment_count == 0 and
+            .metadata_credits_charged == 1 and
+            .media_duration_seconds == $duration and
+            .ai_credit_ceiling == $max and
+            .credit_charge_uncertain == false
+          ' /tmp/job-before.json >/dev/null
+          echo "status=$(jq -r '.status' /tmp/job-before.json)" >> "$GITHUB_OUTPUT"
+
+      - name: Recheck exact approved AI quote
+        id: quote
+        env:
+          ACTION_TOKEN: ${{ steps.action.outputs.token }}
+        shell: bash
+        run: |
+          set -euo pipefail
+          code="$(curl -sS --max-time 60 -o /tmp/quote.json -w '%{http_code}' \
+            "${BETA_BASE_URL}/api/v1/media/managed/transcriptions/${JOB_ID}/ai-preflight" \
+            -H 'Accept: application/json' \
+            -H "Authorization: Bearer ${ACTION_TOKEN}")"
+          [[ "$code" == 200 ]]
+          jq -e --argjson duration "$EXPECTED_DURATION" --argjson max "$EXPECTED_MAX" '
+            .provider == "supadata" and
+            .mode == "generate" and
+            .estimate_basis == "facebook_metadata_duration" and
+            .media_duration_seconds == $duration and
+            .maximum_credits == $max and
+            .credits_per_minute == 2 and
+            .consent_required == true and
+            .can_continue == true
+          ' /tmp/quote.json >/dev/null
+          available="$(jq -r '.credits_available' /tmp/quote.json)"
+          maximum="$(jq -r '.maximum_credits' /tmp/quote.json)"
+          after="$(jq -r '.credits_after_estimate' /tmp/quote.json)"
+          [[ "$available" == "$EXPECTED_BEFORE" ]]
+          [[ "$maximum" == "$EXPECTED_MAX" ]]
+          [[ "$after" == "$EXPECTED_AFTER_MAX" ]]
+          echo "available=$available" >> "$GITHUB_OUTPUT"
+          echo "maximum=$maximum" >> "$GITHUB_OUTPUT"
+          echo "after=$after" >> "$GITHUB_OUTPUT"
+
+      - name: Execute exactly one approved AI generate request
+        id: ai
+        env:
+          ACTION_TOKEN: ${{ steps.action.outputs.token }}
+        shell: bash
+        run: |
+          set +e
+          payload='{"credit_consent":{"provider":"supadata","mode":"generate","max_credits":2}}'
+          curl_rc=0
+
+          # BILLABLE-CAPABLE CALL: EXACTLY ONE ATTEMPT. NO --retry AND NO REPLAY.
+          code="$(curl -sS --connect-timeout 20 --max-time 300 -o /tmp/result.json -w '%{http_code}' \
+            -X POST "${BETA_BASE_URL}/api/v1/media/managed/transcriptions/${JOB_ID}/ai" \
+            -H 'Accept: application/json' \
+            -H 'Content-Type: application/json' \
+            -H "Authorization: Bearer ${ACTION_TOKEN}" \
+            --data "$payload")" || curl_rc=$?
+
+          echo "attempts=1" >> "$GITHUB_OUTPUT"
+          echo "curl_rc=$curl_rc" >> "$GITHUB_OUTPUT"
+          echo "http=${code:-000}" >> "$GITHUB_OUTPUT"
+          echo "status=$(jq -r '.status // "unknown"' /tmp/result.json 2>/dev/null)" >> "$GITHUB_OUTPUT"
+          echo "provider_mode=$(jq -r '.provider_mode // "unknown"' /tmp/result.json 2>/dev/null)" >> "$GITHUB_OUTPUT"
+          echo "cumulative=$(jq -r '.credits_charged // "unknown"' /tmp/result.json 2>/dev/null)" >> "$GITHUB_OUTPUT"
+          echo "segments=$(jq -r '.segment_count // 0' /tmp/result.json 2>/dev/null)" >> "$GITHUB_OUTPUT"
+          echo "chars=$(jq -r '.transcript_characters // 0' /tmp/result.json 2>/dev/null)" >> "$GITHUB_OUTPUT"
+          echo "language=$(jq -r '.detected_language // "none"' /tmp/result.json 2>/dev/null)" >> "$GITHUB_OUTPUT"
+          echo "uncertain=$(jq -r 'if has("credit_charge_uncertain") then (.credit_charge_uncertain|tostring) else "unknown" end' /tmp/result.json 2>/dev/null)" >> "$GITHUB_OUTPUT"
+          echo "error=$(jq -r '.error.code // .error_code // "none"' /tmp/result.json 2>/dev/null)" >> "$GITHUB_OUTPUT"
+          exit 0
+
+      - name: Read post-call provider balance using free native preflight only
+        id: after
+        if: always() && steps.ai.outputs.attempts == '1'
+        env:
+          ACTION_TOKEN: ${{ steps.action.outputs.token }}
+        shell: bash
+        run: |
+          set +e
+          payload="$(jq -nc --arg url "$FACEBOOK_URL" '{url:$url,language_hint:"auto"}')"
+          code="$(curl -sS --max-time 90 -o /tmp/post-balance.json -w '%{http_code}' \
+            -X POST "${BETA_BASE_URL}/api/v1/media/managed/preflight" \
+            -H 'Accept: application/json' \
+            -H 'Content-Type: application/json' \
+            -H "Authorization: Bearer ${ACTION_TOKEN}" \
+            --data "$payload" || true)"
+          balance=unknown
+          if [[ "$code" == 200 ]]; then balance="$(jq -r '.credits_available // "unknown"' /tmp/post-balance.json)"; fi
+          echo "http=${code:-000}" >> "$GITHUB_OUTPUT"
+          echo "balance=$balance" >> "$GITHUB_OUTPUT"
+          exit 0
+
+      - name: Read job back from durable storage only
+        id: readback
+        if: always() && steps.ai.outputs.attempts == '1'
+        env:
+          ACTION_TOKEN: ${{ steps.action.outputs.token }}
+        shell: bash
+        run: |
+          set +e
+          code="$(curl -sS --max-time 60 -o /tmp/readback.json -w '%{http_code}' \
+            "${BETA_BASE_URL}/api/v1/media/managed/transcriptions/${JOB_ID}" \
+            -H 'Accept: application/json' \
+            -H "Authorization: Bearer ${ACTION_TOKEN}" || true)"
+          echo "http=${code:-000}" >> "$GITHUB_OUTPUT"
+          echo "status=$(jq -r '.status // "unknown"' /tmp/readback.json 2>/dev/null)" >> "$GITHUB_OUTPUT"
+          echo "provider_mode=$(jq -r '.provider_mode // "unknown"' /tmp/readback.json 2>/dev/null)" >> "$GITHUB_OUTPUT"
+          echo "cumulative=$(jq -r '.credits_charged // "unknown"' /tmp/readback.json 2>/dev/null)" >> "$GITHUB_OUTPUT"
+          echo "segments=$(jq -r '.segment_count // 0' /tmp/readback.json 2>/dev/null)" >> "$GITHUB_OUTPUT"
+          echo "chars=$(jq -r '.transcript_characters // 0' /tmp/readback.json 2>/dev/null)" >> "$GITHUB_OUTPUT"
+          echo "language=$(jq -r '.detected_language // "none"' /tmp/readback.json 2>/dev/null)" >> "$GITHUB_OUTPUT"
+          echo "uncertain=$(jq -r 'if has("credit_charge_uncertain") then (.credit_charge_uncertain|tostring) else "unknown" end' /tmp/readback.json 2>/dev/null)" >> "$GITHUB_OUTPUT"
+          echo "error=$(jq -r '.error.code // "none"' /tmp/readback.json 2>/dev/null)" >> "$GITHUB_OUTPUT"
+          exit 0
+
+      - name: Read transcript page only if completed
+        id: durable
+        if: always() && steps.readback.outputs.status == 'COMPLETED'
+        env:
+          ACTION_TOKEN: ${{ steps.action.outputs.token }}
+        shell: bash
+        run: |
+          set +e
+          code="$(curl -sS --max-time 60 -o /tmp/segments.json -w '%{http_code}' \
+            "${BETA_BASE_URL}/api/v1/media/managed/transcriptions/${JOB_ID}/segments?cursor=0&limit=50" \
+            -H 'Accept: application/json' \
+            -H "Authorization: Bearer ${ACTION_TOKEN}" || true)"
+          count=0
+          if [[ "$code" == 200 ]]; then count="$(jq -r '(.segments // []) | length' /tmp/segments.json 2>/dev/null)"; fi
+          echo "http=${code:-000}" >> "$GITHUB_OUTPUT"
+          echo "count=$count" >> "$GITHUB_OUTPUT"
+          exit 0
+
+      - name: Report exact one-shot AI result
+        if: always()
+        env:
+          LIVE_SHA: ${{ steps.gate.outputs.live_sha }}
+          BEFORE_STATUS: ${{ steps.before.outputs.status }}
+          QUOTE_BEFORE: ${{ steps.quote.outputs.available }}
+          QUOTE_MAX: ${{ steps.quote.outputs.maximum }}
+          QUOTE_AFTER: ${{ steps.quote.outputs.after }}
+          ATTEMPTS: ${{ steps.ai.outputs.attempts }}
+          CURL_RC: ${{ steps.ai.outputs.curl_rc }}
+          HTTP: ${{ steps.ai.outputs.http }}
+          POST_STATUS: ${{ steps.ai.outputs.status }}
+          POST_MODE: ${{ steps.ai.outputs.provider_mode }}
+          POST_CUMULATIVE: ${{ steps.ai.outputs.cumulative }}
+          POST_SEGMENTS: ${{ steps.ai.outputs.segments }}
+          POST_CHARS: ${{ steps.ai.outputs.chars }}
+          POST_LANGUAGE: ${{ steps.ai.outputs.language }}
+          POST_UNCERTAIN: ${{ steps.ai.outputs.uncertain }}
+          POST_ERROR: ${{ steps.ai.outputs.error }}
+          BALANCE_AFTER: ${{ steps.after.outputs.balance }}
+          READBACK_HTTP: ${{ steps.readback.outputs.http }}
+          READBACK_STATUS: ${{ steps.readback.outputs.status }}
+          READBACK_MODE: ${{ steps.readback.outputs.provider_mode }}
+          READBACK_CUMULATIVE: ${{ steps.readback.outputs.cumulative }}
+          READBACK_SEGMENTS: ${{ steps.readback.outputs.segments }}
+          READBACK_CHARS: ${{ steps.readback.outputs.chars }}
+          READBACK_LANGUAGE: ${{ steps.readback.outputs.language }}
+          READBACK_UNCERTAIN: ${{ steps.readback.outputs.uncertain }}
+          READBACK_ERROR: ${{ steps.readback.outputs.error }}
+          PAGE_HTTP: ${{ steps.durable.outputs.http }}
+          PAGE_COUNT: ${{ steps.durable.outputs.count }}
+        shell: bash
+        run: |
+          set -euo pipefail
+          gh pr comment 28 --repo kolemasakar/VoiceBridge --body "A9.6 Facebook fresh-job AI generate: **ONE-SHOT RESULT**. Explicit owner authorization: exactly one AI generate request for \`${JOB_ID}\`, hard max \`2\` Supadata credits. live_sha=\`${LIVE_SHA:-unknown}\`; pre_status=\`${BEFORE_STATUS:-unknown}\`; AI_quote=\`${QUOTE_BEFORE:-unknown}\` -> worst_case \`${QUOTE_AFTER:-unknown}\` max=\`${QUOTE_MAX:-unknown}\`; billable_capable_attempts=\`${ATTEMPTS:-0}\`; curl_rc=\`${CURL_RC:-unknown}\`; ai_http=\`${HTTP:-unknown}\`; post_status=\`${POST_STATUS:-unknown}\`; post_provider_mode=\`${POST_MODE:-unknown}\`; post_cumulative_job_credits=\`${POST_CUMULATIVE:-unknown}\`; post_segments=\`${POST_SEGMENTS:-0}\`; post_transcript_characters=\`${POST_CHARS:-0}\`; post_language=\`${POST_LANGUAGE:-none}\`; post_charge_uncertain=\`${POST_UNCERTAIN:-unknown}\`; post_error=\`${POST_ERROR:-none}\`; provider_balance_after=\`${BALANCE_AFTER:-unknown}\`; readback_http=\`${READBACK_HTTP:-skipped}\`; readback_status=\`${READBACK_STATUS:-unknown}\`; readback_provider_mode=\`${READBACK_MODE:-unknown}\`; readback_cumulative_job_credits=\`${READBACK_CUMULATIVE:-unknown}\`; readback_segments=\`${READBACK_SEGMENTS:-0}\`; readback_transcript_characters=\`${READBACK_CHARS:-0}\`; readback_language=\`${READBACK_LANGUAGE:-none}\`; readback_charge_uncertain=\`${READBACK_UNCERTAIN:-unknown}\`; readback_error=\`${READBACK_ERROR:-none}\`; segments_page_http=\`${PAGE_HTTP:-skipped}\`; first_page_segments=\`${PAGE_COUNT:-0}\`. No second AI start, native retry, metadata retry, automatic replay, production, main, or merge action was executed."
