@@ -283,11 +283,20 @@ function parseTranscriptResult(
   const availableLanguages = explicitAvailableLanguages.length > 0
     ? explicitAvailableLanguages
     : language ? [language] : [];
+  if (Array.isArray(payload.content) && payload.content.length === 0) {
+    emitSafeTranscriptShape(rawPayload, context);
+    throw new MediaTranscriptError(
+      "MANAGED_PROVIDER_TRANSCRIPT_EMPTY",
+      "The managed transcript provider returned an empty transcript.",
+      422,
+      false
+    );
+  }
   if (!language || segments.length === 0) {
     emitSafeTranscriptShape(rawPayload, context);
     throw new MediaTranscriptError(
       "MANAGED_PROVIDER_TRANSCRIPT_INVALID",
-      "The managed transcript provider returned an empty or invalid transcript.",
+      "The managed transcript provider returned an invalid transcript payload.",
       502,
       true
     );

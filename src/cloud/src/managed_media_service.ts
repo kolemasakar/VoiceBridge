@@ -586,6 +586,40 @@ export class ManagedMediaService {
     return record;
   }
 
+  private async reconcileAiFailureCharge(
+    record: ManagedMediaStoredRecord,
+    quote: SupadataGenerateCreditQuote
+  ): Promise<{ billableCredits: number; remainingCredits: number; certain: boolean }> {
+    try {
+      const platform = managedMediaPlatform(record.job.source_url);
+      let afterQuote: SupadataGenerateCreditQuote | null = null;
+      if (isManagedInstagramReelUrl(record.job.source_url)) {
+        if (!this.transcriptProvider?.quoteGenerateInstagramReel) {
+          return { billableCredits: 0, remainingCredits: quote.remaining_credits, certain: false };
+        }
+        afterQuote = await this.transcriptProvider.quoteGenerateInstagramReel();
+      } else if (
+        platform === "facebook" &&
+        (record.job.media_duration_seconds ?? null) !== null &&
+        this.transcriptProvider?.quoteGenerateForDuration
+      ) {
+        afterQuote = await this.transcriptProvider.quoteGenerateForDuration(
+          record.job.media_duration_seconds!
+        );
+      }
+      if (!afterQuote) {
+        return { billableCredits: 0, remainingCredits: quote.remaining_credits, certain: false };
+      }
+      return {
+        billableCredits: Math.max(0, quote.remaining_credits - afterQuote.remaining_credits),
+        remainingCredits: afterQuote.remaining_credits,
+        certain: true
+      };
+    } catch {
+      return { billableCredits: 0, remainingCredits: quote.remaining_credits, certain: false };
+    }
+  }
+
   async preflight(
     input: ManagedMediaPreflightInput
   ): Promise<ManagedMediaCreditPreflight> {
@@ -1174,6 +1208,8 @@ export class ManagedMediaService {
           500,
           false
         );
+      const reconciliation = await this.reconcileAiFailureCharge(record, quote);
+      const capBreached = reconciliation.billableCredits > input.credit_consent.max_credits;
       const updatedAt = new Date().toISOString();
       const failed: ManagedMediaStoredRecord = {
         ...processing,
@@ -1181,10 +1217,14 @@ export class ManagedMediaService {
           ...processing.job,
           status: "FAILED",
           updated_at: updatedAt,
-          credit_charge_uncertain: true,
+          credits_charged: record.job.credits_charged + reconciliation.billableCredits,
+          credits_remaining_estimate: reconciliation.remainingCredits,
+          credit_charge_uncertain: !reconciliation.certain,
           error: {
-            code: normalized.code,
-            message: normalized.message,
+            code: capBreached ? "MANAGED_PROVIDER_AI_CREDIT_CAP_BREACH" : normalized.code,
+            message: capBreached
+              ? "The provider balance moved by more credits than the user-approved AI maximum."
+              : normalized.message,
             retryable: false
           }
         },
