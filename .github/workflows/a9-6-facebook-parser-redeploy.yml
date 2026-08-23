@@ -27,9 +27,9 @@ jobs:
       SERVICE_NAME: voicebridge-krc-media-beta-kolemasakar
       REQUIRED_BRANCH: agent/krc-media-transcript
       BETA_BASE_URL: https://voicebridge-krc-media-beta-kolemasakar.onrender.com
-      CODE_SHA: f6b32c2a03425deaecadd10fc902671d62eaab5d
+      CODE_SHA: 877a09f5a64d34e675f4b9302e89f40aa3235cf4
     steps:
-      - name: Redeploy exact parser commit with cleared cache
+      - name: Redeploy exact retention commit with cleared cache
         id: deploy
         shell: bash
         run: |
@@ -65,13 +65,23 @@ jobs:
             esac
             sleep 5
           done
-          health_http="000"
-          health_value="none"
+
+          action_token=""
+          cap_http="000"
+          cap_ok=false
           if [[ "$final_status" == "live" && "$final_sha" == "$CODE_SHA" ]]; then
+            curl -sS "${RENDER_API_BASE}/services/${SERVICE_ID}/env-vars/KRC_MEDIA_ACTION_TOKEN" \
+              -H 'Accept: application/json' -H "Authorization: Bearer ${RENDER_API_KEY}" > /tmp/env.json
+            action_token="$(jq -r '(.envVar.value // .value // empty)' /tmp/env.json)"
+            test -n "$action_token"
+            echo "::add-mask::$action_token"
             for i in $(seq 1 12); do
-              health_http="$(curl -sS --max-time 15 -o /tmp/health.json -w '%{http_code}' "${BETA_BASE_URL}/health" || true)"
-              if [[ "$health_http" == 200 ]]; then
-                health_value="$(jq -r '.status // .ok // "unknown"' /tmp/health.json 2>/dev/null)"
+              cap_http="$(curl -sS --max-time 15 -o /tmp/cap.json -w '%{http_code}' \
+                "${BETA_BASE_URL}/api/v1/media/managed" \
+                -H 'Accept: application/json' \
+                -H "Authorization: Bearer ${action_token}" || true)"
+              if [[ "$cap_http" == 200 ]] && jq -e '.configured == true and .facebook_ai_fallback == true and .facebook_ai_requires_duration_metadata == true and .automatic_ai_fallback == false' /tmp/cap.json >/dev/null; then
+                cap_ok=true
                 break
               fi
               sleep 5
@@ -80,19 +90,19 @@ jobs:
           echo "deploy_id=$deploy_id" >> "$GITHUB_OUTPUT"
           echo "status=$final_status" >> "$GITHUB_OUTPUT"
           echo "sha=$final_sha" >> "$GITHUB_OUTPUT"
-          echo "health_http=$health_http" >> "$GITHUB_OUTPUT"
-          echo "health_value=$health_value" >> "$GITHUB_OUTPUT"
+          echo "cap_http=$cap_http" >> "$GITHUB_OUTPUT"
+          echo "cap_ok=$cap_ok" >> "$GITHUB_OUTPUT"
 
       - name: Report controlled redeploy
         env:
           DEPLOY_ID: ${{ steps.deploy.outputs.deploy_id }}
           STATUS: ${{ steps.deploy.outputs.status }}
           SHA: ${{ steps.deploy.outputs.sha }}
-          HEALTH_HTTP: ${{ steps.deploy.outputs.health_http }}
-          HEALTH_VALUE: ${{ steps.deploy.outputs.health_value }}
+          CAP_HTTP: ${{ steps.deploy.outputs.cap_http }}
+          CAP_OK: ${{ steps.deploy.outputs.cap_ok }}
         shell: bash
         run: |
           set -euo pipefail
           result=FAIL
-          if [[ "$STATUS" == "live" && "$SHA" == "$CODE_SHA" && "$HEALTH_HTTP" == "200" ]]; then result=PASS; fi
-          gh pr comment 28 --repo kolemasakar/VoiceBridge --body "A9.6 Facebook parser controlled redeploy: **${result}**. deploy_id=\`${DEPLOY_ID}\`, status=\`${STATUS}\`, sha=\`${SHA}\`, health_http=\`${HEALTH_HTTP}\`, health=\`${HEALTH_VALUE}\`. Exact parser commit only, isolated beta, cleared build cache. No Supadata or billable media endpoint was called. Production/main were not targeted."
+          if [[ "$STATUS" == "live" && "$SHA" == "$CODE_SHA" && "$CAP_HTTP" == "200" && "$CAP_OK" == "true" ]]; then result=PASS; fi
+          gh pr comment 28 --repo kolemasakar/VoiceBridge --body "A9.6 Facebook paid-retention isolated deploy: **${result}**. deploy_id=\`${DEPLOY_ID}\`, status=\`${STATUS}\`, sha=\`${SHA}\`, managed_capability_http=\`${CAP_HTTP}\`, facebook_capability_ok=\`${CAP_OK}\`. Exact source commit only, isolated beta, cleared build cache. No Supadata account/preflight/transcript/metadata/AI endpoint was called. Production/main were not targeted."
