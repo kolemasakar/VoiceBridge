@@ -1,0 +1,4 @@
+A9.7-G1 approved one-shot provisioning trigger.
+No Facebook URL/media retrieval.
+No VoiceBridge env/redeploy.
+No paid provider calls.
