@@ -90,4 +90,4 @@ jobs:
         run: |
           gh pr comment 28 --repo kolemasakar/VoiceBridge --body "A9.6 Facebook fresh free preflight diagnostic: provider_balance=\`${RESULT:-unknown}\`, reason=\`${REASON:-unknown}\`, preflight_http=\`${PREFLIGHT_HTTP:-unknown}\`, error_code=\`${ERROR_CODE:-unknown}\`, estimated_credits=\`${ESTIMATED:-unknown}\`, expected_after=\`${AFTER:-unknown}\`, consent_required=\`${CONSENT:-unknown}\`, can_continue=\`${CAN_CONTINUE:-unknown}\`. Free preflight only; no metadata, transcript, or AI start request was executed."
 
-# trigger: 2026-08-23T13:01+03:00 fresh free Facebook preflight diagnostic
+# trigger: 2026-08-23T13:06+03:00 fresh free Facebook preflight diagnostic retry
