@@ -1,6 +1,9 @@
 #!/usr/bin/env bash
 set -euo pipefail
 
+phase=init
+trap 'rc=$?; echo "A9.7-G1_FAIL_PHASE=${phase} rc=${rc}" >&2; exit "$rc"' ERR
+
 : "${RENDER_API_KEY:?RENDER_API_KEY required}"
 : "${GITHUB_OUTPUT:?GITHUB_OUTPUT required}"
 
@@ -13,21 +16,25 @@ IMAGE_URL=ghcr.io/imputnet/cobalt@sha256:63186dd68afd57ce3bb1f62cc4c139f5fa95b9c
 echo "::add-mask::$RENDER_API_KEY"
 api=(-H 'Accept: application/json' -H "Authorization: Bearer ${RENDER_API_KEY}")
 
+phase=owner_source
 curl -fsS "${RENDER_API_BASE}/services/${OWNER_SOURCE_SERVICE_ID}" "${api[@]}" > /tmp/owner-source.json
 owner_id="$(jq -r '.ownerId // empty' /tmp/owner-source.json)"
 test -n "$owner_id"
+echo 'A9.7-G1 owner source resolved.'
 
 lookup() {
-  curl -fsS --get "${RENDER_API_BASE}/services" "${api[@]}" \
-    --data-urlencode "name=${SERVICE_NAME}" --data-urlencode 'limit=20'
+  curl -fsS "${RENDER_API_BASE}/services?limit=100" "${api[@]}"
 }
 
+phase=service_lookup
 lookup > /tmp/by-name.json
 count="$(jq --arg name "$SERVICE_NAME" '[.[] | (.service // .) | select(.name == $name)] | length' /tmp/by-name.json)"
+echo "A9.7-G1 target service count=${count}"
 [[ "$count" -le 1 ]]
 created=false
 
 if [[ "$count" -eq 0 ]]; then
+  phase=credential_prepare
   key="$(python3 - <<'PY'
 import uuid
 print(uuid.uuid4())
@@ -37,8 +44,11 @@ PY
   jq -n --arg k "$key" '{($k): {name:"voicebridge-krc-media-beta", limit:20, allowedServices:["facebook"]}}' > /tmp/cobalt-keys.json
   chmod 600 /tmp/cobalt-keys.json
 
+  phase=cli_install
   curl -fsSL https://raw.githubusercontent.com/render-oss/cli/main/bin/install.sh | sh >/tmp/render-install.log 2>&1
+  phase=workspace_set
   render workspace set "$owner_id" -o text >/tmp/workspace-set.log 2>&1
+  phase=service_create
   render services create \
     --name "$SERVICE_NAME" \
     --type web_service \
@@ -62,6 +72,7 @@ PY
   shred -u /tmp/cobalt-keys.json 2>/dev/null || rm -f /tmp/cobalt-keys.json
 fi
 
+phase=resolve_service
 service_id=''
 for _ in $(seq 1 60); do
   lookup > /tmp/by-name-after.json
@@ -71,6 +82,7 @@ for _ in $(seq 1 60); do
 done
 test -n "$service_id"
 
+phase=validate_service
 curl -fsS "${RENDER_API_BASE}/services/${service_id}" "${api[@]}" >/tmp/service.json
 name="$(jq -r '.name // empty' /tmp/service.json)"
 type="$(jq -r '.type // empty' /tmp/service.json)"
@@ -87,6 +99,7 @@ if [[ -n "$image_seen" && "$image_seen" != "$IMAGE_URL" ]]; then
   exit 1
 fi
 
+phase=wait_deploy
 deploy_status=unknown
 deploy_id=none
 for _ in $(seq 1 120); do
@@ -103,6 +116,7 @@ for _ in $(seq 1 120); do
 done
 [[ "$deploy_status" == live ]]
 
+phase=health
 health_http=000
 for _ in $(seq 1 30); do
   health_http="$(curl -sS --max-time 30 -o /tmp/health.json -w '%{http_code}' "${SERVICE_URL}/" || true)"
@@ -111,6 +125,7 @@ for _ in $(seq 1 30); do
 done
 [[ "$health_http" == 200 ]]
 
+phase=unauth_gate
 unauth_http="$(curl -sS --max-time 30 -o /tmp/unauth.json -w '%{http_code}' \
   -X POST "${SERVICE_URL}/" \
   -H 'Accept: application/json' \
@@ -120,6 +135,7 @@ unauth_code="$(jq -r '.error.code // .error // empty' /tmp/unauth.json 2>/dev/nu
 [[ "$unauth_http" == 401 ]]
 [[ "$unauth_code" == *auth* ]]
 
+phase=outputs
 {
   echo "created=$created"
   echo "service_id=$service_id"
@@ -135,4 +151,4 @@ unauth_code="$(jq -r '.error.code // .error // empty' /tmp/unauth.json 2>/dev/nu
   echo "unauth_code=$unauth_code"
 } >> "$GITHUB_OUTPUT"
 
-# Registered PR-visible executor trigger marker.
+phase=done
