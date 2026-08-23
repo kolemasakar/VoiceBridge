@@ -70,7 +70,7 @@ jobs:
           echo "::add-mask::$action_token"
 
           health_http="$(curl -sS --max-time 30 -o /tmp/health.json -w '%{http_code}' \
-            "${BETA_BASE_URL}/health" -H "Authorization: Bearer ${action_token}")"
+            "${BETA_BASE_URL}/api/v1/health")"
           cap_http="$(curl -sS --max-time 30 -o /tmp/cap.json -w '%{http_code}' \
             "${BETA_BASE_URL}/api/v1/media/managed" -H 'Accept: application/json' \
             -H "Authorization: Bearer ${action_token}")"
@@ -126,4 +126,4 @@ jobs:
         run: |
           set -euo pipefail
           if [[ "${{ job.status }}" == success ]]; then result=PASS; else result=FAIL; fi
-          gh pr comment 28 --repo kolemasakar/VoiceBridge --body "A9.7-D Facebook isolated deploy/read-only capability: **${result}**. service=\`${SERVICE_NAME_ACTUAL:-unknown}\`, branch=\`${SERVICE_BRANCH_ACTUAL:-unknown}\`, requested_sha=\`${EXPECTED_SHA}\`, deploy_id=\`${DEPLOY_ID:-none}\`, deploy_status=\`${DEPLOY_STATUS:-unknown}\`, deployed_sha=\`${DEPLOYED_SHA:-unknown}\`, health_http=\`${HEALTH_HTTP:-unknown}\`, capability_http=\`${CAP_HTTP:-unknown}\`, a9_7_c_capability_ok=\`${CAP_OK:-unknown}\`, cobalt_configured=\`${FREE_CONFIGURED:-unknown}\`, scrapecreators_configured=\`${PAID_CONFIGURED:-unknown}\`, assemblyai_configured=\`${STT_CONFIGURED:-unknown}\`. Render/service/authenticated health+capability reads only. No Cobalt, ScrapeCreators, AssemblyAI, Supadata account/preflight/transcript/metadata/AI/media endpoint was called. Production/main were not targeted."
+          gh pr comment 28 --repo kolemasakar/VoiceBridge --body "A9.7-D Facebook isolated deploy/read-only capability: **${result}**. service=\`${SERVICE_NAME_ACTUAL:-unknown}\`, branch=\`${SERVICE_BRANCH_ACTUAL:-unknown}\`, requested_sha=\`${EXPECTED_SHA}\`, deploy_id=\`${DEPLOY_ID:-none}\`, deploy_status=\`${DEPLOY_STATUS:-unknown}\`, deployed_sha=\`${DEPLOYED_SHA:-unknown}\`, health_http=\`${HEALTH_HTTP:-unknown}\`, capability_http=\`${CAP_HTTP:-unknown}\`, a9_7_c_capability_ok=\`${CAP_OK:-unknown}\`, cobalt_configured=\`${FREE_CONFIGURED:-unknown}\`, scrapecreators_configured=\`${PAID_CONFIGURED:-unknown}\`, assemblyai_configured=\`${STT_CONFIGURED:-unknown}\`. Render/service public health + authenticated capability reads only. No Cobalt, ScrapeCreators, AssemblyAI, Supadata account/preflight/transcript/metadata/AI/media endpoint was called. Production/main were not targeted."
