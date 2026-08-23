@@ -1,0 +1,7 @@
+{
+  "REPLACE_WITH_GENERATED_UUID_V4": {
+    "name": "voicebridge-krc-media-beta",
+    "limit": 20,
+    "allowedServices": ["facebook"]
+  }
+}
