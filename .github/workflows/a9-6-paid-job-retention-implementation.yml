@@ -74,3 +74,5 @@ jobs:
           else
             gh pr comment 28 --repo kolemasakar/VoiceBridge --body "A9.6 paid managed-job retention: **FAIL** before deploy. patch=\`${PATCH_OUTCOME}\`, test=\`${TEST_OUTCOME}\`. No provider or Render operation was executed. Production/main were not targeted."
           fi
+
+# retrigger 2026-08-23
