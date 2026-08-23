@@ -1,0 +1,8 @@
+authorized=owner
+failed_job_id=KRCM_1e99b074-fdf6-4144-9278-0e66e9a79713
+canonical_source_url=https://www.facebook.com/reel/1114235920664408/
+max_native_credits=1
+required_balance_before=82
+required_balance_after=81
+required_live_sha=98368918c683c52b0635d73da4b1e55005dd99e6
+no_retry=true
