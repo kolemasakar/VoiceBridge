@@ -296,7 +296,7 @@ function parseTranscriptResult(
     emitSafeTranscriptShape(rawPayload, context);
     throw new MediaTranscriptError(
       "MANAGED_PROVIDER_TRANSCRIPT_INVALID",
-      "The managed transcript provider returned an invalid transcript payload.",
+      "The managed transcript provider returned an empty or invalid transcript.",
       502,
       true
     );
