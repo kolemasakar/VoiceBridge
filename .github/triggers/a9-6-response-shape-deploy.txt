@@ -1,3 +1,4 @@
 sha=b88e710526d3cc7feaa982368fdab584ee096389
 scope=isolated-beta-only
 provider_calls=forbidden
+retrigger=2026-08-23T13:06+03:00
