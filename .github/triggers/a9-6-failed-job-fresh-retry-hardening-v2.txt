@@ -1,4 +1,7 @@
-scope=isolated-beta-source-only
+scope=code-only-free
 provider_calls=forbidden
 render_calls=forbidden
-trigger=2026-08-23T13:21+03:00-v2
+production=forbidden
+main=forbidden
+action=A9.7-B-managed-facebook-integration
+trigger=2026-08-23T14:39+03:00
