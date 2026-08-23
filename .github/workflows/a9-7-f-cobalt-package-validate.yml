@@ -1,0 +1,60 @@
+name: A9.7-F Cobalt Package Validate
+
+on:
+  pull_request:
+    paths:
+      - deploy/cobalt-a9-7-f/**
+      - .github/workflows/a9-7-f-cobalt-package-validate.yml
+  push:
+    branches:
+      - agent/krc-media-transcript
+    paths:
+      - deploy/cobalt-a9-7-f/**
+      - .github/workflows/a9-7-f-cobalt-package-validate.yml
+
+permissions:
+  contents: read
+
+jobs:
+  validate:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Validate package invariants
+        shell: bash
+        run: |
+          set -euo pipefail
+          blueprint=deploy/cobalt-a9-7-f/render.cobalt-beta.yaml
+          keys=deploy/cobalt-a9-7-f/cobalt-keys.json.example
+          wiring=deploy/cobalt-a9-7-f/voicebridge.env.example
+
+          grep -Fq 'plan: free' "$blueprint"
+          grep -Fq 'region: frankfurt' "$blueprint"
+          grep -Fq 'ghcr.io/imputnet/cobalt@sha256:63186dd68afd57ce3bb1f62cc4c139f5fa95b9c3e87a3cf5c6e4c7a570523f62' "$blueprint"
+          grep -Fq 'value: "1"' "$blueprint"
+          grep -Fq 'file:///etc/secrets/cobalt-keys.json' "$blueprint"
+          grep -Fq 'REPLACE_WITH_GENERATED_UUID_V4' "$keys"
+          grep -Fq 'allowedServices": ["facebook"]' "$keys"
+          grep -Fq 'KRC_MEDIA_COBALT_ENDPOINT=https://krc-cobalt-media-beta-kolemasakar.onrender.com' "$wiring"
+          grep -Fq 'KRC_MEDIA_COBALT_API_KEY=REPLACE_WITH_THE_SAME_GENERATED_UUID_V4' "$wiring"
+
+          if grep -RIEq '[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}' deploy/cobalt-a9-7-f; then
+            echo 'A real-looking UUIDv4 must not be committed in the Cobalt package.' >&2
+            exit 1
+          fi
+          if grep -RIEq 'SCRAPECREATORS_API_KEY|SUPADATA_API_KEY|ASSEMBLYAI_API_KEY' deploy/cobalt-a9-7-f/render.cobalt-beta.yaml deploy/cobalt-a9-7-f/voicebridge.env.example; then
+            echo 'Paid/provider credentials must not be wired by A9.7-F.' >&2
+            exit 1
+          fi
+
+      - name: Install Render CLI
+        shell: bash
+        run: |
+          set -euo pipefail
+          curl -fsSL https://raw.githubusercontent.com/render-oss/cli/main/bin/install.sh | sh
+          echo "$HOME/.render/bin" >> "$GITHUB_PATH"
+
+      - name: Validate inert Render Blueprint
+        shell: bash
+        run: render blueprints validate deploy/cobalt-a9-7-f/render.cobalt-beta.yaml
