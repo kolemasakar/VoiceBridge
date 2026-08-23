@@ -28,6 +28,7 @@ export interface ManagedMediaPreflightInput {
 }
 
 export interface ManagedMediaNativeInput extends ManagedMediaPreflightInput {
+  retry_failed_job_id?: string;
   credit_consent: {
     provider: "supadata";
     mode: "native";
@@ -109,6 +110,7 @@ export interface ManagedMediaAiCreditPreflight {
 }
 
 const PAID_JOB_MIN_RETENTION_SECONDS = 86400;
+const MANAGED_MEDIA_JOB_ID = /^KRCM_[A-Za-z0-9-]+$/;
 
 export type ManagedMediaStatus =
   | "PROCESSING"
@@ -282,6 +284,20 @@ export function managedMediaRequestKey(
     .digest("hex");
 }
 
+function managedMediaRetryRequestKey(
+  normalizedUrl: string,
+  languageHint: MediaLanguageHint,
+  accessCode: string,
+  failedJobId: string
+): string {
+  return createHash("sha256")
+    .update(
+      `supadata|native-retry|${normalizedUrl}|${languageHint}|${managedMediaAccessDigest(accessCode)}|${failedJobId}`,
+      "utf8"
+    )
+    .digest("hex");
+}
+
 function parseLanguageHint(value: unknown): MediaLanguageHint | null {
   const normalized = value === undefined ? "auto" : String(value);
   return ["auto", "uk", "ru", "en"].includes(normalized)
@@ -334,8 +350,16 @@ export function parseManagedMediaNativeInput(
   ) {
     return null;
   }
+  const retryFailedJobId = (value as Record<string, unknown>).retry_failed_job_id;
+  if (
+    retryFailedJobId !== undefined &&
+    (typeof retryFailedJobId !== "string" || !MANAGED_MEDIA_JOB_ID.test(retryFailedJobId))
+  ) {
+    return null;
+  }
   return {
     ...common,
+    ...(retryFailedJobId ? { retry_failed_job_id: retryFailedJobId } : {}),
     credit_consent: {
       provider: "supadata",
       mode: "native",
@@ -849,11 +873,36 @@ export class ManagedMediaService {
     this.authorize(input.beta_access_code);
     await this.ensureStore();
     const sourceUrl = normalizeManagedMediaUrl(input.url);
-    const requestKey = managedMediaRequestKey(
+    const baseRequestKey = managedMediaRequestKey(
       sourceUrl,
       input.language_hint,
       input.beta_access_code
     );
+    let requestKey = baseRequestKey;
+    if (input.retry_failed_job_id) {
+      const retryTarget = await this.authorizedRecord(
+        input.retry_failed_job_id,
+        input.beta_access_code
+      );
+      if (
+        retryTarget.job.status !== "FAILED" ||
+        retryTarget.job.source_url !== sourceUrl ||
+        retryTarget.job.language_hint !== input.language_hint
+      ) {
+        throw new MediaTranscriptError(
+          "MEDIA_FAILED_RETRY_NOT_APPLICABLE",
+          "A fresh native retry requires the exact failed job for the same source and language.",
+          409,
+          false
+        );
+      }
+      requestKey = managedMediaRetryRequestKey(
+        sourceUrl,
+        input.language_hint,
+        input.beta_access_code,
+        retryTarget.job.job_id
+      );
+    }
     const existing = await this.reusableRecord(requestKey);
     if (existing) return this.publicJob(existing.job, true);
 

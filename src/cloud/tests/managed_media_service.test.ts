@@ -401,3 +401,117 @@ test("paid native-unavailable jobs retain at least a 24-hour recovery window", a
   ) / 1000;
   assert.ok(retentionSeconds >= 86400);
 });
+
+test("FAILED job supports one explicit fresh native retry key while preserving idempotency", async () => {
+  let nativeCalls = 0;
+  const baseProvider = provider("completed");
+  const fake: ManagedNativeTranscriptProvider = {
+    ...baseProvider,
+    async getNativeTranscript() {
+      nativeCalls += 1;
+      if (nativeCalls === 1) throw new Error("simulated provider failure");
+      return {
+        status: "completed",
+        language: "uk",
+        available_languages: ["uk"],
+        segments: [{
+          index: 0,
+          start_ms: 0,
+          end_ms: 1000,
+          text: "Fresh retry segment",
+          confidence: null
+        }],
+        transcript_text: "Fresh retry segment",
+        billable_credits: 1
+      };
+    }
+  };
+  const service = new ManagedMediaService(
+    new MediaBetaGate([ACCESS_CODE]),
+    null,
+    fake
+  );
+  const firstInput = parseManagedMediaNativeInput({
+    url: "https://www.facebook.com/reel/1114235920664408",
+    beta_access_code: ACCESS_CODE,
+    credit_consent: { provider: "supadata", mode: "native", max_credits: 1 }
+  });
+  assert.ok(firstInput);
+  const failed = await service.startNative(firstInput);
+  assert.equal(failed.status, "FAILED");
+  assert.equal(failed.reused, false);
+  assert.equal(nativeCalls, 1);
+
+  const retryInput = parseManagedMediaNativeInput({
+    url: "https://www.facebook.com/reel/1114235920664408",
+    beta_access_code: ACCESS_CODE,
+    retry_failed_job_id: failed.job_id,
+    credit_consent: { provider: "supadata", mode: "native", max_credits: 1 }
+  });
+  assert.ok(retryInput);
+  const fresh = await service.startNative(retryInput);
+  assert.equal(fresh.status, "COMPLETED");
+  assert.notEqual(fresh.job_id, failed.job_id);
+  assert.equal(fresh.reused, false);
+  assert.equal(nativeCalls, 2);
+
+  const duplicate = await service.startNative(retryInput);
+  assert.equal(duplicate.job_id, fresh.job_id);
+  assert.equal(duplicate.reused, true);
+  assert.equal(nativeCalls, 2);
+});
+
+test("fresh native retry rejects malformed or non-FAILED retry targets", async () => {
+  assert.equal(
+    parseManagedMediaNativeInput({
+      url: "https://youtu.be/retry-parser",
+      beta_access_code: ACCESS_CODE,
+      retry_failed_job_id: "not-a-managed-job",
+      credit_consent: { provider: "supadata", mode: "native", max_credits: 1 }
+    }),
+    null
+  );
+
+  let nativeCalls = 0;
+  const completedProvider = provider("completed");
+  const fake: ManagedNativeTranscriptProvider = {
+    ...completedProvider,
+    async getNativeTranscript(url, languageHint) {
+      nativeCalls += 1;
+      return completedProvider.getNativeTranscript(url, languageHint);
+    }
+  };
+  const service = new ManagedMediaService(
+    new MediaBetaGate([ACCESS_CODE]),
+    null,
+    fake
+  );
+  const firstInput = parseManagedMediaNativeInput({
+    url: "https://youtu.be/retry-completed",
+    beta_access_code: ACCESS_CODE,
+    credit_consent: { provider: "supadata", mode: "native", max_credits: 1 }
+  });
+  assert.ok(firstInput);
+  const completed = await service.startNative(firstInput);
+  assert.equal(completed.status, "COMPLETED");
+  assert.equal(nativeCalls, 1);
+
+  const retryInput = parseManagedMediaNativeInput({
+    url: "https://youtu.be/retry-completed",
+    beta_access_code: ACCESS_CODE,
+    retry_failed_job_id: completed.job_id,
+    credit_consent: { provider: "supadata", mode: "native", max_credits: 1 }
+  });
+  assert.ok(retryInput);
+  await assert.rejects(
+    () => service.startNative(retryInput),
+    (error: unknown) => {
+      assert.equal(
+        (error as { code?: string }).code,
+        "MEDIA_FAILED_RETRY_NOT_APPLICABLE"
+      );
+      return true;
+    }
+  );
+  assert.equal(nativeCalls, 1);
+});
