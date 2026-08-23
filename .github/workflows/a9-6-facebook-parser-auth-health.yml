@@ -1,4 +1,4 @@
-name: A9.7-E Facebook Free Configuration Audit
+name: A9.6 Facebook Parser Authenticated Health
 
 on:
   push:
@@ -12,107 +12,57 @@ permissions:
   issues: write
   pull-requests: write
 
-concurrency:
-  group: a9-7-e-facebook-free-config-audit
-  cancel-in-progress: false
-
 jobs:
-  audit:
+  verify:
     runs-on: ubuntu-latest
     env:
       RENDER_API_KEY: ${{ secrets.RENDER_API_KEY }}
       GH_TOKEN: ${{ github.token }}
       RENDER_API_BASE: https://api.render.com/v1
       SERVICE_ID: srv-da1kic5bedkc73d6fk60
-      SERVICE_NAME: voicebridge-krc-media-beta-kolemasakar
-      REQUIRED_BRANCH: agent/krc-media-transcript
-      EXPECTED_SHA: e5e2d968d87c6fdbefbcad70ecd05395cf61cec1
+      BETA_BASE_URL: https://voicebridge-krc-media-beta-kolemasakar.onrender.com
+      EXPECTED_SHA: f6b32c2a03425deaecadd10fc902671d62eaab5d
     steps:
-      - name: Read isolated service configuration only
-        id: audit
+      - name: Verify authenticated isolated health and capability
+        id: verify
         shell: bash
         run: |
           set -euo pipefail
           test -n "${RENDER_API_KEY:-}"
           echo "::add-mask::$RENDER_API_KEY"
+          curl -sS "${RENDER_API_BASE}/services/${SERVICE_ID}/env-vars/KRC_MEDIA_ACTION_TOKEN" \
+            -H 'Accept: application/json' -H "Authorization: Bearer ${RENDER_API_KEY}" > /tmp/env.json
+          action_token="$(jq -r '(.envVar.value // .value // empty)' /tmp/env.json)"
+          test -n "$action_token"
+          echo "::add-mask::$action_token"
+          curl -sS "${RENDER_API_BASE}/services/${SERVICE_ID}/deploys?limit=1" \
+            -H 'Accept: application/json' -H "Authorization: Bearer ${RENDER_API_KEY}" > /tmp/deploys.json
+          status="$(jq -r '.[0].deploy.status // .[0].status // "unknown"' /tmp/deploys.json)"
+          sha="$(jq -r '.[0].deploy.commit.id // .[0].commit.id // .[0].deploy.commitId // .[0].commitId // "unknown"' /tmp/deploys.json)"
+          health_http="$(curl -sS --max-time 30 -o /tmp/health.json -w '%{http_code}' "${BETA_BASE_URL}/health" -H "Authorization: Bearer ${action_token}")"
+          cap_http="$(curl -sS --max-time 30 -o /tmp/cap.json -w '%{http_code}' "${BETA_BASE_URL}/api/v1/media/managed" -H 'Accept: application/json' -H "Authorization: Bearer ${action_token}")"
+          health_ok=false
+          cap_ok=false
+          if [[ "$health_http" == 200 ]]; then health_ok=true; fi
+          if [[ "$cap_http" == 200 ]] && jq -e '.configured == true and .facebook_ai_fallback == true and .facebook_ai_requires_duration_metadata == true and .automatic_ai_fallback == false' /tmp/cap.json >/dev/null; then cap_ok=true; fi
+          echo "status=$status" >> "$GITHUB_OUTPUT"
+          echo "sha=$sha" >> "$GITHUB_OUTPUT"
+          echo "health_http=$health_http" >> "$GITHUB_OUTPUT"
+          echo "health_ok=$health_ok" >> "$GITHUB_OUTPUT"
+          echo "cap_http=$cap_http" >> "$GITHUB_OUTPUT"
+          echo "cap_ok=$cap_ok" >> "$GITHUB_OUTPUT"
 
-          curl -sS "${RENDER_API_BASE}/services/${SERVICE_ID}" \
-            -H 'Accept: application/json' \
-            -H "Authorization: Bearer ${RENDER_API_KEY}" > /tmp/service.json
-          service_name="$(jq -r '.name // empty' /tmp/service.json)"
-          service_branch="$(jq -r '.branch // empty' /tmp/service.json)"
-          service_type="$(jq -r '.type // .serviceDetails.type // "unknown"' /tmp/service.json)"
-          service_plan="$(jq -r '.serviceDetails.plan // .plan // "unknown"' /tmp/service.json)"
-          service_runtime="$(jq -r '.serviceDetails.runtime // .runtime // .serviceDetails.env // "unknown"' /tmp/service.json)"
-          service_region="$(jq -r '.region // .serviceDetails.region // "unknown"' /tmp/service.json)"
-          [[ "$service_name" == "$SERVICE_NAME" ]]
-          [[ "$service_branch" == "$REQUIRED_BRANCH" ]]
-
-          curl -sS "${RENDER_API_BASE}/services/${SERVICE_ID}/deploys?limit=20" \
-            -H 'Accept: application/json' \
-            -H "Authorization: Bearer ${RENDER_API_KEY}" > /tmp/deploys.json
-          live_row="$(jq -c '[.[] | (.deploy // .) | select(.status == "live")][0] // empty' /tmp/deploys.json)"
-          live_sha="$(jq -r '.commit.id // .commitId // "unknown"' <<<"$live_row")"
-          live_id="$(jq -r '.id // "none"' <<<"$live_row")"
-
-          curl -sS "${RENDER_API_BASE}/services/${SERVICE_ID}/env-vars" \
-            -H 'Accept: application/json' \
-            -H "Authorization: Bearer ${RENDER_API_KEY}" > /tmp/envs.json
-          jq -r '.[] | (.envVar.key // .key // empty)' /tmp/envs.json | sort -u > /tmp/env_keys.txt
-
-          has_key() {
-            if grep -Fxq "$1" /tmp/env_keys.txt; then echo true; else echo false; fi
-          }
-
-          cobalt_endpoint="$(has_key KRC_MEDIA_COBALT_ENDPOINT)"
-          cobalt_key="$(has_key KRC_MEDIA_COBALT_API_KEY)"
-          scrape_key="$(has_key SCRAPECREATORS_API_KEY)"
-          scrape_endpoint="$(has_key SCRAPECREATORS_ENDPOINT)"
-          scrape_cache="$(has_key SCRAPECREATORS_CACHE_MAX_AGE)"
-          assembly_key="$(has_key ASSEMBLYAI_API_KEY)"
-          supadata_key="$(has_key SUPADATA_API_KEY)"
-          database_url="$(has_key KRC_MEDIA_DATABASE_URL)"
-
-          echo "service_name=$service_name" >> "$GITHUB_OUTPUT"
-          echo "service_branch=$service_branch" >> "$GITHUB_OUTPUT"
-          echo "service_type=$service_type" >> "$GITHUB_OUTPUT"
-          echo "service_plan=$service_plan" >> "$GITHUB_OUTPUT"
-          echo "service_runtime=$service_runtime" >> "$GITHUB_OUTPUT"
-          echo "service_region=$service_region" >> "$GITHUB_OUTPUT"
-          echo "live_sha=$live_sha" >> "$GITHUB_OUTPUT"
-          echo "live_id=$live_id" >> "$GITHUB_OUTPUT"
-          echo "cobalt_endpoint=$cobalt_endpoint" >> "$GITHUB_OUTPUT"
-          echo "cobalt_key=$cobalt_key" >> "$GITHUB_OUTPUT"
-          echo "scrape_key=$scrape_key" >> "$GITHUB_OUTPUT"
-          echo "scrape_endpoint=$scrape_endpoint" >> "$GITHUB_OUTPUT"
-          echo "scrape_cache=$scrape_cache" >> "$GITHUB_OUTPUT"
-          echo "assembly_key=$assembly_key" >> "$GITHUB_OUTPUT"
-          echo "supadata_key=$supadata_key" >> "$GITHUB_OUTPUT"
-          echo "database_url=$database_url" >> "$GITHUB_OUTPUT"
-
-          [[ "$live_sha" == "$EXPECTED_SHA" ]]
-
-      - name: Report configuration presence only
-        if: always()
+      - name: Report verified state
         env:
-          SERVICE_NAME_ACTUAL: ${{ steps.audit.outputs.service_name }}
-          SERVICE_BRANCH_ACTUAL: ${{ steps.audit.outputs.service_branch }}
-          SERVICE_TYPE: ${{ steps.audit.outputs.service_type }}
-          SERVICE_PLAN: ${{ steps.audit.outputs.service_plan }}
-          SERVICE_RUNTIME: ${{ steps.audit.outputs.service_runtime }}
-          SERVICE_REGION: ${{ steps.audit.outputs.service_region }}
-          LIVE_SHA: ${{ steps.audit.outputs.live_sha }}
-          LIVE_ID: ${{ steps.audit.outputs.live_id }}
-          COBALT_ENDPOINT: ${{ steps.audit.outputs.cobalt_endpoint }}
-          COBALT_KEY: ${{ steps.audit.outputs.cobalt_key }}
-          SCRAPE_KEY: ${{ steps.audit.outputs.scrape_key }}
-          SCRAPE_ENDPOINT: ${{ steps.audit.outputs.scrape_endpoint }}
-          SCRAPE_CACHE: ${{ steps.audit.outputs.scrape_cache }}
-          ASSEMBLY_KEY: ${{ steps.audit.outputs.assembly_key }}
-          SUPADATA_KEY: ${{ steps.audit.outputs.supadata_key }}
-          DATABASE_URL: ${{ steps.audit.outputs.database_url }}
+          STATUS: ${{ steps.verify.outputs.status }}
+          SHA: ${{ steps.verify.outputs.sha }}
+          HEALTH_HTTP: ${{ steps.verify.outputs.health_http }}
+          HEALTH_OK: ${{ steps.verify.outputs.health_ok }}
+          CAP_HTTP: ${{ steps.verify.outputs.cap_http }}
+          CAP_OK: ${{ steps.verify.outputs.cap_ok }}
         shell: bash
         run: |
           set -euo pipefail
-          if [[ "${{ job.status }}" == success ]]; then result=PASS; else result=FAIL; fi
-          gh pr comment 28 --repo kolemasakar/VoiceBridge --body "A9.7-E free configuration audit: **${result}**. service=\`${SERVICE_NAME_ACTUAL:-unknown}\`, branch=\`${SERVICE_BRANCH_ACTUAL:-unknown}\`, type=\`${SERVICE_TYPE:-unknown}\`, plan=\`${SERVICE_PLAN:-unknown}\`, runtime=\`${SERVICE_RUNTIME:-unknown}\`, region=\`${SERVICE_REGION:-unknown}\`, live_deploy=\`${LIVE_ID:-none}\`, live_sha=\`${LIVE_SHA:-unknown}\`; env-presence only: KRC_MEDIA_COBALT_ENDPOINT=\`${COBALT_ENDPOINT:-unknown}\`, KRC_MEDIA_COBALT_API_KEY=\`${COBALT_KEY:-unknown}\`, SCRAPECREATORS_API_KEY=\`${SCRAPE_KEY:-unknown}\`, SCRAPECREATORS_ENDPOINT=\`${SCRAPE_ENDPOINT:-unknown}\`, SCRAPECREATORS_CACHE_MAX_AGE=\`${SCRAPE_CACHE:-unknown}\`, ASSEMBLYAI_API_KEY=\`${ASSEMBLY_KEY:-unknown}\`, SUPADATA_API_KEY=\`${SUPADATA_KEY:-unknown}\`, KRC_MEDIA_DATABASE_URL=\`${DATABASE_URL:-unknown}\`. Only Render service metadata and environment variable NAMES were read; no secret values were printed and no provider/media/preflight/transcript/STT/AI endpoint was called. Production/main were not targeted."
+          result=FAIL
+          if [[ "$STATUS" == live && "$SHA" == "$EXPECTED_SHA" && "$HEALTH_OK" == true && "$CAP_OK" == true ]]; then result=PASS; fi
+          gh pr comment 28 --repo kolemasakar/VoiceBridge --body "A9.6 Facebook parser authenticated isolated verification: **${result}**. deploy_status=\`${STATUS}\`, sha=\`${SHA}\`, health_http=\`${HEALTH_HTTP}\`, capability_http=\`${CAP_HTTP}\`, facebook_capability_ok=\`${CAP_OK}\`. Authenticated service reads only; no Supadata account/preflight/transcript/metadata/AI endpoint was called. Production/main were not targeted."
