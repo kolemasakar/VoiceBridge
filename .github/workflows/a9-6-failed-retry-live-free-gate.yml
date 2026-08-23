@@ -1,0 +1,130 @@
+name: A9.6 Failed Retry Live Free Gate
+
+on:
+  push:
+    branches:
+      - agent/krc-media-transcript
+    paths:
+      - .github/triggers/a9-6-failed-retry-live-free-gate.txt
+
+permissions:
+  contents: read
+  issues: write
+  pull-requests: write
+
+jobs:
+  gate:
+    runs-on: ubuntu-latest
+    env:
+      RENDER_API_KEY: ${{ secrets.RENDER_API_KEY }}
+      GH_TOKEN: ${{ github.token }}
+      RENDER_API_BASE: https://api.render.com/v1
+      SERVICE_ID: srv-da1kic5bedkc73d6fk60
+      SERVICE_NAME: voicebridge-krc-media-beta-kolemasakar
+      REQUIRED_BRANCH: agent/krc-media-transcript
+      EXPECTED_SHA: 98368918c683c52b0635d73da4b1e55005dd99e6
+      BETA_BASE_URL: https://voicebridge-krc-media-beta-kolemasakar.onrender.com
+      FACEBOOK_URL: https://www.facebook.com/reel/1114235920664408
+    steps:
+      - name: Verify exact isolated deploy and run at most one free preflight
+        id: gate
+        shell: bash
+        run: |
+          set +e
+          reason=none
+          service_http=unknown
+          service=unknown
+          branch=unknown
+          deploy_http=unknown
+          latest_status=unknown
+          latest_sha=unknown
+          token_http=unknown
+          capability_http=skipped
+          capability_ok=unknown
+          preflight_http=skipped
+          balance=unknown
+          estimated=unknown
+          after=unknown
+          consent=unknown
+          can_continue=unknown
+          error_code=none
+
+          if [[ -z "${RENDER_API_KEY:-}" ]]; then
+            reason=render_key_missing
+          else
+            echo "::add-mask::$RENDER_API_KEY"
+            service_http="$(curl -sS --max-time 30 -o /tmp/service.json -w '%{http_code}' "${RENDER_API_BASE}/services/${SERVICE_ID}" -H 'Accept: application/json' -H "Authorization: Bearer ${RENDER_API_KEY}" || true)"
+            service="$(jq -r '.name // "unknown"' /tmp/service.json 2>/dev/null)"
+            branch="$(jq -r '.branch // "unknown"' /tmp/service.json 2>/dev/null)"
+            deploy_http="$(curl -sS --max-time 30 -o /tmp/deploys.json -w '%{http_code}' "${RENDER_API_BASE}/services/${SERVICE_ID}/deploys?limit=10" -H 'Accept: application/json' -H "Authorization: Bearer ${RENDER_API_KEY}" || true)"
+            latest_status="$(jq -r '.[0].deploy.status // .[0].status // "unknown"' /tmp/deploys.json 2>/dev/null)"
+            latest_sha="$(jq -r '.[0].deploy.commit.id // .[0].commit.id // .[0].deploy.commitId // .[0].commitId // "unknown"' /tmp/deploys.json 2>/dev/null)"
+            token_http="$(curl -sS --max-time 30 -o /tmp/token.json -w '%{http_code}' "${RENDER_API_BASE}/services/${SERVICE_ID}/env-vars/KRC_MEDIA_ACTION_TOKEN" -H 'Accept: application/json' -H "Authorization: Bearer ${RENDER_API_KEY}" || true)"
+            token="$(jq -r '(.envVar.value // .value // empty)' /tmp/token.json 2>/dev/null)"
+
+            if [[ "$service_http" != 200 || "$service" != "$SERVICE_NAME" || "$branch" != "$REQUIRED_BRANCH" ]]; then
+              reason=render_service_mismatch
+            elif [[ "$latest_status" != live || "$latest_sha" != "$EXPECTED_SHA" ]]; then
+              reason=exact_sha_not_live
+            elif [[ "$token_http" != 200 || -z "$token" ]]; then
+              reason=token_lookup_failed
+            else
+              echo "::add-mask::$token"
+              for attempt in 1 2 3; do
+                capability_http="$(curl -sS --connect-timeout 15 --max-time 75 -o /tmp/cap.json -w '%{http_code}' "${BETA_BASE_URL}/api/v1/media/managed" -H 'Accept: application/json' -H "Authorization: Bearer ${token}" || true)"
+                [[ "$capability_http" == 200 ]] && break
+                sleep 5
+              done
+              if [[ "$capability_http" == 200 ]]; then
+                capability_ok="$(jq -r '(.configured == true and .facebook_ai_fallback == true and .automatic_ai_fallback == false)' /tmp/cap.json 2>/dev/null)"
+                if [[ "$capability_ok" == true ]]; then
+                  payload="$(jq -nc --arg url "$FACEBOOK_URL" '{url:$url,language_hint:"auto"}')"
+                  preflight_http="$(curl -sS --connect-timeout 15 --max-time 90 -o /tmp/preflight.json -w '%{http_code}' -X POST "${BETA_BASE_URL}/api/v1/media/managed/preflight" -H 'Accept: application/json' -H 'Content-Type: application/json' -H "Authorization: Bearer ${token}" --data "$payload" || true)"
+                  if [[ "$preflight_http" == 200 ]]; then
+                    balance="$(jq -r '.credits_available // "unknown"' /tmp/preflight.json)"
+                    estimated="$(jq -r '.estimated_credits // "unknown"' /tmp/preflight.json)"
+                    after="$(jq -r '.credits_after_estimate // "unknown"' /tmp/preflight.json)"
+                    consent="$(jq -r '.consent_required // "unknown"' /tmp/preflight.json)"
+                    can_continue="$(jq -r '.can_continue // "unknown"' /tmp/preflight.json)"
+                  else
+                    reason=preflight_failed
+                    error_code="$(jq -r '.error.code // "unknown"' /tmp/preflight.json 2>/dev/null)"
+                  fi
+                else
+                  reason=capability_invalid
+                fi
+              else
+                reason=capability_unreachable
+              fi
+            fi
+          fi
+
+          for pair in reason service_http service branch deploy_http latest_status latest_sha token_http capability_http capability_ok preflight_http balance estimated after consent can_continue error_code; do
+            eval "value=\${$pair}"
+            echo "$pair=$value" >> "$GITHUB_OUTPUT"
+          done
+          exit 0
+
+      - name: Report
+        if: always()
+        shell: bash
+        env:
+          REASON: ${{ steps.gate.outputs.reason }}
+          SERVICE_HTTP: ${{ steps.gate.outputs.service_http }}
+          SERVICE: ${{ steps.gate.outputs.service }}
+          BRANCH: ${{ steps.gate.outputs.branch }}
+          DEPLOY_HTTP: ${{ steps.gate.outputs.deploy_http }}
+          LATEST_STATUS: ${{ steps.gate.outputs.latest_status }}
+          LATEST_SHA: ${{ steps.gate.outputs.latest_sha }}
+          TOKEN_HTTP: ${{ steps.gate.outputs.token_http }}
+          CAPABILITY_HTTP: ${{ steps.gate.outputs.capability_http }}
+          CAPABILITY_OK: ${{ steps.gate.outputs.capability_ok }}
+          PREFLIGHT_HTTP: ${{ steps.gate.outputs.preflight_http }}
+          BALANCE: ${{ steps.gate.outputs.balance }}
+          ESTIMATED: ${{ steps.gate.outputs.estimated }}
+          AFTER: ${{ steps.gate.outputs.after }}
+          CONSENT: ${{ steps.gate.outputs.consent }}
+          CAN_CONTINUE: ${{ steps.gate.outputs.can_continue }}
+          ERROR_CODE: ${{ steps.gate.outputs.error_code }}
+        run: |
+          gh pr comment 28 --repo kolemasakar/VoiceBridge --body "A9.6 FAILED-retry isolated live/free gate: reason=\`${REASON:-unknown}\`; service_http=\`${SERVICE_HTTP:-unknown}\`, service=\`${SERVICE:-unknown}\`, branch=\`${BRANCH:-unknown}\`; deploy_http=\`${DEPLOY_HTTP:-unknown}\`, latest_status=\`${LATEST_STATUS:-unknown}\`, latest_sha=\`${LATEST_SHA:-unknown}\`; token_http=\`${TOKEN_HTTP:-unknown}\`; capability_http=\`${CAPABILITY_HTTP:-unknown}\`, capability_ok=\`${CAPABILITY_OK:-unknown}\`; preflight_http=\`${PREFLIGHT_HTTP:-unknown}\`, error_code=\`${ERROR_CODE:-none}\`; provider_balance=\`${BALANCE:-unknown}\`, estimated_credits=\`${ESTIMATED:-unknown}\`, expected_after=\`${AFTER:-unknown}\`, consent_required=\`${CONSENT:-unknown}\`, can_continue=\`${CAN_CONTINUE:-unknown}\`. Render reads plus at most one free native preflight only. No transcript/native start, metadata, AI, production, main, or merge action was executed."
