@@ -48,13 +48,25 @@ jobs:
             exit 1
           fi
 
-      - name: Install Render CLI
+      - name: Validate against public Render Blueprint schema
         shell: bash
         run: |
           set -euo pipefail
-          curl -fsSL https://raw.githubusercontent.com/render-oss/cli/main/bin/install.sh | sh
-          echo "$HOME/.render/bin" >> "$GITHUB_PATH"
+          python -m pip install --disable-pip-version-check --quiet pyyaml jsonschema
+          curl -fsSL https://render.com/schema/render.yaml.json -o /tmp/render-schema.json
+          python - <<'PY'
+          import json
+          from pathlib import Path
+          import yaml
+          from jsonschema import Draft202012Validator
 
-      - name: Validate inert Render Blueprint
-        shell: bash
-        run: render blueprints validate deploy/cobalt-a9-7-f/render.cobalt-beta.yaml
+          blueprint = yaml.safe_load(Path('deploy/cobalt-a9-7-f/render.cobalt-beta.yaml').read_text())
+          schema = json.loads(Path('/tmp/render-schema.json').read_text())
+          errors = sorted(Draft202012Validator(schema).iter_errors(blueprint), key=lambda e: list(e.path))
+          if errors:
+              for error in errors:
+                  path = '.'.join(str(part) for part in error.path) or '<root>'
+                  print(f'{path}: {error.message}')
+              raise SystemExit(1)
+          print('A9.7-F Render Blueprint schema: PASS')
+          PY
