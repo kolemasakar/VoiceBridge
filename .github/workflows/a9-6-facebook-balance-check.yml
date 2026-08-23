@@ -65,3 +65,5 @@ jobs:
         shell: bash
         run: |
           gh pr comment 28 --repo kolemasakar/VoiceBridge --body "A9.6 Facebook post-recovery balance check: provider_balance=\`${RESULT:-unknown}\`, reason=\`${REASON:-unknown}\`. Free preflight only; no metadata, transcript, or AI start request was executed."
+
+# trigger: 2026-08-23 fresh free balance preflight
