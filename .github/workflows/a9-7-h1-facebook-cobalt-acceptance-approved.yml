@@ -21,7 +21,9 @@ jobs:
     runs-on: ubuntu-latest
     env:
       GH_TOKEN: ${{ github.token }}
-      ACTION_TOKEN: ${{ secrets.KRC_MEDIA_ACTION_TOKEN }}
+      RENDER_API_KEY: ${{ secrets.RENDER_API_KEY }}
+      RENDER_API_BASE: https://api.render.com/v1
+      VOICEBRIDGE_SERVICE_ID: srv-da1kic5bedkc73d6fk60
       BASE_URL: https://voicebridge-krc-media-beta-kolemasakar.onrender.com
       TARGET_URL: https://www.facebook.com/reel/1114235920664408/
     steps:
@@ -30,7 +32,16 @@ jobs:
         shell: bash
         run: |
           set -euo pipefail
-          test -n "${ACTION_TOKEN:-}"
+          test -n "${RENDER_API_KEY:-}"
+          echo "::add-mask::$RENDER_API_KEY"
+
+          # Read the already-configured Action token server-side from Render.
+          # The value is masked and never written to Git or PR output.
+          curl -fsS "${RENDER_API_BASE}/services/${VOICEBRIDGE_SERVICE_ID}/env-vars/KRC_MEDIA_ACTION_TOKEN" \
+            -H 'Accept: application/json' \
+            -H "Authorization: Bearer ${RENDER_API_KEY}" > /tmp/action-token.json
+          ACTION_TOKEN="$(jq -r '(.envVar.value // .value // empty)' /tmp/action-token.json)"
+          test -n "$ACTION_TOKEN"
           echo "::add-mask::$ACTION_TOKEN"
 
           # Exactly one start request. This endpoint can use Cobalt and, only if
