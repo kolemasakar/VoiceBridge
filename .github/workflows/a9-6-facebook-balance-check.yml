@@ -32,6 +32,12 @@ jobs:
           set +e
           result=unknown
           reason=none
+          preflight_http=unknown
+          error_code=none
+          estimated=unknown
+          after=unknown
+          consent=unknown
+          can_continue=unknown
           if [[ -z "${RENDER_API_KEY:-}" ]]; then
             reason=render_key_missing
           else
@@ -46,15 +52,27 @@ jobs:
               echo "::add-mask::$token"
               payload="$(jq -nc --arg url "$FACEBOOK_URL" '{url:$url,language_hint:"auto"}')"
               code="$(curl -sS --max-time 60 -o /tmp/preflight.json -w '%{http_code}' -X POST "${BETA_BASE_URL}/api/v1/media/managed/preflight" -H 'Accept: application/json' -H 'Content-Type: application/json' -H "Authorization: Bearer ${token}" --data "$payload")"
+              preflight_http="$code"
               if [[ "$code" == 200 ]]; then
                 result="$(jq -r '.credits_available // "unknown"' /tmp/preflight.json)"
+                estimated="$(jq -r '.estimated_credits // "unknown"' /tmp/preflight.json)"
+                after="$(jq -r '.credits_after_estimate // "unknown"' /tmp/preflight.json)"
+                consent="$(jq -r '.consent_required // "unknown"' /tmp/preflight.json)"
+                can_continue="$(jq -r '.can_continue // "unknown"' /tmp/preflight.json)"
               else
                 reason=preflight_failed
+                error_code="$(jq -r '.error.code // "unknown"' /tmp/preflight.json 2>/dev/null)"
               fi
             fi
           fi
           echo "result=$result" >> "$GITHUB_OUTPUT"
           echo "reason=$reason" >> "$GITHUB_OUTPUT"
+          echo "preflight_http=$preflight_http" >> "$GITHUB_OUTPUT"
+          echo "error_code=$error_code" >> "$GITHUB_OUTPUT"
+          echo "estimated=$estimated" >> "$GITHUB_OUTPUT"
+          echo "after=$after" >> "$GITHUB_OUTPUT"
+          echo "consent=$consent" >> "$GITHUB_OUTPUT"
+          echo "can_continue=$can_continue" >> "$GITHUB_OUTPUT"
           exit 0
 
       - name: Report balance
@@ -62,8 +80,14 @@ jobs:
         env:
           RESULT: ${{ steps.balance.outputs.result }}
           REASON: ${{ steps.balance.outputs.reason }}
+          PREFLIGHT_HTTP: ${{ steps.balance.outputs.preflight_http }}
+          ERROR_CODE: ${{ steps.balance.outputs.error_code }}
+          ESTIMATED: ${{ steps.balance.outputs.estimated }}
+          AFTER: ${{ steps.balance.outputs.after }}
+          CONSENT: ${{ steps.balance.outputs.consent }}
+          CAN_CONTINUE: ${{ steps.balance.outputs.can_continue }}
         shell: bash
         run: |
-          gh pr comment 28 --repo kolemasakar/VoiceBridge --body "A9.6 Facebook post-recovery balance check: provider_balance=\`${RESULT:-unknown}\`, reason=\`${REASON:-unknown}\`. Free preflight only; no metadata, transcript, or AI start request was executed."
+          gh pr comment 28 --repo kolemasakar/VoiceBridge --body "A9.6 Facebook fresh free preflight diagnostic: provider_balance=\`${RESULT:-unknown}\`, reason=\`${REASON:-unknown}\`, preflight_http=\`${PREFLIGHT_HTTP:-unknown}\`, error_code=\`${ERROR_CODE:-unknown}\`, estimated_credits=\`${ESTIMATED:-unknown}\`, expected_after=\`${AFTER:-unknown}\`, consent_required=\`${CONSENT:-unknown}\`, can_continue=\`${CAN_CONTINUE:-unknown}\`. Free preflight only; no metadata, transcript, or AI start request was executed."
 
-# trigger: 2026-08-23T13:01+03:00 fresh free Facebook preflight after response-shape hardening
+# trigger: 2026-08-23T13:01+03:00 fresh free Facebook preflight diagnostic
