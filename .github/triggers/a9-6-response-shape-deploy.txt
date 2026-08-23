@@ -1,4 +1,4 @@
-sha=e5e2d968d87c6fdbefbcad70ecd05395cf61cec1
+sha=5246be583101ca9693e356da3b5c3f42687e577e
 scope=isolated-beta-only
 provider_calls=forbidden
-retrigger=2026-08-23T16:01+03:00-a9-7-c-isolated-deploy
+retrigger=2026-08-23T20:44+03:00-a9-7-i-diag-fix-isolated-deploy
