@@ -12,7 +12,10 @@ import {
   ManagedMediaService,
   type ManagedNativeTranscriptProvider
 } from "../src/managed_media_service.js";
-import { SupadataProvider } from "../src/supadata_provider.js";
+import {
+  SupadataProvider,
+  type SupadataGeneratedTranscriptResult
+} from "../src/supadata_provider.js";
 
 const ACCESS_CODE = "abcdefghijkl";
 
@@ -139,7 +142,10 @@ class FacebookEmptyAiProvider implements ManagedNativeTranscriptProvider {
     };
   }
 
-  async getGeneratedTranscript(_url: string, approvedMaxCredits?: number) {
+  async getGeneratedTranscript(
+    _url: string,
+    approvedMaxCredits?: number
+  ): Promise<SupadataGeneratedTranscriptResult> {
     this.aiCalls += 1;
     assert.equal(approvedMaxCredits, 2);
     this.aiFailed = true;
