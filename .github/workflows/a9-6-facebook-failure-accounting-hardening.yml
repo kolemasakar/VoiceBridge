@@ -1,0 +1,358 @@
+name: A9.6 Facebook Failure Accounting Hardening
+
+on:
+  push:
+    branches:
+      - agent/krc-media-transcript
+    paths:
+      - .github/triggers/a9-6-facebook-failure-accounting-hardening.txt
+
+permissions:
+  contents: write
+  issues: write
+  pull-requests: write
+
+concurrency:
+  group: a9-6-facebook-failure-accounting-hardening
+  cancel-in-progress: false
+
+jobs:
+  harden:
+    runs-on: ubuntu-latest
+    env:
+      GH_TOKEN: ${{ github.token }}
+    steps:
+      - name: Checkout isolated beta branch
+        uses: actions/checkout@v4
+        with:
+          ref: agent/krc-media-transcript
+          fetch-depth: 0
+
+      - name: Apply empty-result classification and failure reconciliation
+        shell: bash
+        run: |
+          set -euo pipefail
+          python - <<'PY'
+          from pathlib import Path
+
+          provider_path = Path('src/cloud/src/supadata_provider.ts')
+          provider = provider_path.read_text()
+          old = '''  if (!language || segments.length === 0) {
+    emitSafeTranscriptShape(rawPayload, context);
+    throw new MediaTranscriptError(
+      "MANAGED_PROVIDER_TRANSCRIPT_INVALID",
+      "The managed transcript provider returned an empty or invalid transcript.",
+      502,
+      true
+    );
+  }
+'''
+          new = '''  if (Array.isArray(payload.content) && payload.content.length === 0) {
+    emitSafeTranscriptShape(rawPayload, context);
+    throw new MediaTranscriptError(
+      "MANAGED_PROVIDER_TRANSCRIPT_EMPTY",
+      "The managed transcript provider returned an empty transcript.",
+      422,
+      false
+    );
+  }
+  if (!language || segments.length === 0) {
+    emitSafeTranscriptShape(rawPayload, context);
+    throw new MediaTranscriptError(
+      "MANAGED_PROVIDER_TRANSCRIPT_INVALID",
+      "The managed transcript provider returned an invalid transcript payload.",
+      502,
+      true
+    );
+  }
+'''
+          if old not in provider:
+            raise SystemExit('provider classification anchor not found')
+          provider_path.write_text(provider.replace(old, new, 1))
+
+          service_path = Path('src/cloud/src/managed_media_service.ts')
+          service = service_path.read_text()
+          anchor = '''  async preflight(
+    input: ManagedMediaPreflightInput
+  ): Promise<ManagedMediaCreditPreflight> {
+'''
+          helper = '''  private async reconcileAiFailureCharge(
+    record: ManagedMediaStoredRecord,
+    quote: SupadataGenerateCreditQuote
+  ): Promise<{ billableCredits: number; remainingCredits: number; certain: boolean }> {
+    try {
+      const platform = managedMediaPlatform(record.job.source_url);
+      let afterQuote: SupadataGenerateCreditQuote | null = null;
+      if (isManagedInstagramReelUrl(record.job.source_url)) {
+        if (!this.transcriptProvider?.quoteGenerateInstagramReel) {
+          return { billableCredits: 0, remainingCredits: quote.remaining_credits, certain: false };
+        }
+        afterQuote = await this.transcriptProvider.quoteGenerateInstagramReel();
+      } else if (
+        platform === "facebook" &&
+        (record.job.media_duration_seconds ?? null) !== null &&
+        this.transcriptProvider?.quoteGenerateForDuration
+      ) {
+        afterQuote = await this.transcriptProvider.quoteGenerateForDuration(
+          record.job.media_duration_seconds!
+        );
+      }
+      if (!afterQuote) {
+        return { billableCredits: 0, remainingCredits: quote.remaining_credits, certain: false };
+      }
+      return {
+        billableCredits: Math.max(0, quote.remaining_credits - afterQuote.remaining_credits),
+        remainingCredits: afterQuote.remaining_credits,
+        certain: true
+      };
+    } catch {
+      return { billableCredits: 0, remainingCredits: quote.remaining_credits, certain: false };
+    }
+  }
+
+'''
+          if anchor not in service:
+            raise SystemExit('service helper anchor not found')
+          service = service.replace(anchor, helper + anchor, 1)
+
+          old_catch = '''    } catch (error) {
+      const normalized = error instanceof MediaTranscriptError
+        ? error
+        : new MediaTranscriptError(
+          "MANAGED_PROVIDER_AI_TRANSCRIPT_FAILED",
+          "Managed AI transcript processing failed.",
+          500,
+          false
+        );
+      const updatedAt = new Date().toISOString();
+      const failed: ManagedMediaStoredRecord = {
+        ...processing,
+        job: {
+          ...processing.job,
+          status: "FAILED",
+          updated_at: updatedAt,
+          credit_charge_uncertain: true,
+          error: {
+            code: normalized.code,
+            message: normalized.message,
+            retryable: false
+          }
+        },
+        expiresAt: this.expiryFrom(updatedAt)
+      };
+'''
+          new_catch = '''    } catch (error) {
+      const normalized = error instanceof MediaTranscriptError
+        ? error
+        : new MediaTranscriptError(
+          "MANAGED_PROVIDER_AI_TRANSCRIPT_FAILED",
+          "Managed AI transcript processing failed.",
+          500,
+          false
+        );
+      const reconciliation = await this.reconcileAiFailureCharge(record, quote);
+      const capBreached = reconciliation.billableCredits > input.credit_consent.max_credits;
+      const updatedAt = new Date().toISOString();
+      const failed: ManagedMediaStoredRecord = {
+        ...processing,
+        job: {
+          ...processing.job,
+          status: "FAILED",
+          updated_at: updatedAt,
+          credits_charged: record.job.credits_charged + reconciliation.billableCredits,
+          credits_remaining_estimate: reconciliation.remainingCredits,
+          credit_charge_uncertain: !reconciliation.certain,
+          error: {
+            code: capBreached ? "MANAGED_PROVIDER_AI_CREDIT_CAP_BREACH" : normalized.code,
+            message: capBreached
+              ? "The provider balance moved by more credits than the user-approved AI maximum."
+              : normalized.message,
+            retryable: false
+          }
+        },
+        expiresAt: this.expiryFrom(updatedAt)
+      };
+'''
+          if old_catch not in service:
+            raise SystemExit('AI catch anchor not found')
+          service_path.write_text(service.replace(old_catch, new_catch, 1))
+
+          provider_test_path = Path('src/cloud/tests/supadata_provider.test.ts')
+          provider_tests = provider_test_path.read_text()
+          if 'MediaTranscriptError' not in provider_tests.split('\n', 12)[0:12]:
+            import_anchor = 'import { SupadataProvider } from "../src/supadata_provider.js";\n'
+            if import_anchor not in provider_tests:
+              raise SystemExit('provider test import anchor not found')
+            provider_tests = provider_tests.replace(
+              import_anchor,
+              import_anchor + 'import { MediaTranscriptError } from "../src/media_transcript.js";\n',
+              1
+            )
+          marker = 'Supadata classifies HTTP 200 empty generated transcript separately'
+          if marker not in provider_tests:
+            provider_tests += r'''
+
+test("Supadata classifies HTTP 200 empty generated transcript separately", async () => {
+  let accountReads = 0;
+  await withMockServer((request, response) => {
+    const url = new URL(request.url || "/", "http://localhost");
+    if (url.pathname === "/me") {
+      accountReads += 1;
+      response.writeHead(200, { "content-type": "application/json" });
+      response.end(JSON.stringify({
+        organizationId: "org-empty",
+        plan: "Free",
+        maxCredits: 100,
+        usedCredits: 22
+      }));
+      return;
+    }
+    assert.equal(url.pathname, "/transcript");
+    response.writeHead(200, {
+      "content-type": "application/json",
+      "x-billable-requests": "2"
+    });
+    response.end(JSON.stringify({
+      lang: "uk",
+      availableLangs: ["uk"],
+      content: []
+    }));
+  }, async (baseUrl) => {
+    const provider = new SupadataProvider("test-key", baseUrl, 0, 2);
+    await assert.rejects(
+      provider.getGeneratedTranscript(
+        "https://www.facebook.com/reel/empty-result/",
+        2
+      ),
+      (error: unknown) => {
+        assert.ok(error instanceof MediaTranscriptError);
+        assert.equal(error.code, "MANAGED_PROVIDER_TRANSCRIPT_EMPTY");
+        assert.equal(error.retryable, false);
+        return true;
+      }
+    );
+    assert.equal(accountReads, 1);
+  });
+});
+'''
+          provider_test_path.write_text(provider_tests)
+
+          facebook_test_path = Path('src/cloud/tests/managed_media_facebook.test.ts')
+          facebook_tests = facebook_test_path.read_text()
+          import_anchor = 'import { MediaBetaGate } from "../src/media_beta.js";\n'
+          if 'from "../src/media_transcript.js"' not in facebook_tests:
+            if import_anchor not in facebook_tests:
+              raise SystemExit('facebook test import anchor not found')
+            facebook_tests = facebook_tests.replace(
+              import_anchor,
+              import_anchor + 'import { MediaTranscriptError } from "../src/media_transcript.js";\n',
+              1
+            )
+          marker = 'Facebook AI failure reconciles provider charge and preserves empty-transcript classification'
+          if marker not in facebook_tests:
+            facebook_tests += r'''
+
+class FacebookEmptyAiProvider implements ManagedNativeTranscriptProvider {
+  aiCalls = 0;
+  aiFailed = false;
+  async quoteNative() {
+    return { provider: "supadata" as const, mode: "native" as const, plan: "Free", max_credits: 100, used_credits: 19, remaining_credits: 81, estimated_credits: 1 as const, remaining_after_estimate: 80, consent_required: true as const, can_continue: true };
+  }
+  async getNativeTranscript() {
+    return { status: "unavailable" as const, billable_credits: 1 };
+  }
+  async quoteMetadata() {
+    return { provider: "supadata" as const, mode: "metadata" as const, plan: "Free", max_credits: 100, used_credits: 20, remaining_credits: 80, estimated_credits: 1 as const, remaining_after_estimate: 79, consent_required: true as const, can_continue: true };
+  }
+  async getMetadataDuration() {
+    return { duration_seconds: 22, billable_credits: 1 };
+  }
+  async quoteGenerateForDuration(durationSeconds: number) {
+    assert.equal(durationSeconds, 22);
+    const remaining = this.aiFailed ? 78 : 80;
+    return { provider: "supadata" as const, mode: "generate" as const, plan: "Free", max_credits: 100, used_credits: 100 - remaining, remaining_credits: remaining, estimated_credits: 2, maximum_credits: 2, credits_per_minute: 2, maximum_duration_minutes: 1, remaining_after_estimate: Math.max(0, remaining - 2), conservative_maximum: true as const, consent_required: true as const, can_continue: remaining >= 2 };
+  }
+  async getGeneratedTranscript(_url: string, approvedMaxCredits?: number) {
+    this.aiCalls += 1;
+    assert.equal(approvedMaxCredits, 2);
+    this.aiFailed = true;
+    throw new MediaTranscriptError(
+      "MANAGED_PROVIDER_TRANSCRIPT_EMPTY",
+      "The managed transcript provider returned an empty transcript.",
+      422,
+      false
+    );
+  }
+}
+
+test("Facebook AI failure reconciles provider charge and preserves empty-transcript classification", async () => {
+  const provider = new FacebookEmptyAiProvider();
+  const service = new ManagedMediaService(new MediaBetaGate([ACCESS_CODE]), null, provider);
+  const native = await service.startNative({
+    url: "https://www.facebook.com/reel/empty-result/",
+    language_hint: "auto",
+    beta_access_code: ACCESS_CODE,
+    credit_consent: { provider: "supadata", mode: "native", max_credits: 1 }
+  });
+  assert.equal(native.status, "AWAITING_AI_CONSENT");
+
+  const metadata = await service.startFacebookMetadata(native.job_id, {
+    beta_access_code: ACCESS_CODE,
+    credit_consent: { provider: "supadata", mode: "metadata", max_credits: 1 }
+  });
+  assert.equal(metadata.media_duration_seconds, 22);
+  assert.equal(metadata.ai_credit_ceiling, 2);
+  assert.equal(metadata.credits_charged, 2);
+
+  const failed = await service.startAi(native.job_id, {
+    beta_access_code: ACCESS_CODE,
+    credit_consent: { provider: "supadata", mode: "generate", max_credits: 2 }
+  });
+  assert.equal(failed.status, "FAILED");
+  assert.equal(failed.provider_mode, "generate");
+  assert.equal(failed.credits_charged, 4);
+  assert.equal(failed.credits_remaining_estimate, 78);
+  assert.equal(failed.credit_charge_uncertain, false);
+  assert.equal(failed.error?.code, "MANAGED_PROVIDER_TRANSCRIPT_EMPTY");
+  assert.equal(failed.error?.retryable, false);
+  assert.equal(provider.aiCalls, 1);
+});
+'''
+          facebook_test_path.write_text(facebook_tests)
+          PY
+
+      - name: Build and run full cloud checks
+        working-directory: src/cloud
+        shell: bash
+        run: |
+          set -euo pipefail
+          npm ci
+          npm run check
+
+      - name: Verify scope and commit source hardening
+        shell: bash
+        run: |
+          set -euo pipefail
+          git diff --check
+          changed="$(git diff --name-only)"
+          printf '%s\n' "$changed"
+          [[ "$changed" == *"src/cloud/src/supadata_provider.ts"* ]]
+          [[ "$changed" == *"src/cloud/src/managed_media_service.ts"* ]]
+          [[ "$changed" == *"src/cloud/tests/supadata_provider.test.ts"* ]]
+          [[ "$changed" == *"src/cloud/tests/managed_media_facebook.test.ts"* ]]
+          [[ "$(printf '%s\n' "$changed" | sed '/^$/d' | wc -l)" -eq 4 ]]
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git add src/cloud/src/supadata_provider.ts src/cloud/src/managed_media_service.ts src/cloud/tests/supadata_provider.test.ts src/cloud/tests/managed_media_facebook.test.ts
+          git commit -m "A9.6: reconcile failed AI charges and classify empty transcripts"
+          git push origin HEAD:agent/krc-media-transcript
+          echo "code_sha=$(git rev-parse HEAD)" >> "$GITHUB_OUTPUT"
+        id: commit
+
+      - name: Report
+        if: always()
+        shell: bash
+        env:
+          CODE_SHA: ${{ steps.commit.outputs.code_sha }}
+        run: |
+          gh pr comment 28 --repo kolemasakar/VoiceBridge --body "A9.6 Facebook failure-accounting hardening: status=\`${{ job.status }}\`; code_sha=\`${CODE_SHA:-none}\`; empty_response_code=\`MANAGED_PROVIDER_TRANSCRIPT_EMPTY\`; AI failure balance reconciliation added; full cloud check executed before commit. No Render/provider/preflight/transcript/metadata/AI call was executed by this workflow."
