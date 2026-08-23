@@ -1,0 +1,7 @@
+scope=code-only-free
+providers=forbidden
+render=forbidden
+production=forbidden
+main=forbidden
+action=A9.7-C-runtime-http
+trigger=2026-08-23T15:09+03:00
