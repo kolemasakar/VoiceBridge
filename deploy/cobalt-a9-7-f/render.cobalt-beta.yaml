@@ -1,0 +1,30 @@
+services:
+  - type: web
+    name: krc-cobalt-media-beta-kolemasakar
+    runtime: image
+    plan: free
+    region: frankfurt
+    image:
+      url: ghcr.io/imputnet/cobalt@sha256:63186dd68afd57ce3bb1f62cc4c139f5fa95b9c3e87a3cf5c6e4c7a570523f62
+    healthCheckPath: /
+    envVars:
+      - key: API_URL
+        value: "https://krc-cobalt-media-beta-kolemasakar.onrender.com/"
+      - key: API_PORT
+        value: "10000"
+      - key: API_LISTEN_ADDRESS
+        value: "0.0.0.0"
+      - key: API_KEY_URL
+        value: "file:///etc/secrets/cobalt-keys.json"
+      - key: API_AUTH_REQUIRED
+        value: "1"
+      - key: CORS_WILDCARD
+        value: "0"
+      - key: CORS_URL
+        value: "https://voicebridge-krc-media-beta-kolemasakar.onrender.com"
+      - key: DURATION_LIMIT
+        value: "3600"
+      - key: RATELIMIT_WINDOW
+        value: "60"
+      - key: RATELIMIT_MAX
+        value: "20"
