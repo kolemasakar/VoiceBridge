@@ -1,0 +1,4 @@
+A9.7-G2 approved isolated VoiceBridge Cobalt wiring.
+No Facebook URL/media retrieval.
+No AssemblyAI, ScrapeCreators, or Supadata calls.
+Exact runtime SHA deploy only.
