@@ -1,0 +1,6 @@
+approved_owner_action=exactly_one_metadata_request
+job_id=KRCM_e502967f-05cb-44ec-bb65-cdc014181d5d
+hard_max_credits=1
+expected_balance_before=81
+expected_balance_after=80
+triggered_at=2026-08-23T13:39+03:00
