@@ -134,3 +134,5 @@ unauth_code="$(jq -r '.error.code // .error // empty' /tmp/unauth.json 2>/dev/nu
   echo "unauth_http=$unauth_http"
   echo "unauth_code=$unauth_code"
 } >> "$GITHUB_OUTPUT"
+
+# Registered PR-visible executor trigger marker.
