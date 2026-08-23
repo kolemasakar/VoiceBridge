@@ -1,0 +1,273 @@
+name: A9.6 Facebook FAILED Job Fresh Native Retry Approved
+
+on:
+  push:
+    branches:
+      - agent/krc-media-transcript
+    paths:
+      - .github/triggers/a9-6-facebook-failed-job-fresh-native-retry-approved.txt
+
+permissions:
+  contents: read
+  issues: write
+  pull-requests: write
+
+concurrency:
+  group: a9-6-facebook-failed-job-fresh-native-retry-approved
+  cancel-in-progress: false
+
+env:
+  RENDER_API_BASE: https://api.render.com/v1
+  SERVICE_ID: srv-da1kic5bedkc73d6fk60
+  SERVICE_NAME: voicebridge-krc-media-beta-kolemasakar
+  REQUIRED_BRANCH: agent/krc-media-transcript
+  REQUIRED_CODE_SHA: 98368918c683c52b0635d73da4b1e55005dd99e6
+  BETA_BASE_URL: https://voicebridge-krc-media-beta-kolemasakar.onrender.com
+  FACEBOOK_URL: https://www.facebook.com/reel/1114235920664408
+  FAILED_JOB_ID: KRCM_1e99b074-fdf6-4144-9278-0e66e9a79713
+  REQUIRED_AVAILABLE_BEFORE: "82"
+  REQUIRED_AVAILABLE_AFTER: "81"
+  MAX_NATIVE_CREDITS: "1"
+
+jobs:
+  one-shot-retry:
+    runs-on: ubuntu-latest
+    env:
+      RENDER_API_KEY: ${{ secrets.RENDER_API_KEY }}
+      GH_TOKEN: ${{ github.token }}
+    steps:
+      - name: Verify isolated beta and exact live source
+        id: gate
+        shell: bash
+        run: |
+          set -euo pipefail
+          test -n "${RENDER_API_KEY:-}"
+          echo "::add-mask::$RENDER_API_KEY"
+          [[ "$GITHUB_REF_NAME" == "$REQUIRED_BRANCH" ]]
+
+          service_http="$(curl -sS --max-time 30 -o /tmp/service.json -w '%{http_code}' \
+            "${RENDER_API_BASE}/services/${SERVICE_ID}" \
+            -H 'Accept: application/json' \
+            -H "Authorization: Bearer ${RENDER_API_KEY}")"
+          [[ "$service_http" == 200 ]]
+          [[ "$(jq -r '.name // empty' /tmp/service.json)" == "$SERVICE_NAME" ]]
+          [[ "$(jq -r '.branch // empty' /tmp/service.json)" == "$REQUIRED_BRANCH" ]]
+
+          deploy_http="$(curl -sS --max-time 30 -o /tmp/deploys.json -w '%{http_code}' \
+            "${RENDER_API_BASE}/services/${SERVICE_ID}/deploys?limit=10" \
+            -H 'Accept: application/json' \
+            -H "Authorization: Bearer ${RENDER_API_KEY}")"
+          [[ "$deploy_http" == 200 ]]
+          latest_live_sha="$(jq -r '[.[] | (.deploy // .) | select(.status == "live")][0] | (.commit.id // .commitId // empty)' /tmp/deploys.json)"
+          [[ "$latest_live_sha" == "$REQUIRED_CODE_SHA" ]]
+          echo "live_sha=$latest_live_sha" >> "$GITHUB_OUTPUT"
+
+      - name: Read and mask Action bearer
+        id: action
+        shell: bash
+        run: |
+          set -euo pipefail
+          code="$(curl -sS --max-time 30 -o /tmp/env.json -w '%{http_code}' \
+            "${RENDER_API_BASE}/services/${SERVICE_ID}/env-vars/KRC_MEDIA_ACTION_TOKEN" \
+            -H 'Accept: application/json' \
+            -H "Authorization: Bearer ${RENDER_API_KEY}")"
+          [[ "$code" == 200 ]]
+          token="$(jq -r '(.envVar.value // .value // empty)' /tmp/env.json)"
+          test -n "$token"
+          echo "::add-mask::$token"
+          echo "token=$token" >> "$GITHUB_OUTPUT"
+
+      - name: Verify exact failed job read-only
+        id: failed
+        env:
+          ACTION_TOKEN: ${{ steps.action.outputs.token }}
+        shell: bash
+        run: |
+          set -euo pipefail
+          code="$(curl -sS --max-time 45 -o /tmp/failed.json -w '%{http_code}' \
+            "${BETA_BASE_URL}/api/v1/media/managed/transcriptions/${FAILED_JOB_ID}" \
+            -H 'Accept: application/json' \
+            -H "Authorization: Bearer ${ACTION_TOKEN}")"
+          [[ "$code" == 200 ]]
+          [[ "$(jq -r '.job_id // empty' /tmp/failed.json)" == "$FAILED_JOB_ID" ]]
+          [[ "$(jq -r '.status // empty' /tmp/failed.json)" == "FAILED" ]]
+          [[ "$(jq -r '.source_url // empty' /tmp/failed.json)" == "$FACEBOOK_URL" ]]
+          [[ "$(jq -r '.language_hint // empty' /tmp/failed.json)" == "auto" ]]
+          echo "status=FAILED" >> "$GITHUB_OUTPUT"
+          echo "credits=$(jq -r '.credits_charged // "unknown"' /tmp/failed.json)" >> "$GITHUB_OUTPUT"
+          echo "error=$(jq -r '.error.code // "none"' /tmp/failed.json)" >> "$GITHUB_OUTPUT"
+
+      - name: Recheck approved one-credit quote
+        id: quote
+        env:
+          ACTION_TOKEN: ${{ steps.action.outputs.token }}
+        shell: bash
+        run: |
+          set -euo pipefail
+          payload="$(jq -nc --arg url "$FACEBOOK_URL" '{url:$url,language_hint:"auto"}')"
+          code="$(curl -sS --max-time 90 -o /tmp/quote.json -w '%{http_code}' \
+            -X POST "${BETA_BASE_URL}/api/v1/media/managed/preflight" \
+            -H 'Accept: application/json' \
+            -H 'Content-Type: application/json' \
+            -H "Authorization: Bearer ${ACTION_TOKEN}" \
+            --data "$payload")"
+          [[ "$code" == 200 ]]
+          jq -e '.provider == "supadata" and .mode == "native" and .estimated_credits == 1 and .consent_required == true and .can_continue == true' /tmp/quote.json >/dev/null
+          available="$(jq -r '.credits_available' /tmp/quote.json)"
+          after="$(jq -r '.credits_after_estimate' /tmp/quote.json)"
+          [[ "$available" == "$REQUIRED_AVAILABLE_BEFORE" ]]
+          [[ "$after" == "$REQUIRED_AVAILABLE_AFTER" ]]
+          echo "available=$available" >> "$GITHUB_OUTPUT"
+          echo "after=$after" >> "$GITHUB_OUTPUT"
+
+      - name: Execute exactly one explicitly approved fresh native retry
+        id: native
+        env:
+          ACTION_TOKEN: ${{ steps.action.outputs.token }}
+        shell: bash
+        run: |
+          set +e
+          payload="$(jq -nc \
+            --arg url "$FACEBOOK_URL" \
+            --arg failed "$FAILED_JOB_ID" \
+            '{url:$url,language_hint:"auto",retry_failed_job_id:$failed,credit_consent:{provider:"supadata",mode:"native",max_credits:1}}')"
+
+          # BILLABLE-CAPABLE CALL: EXACTLY ONE ATTEMPT. NO --retry AND NO REPLAY.
+          curl_rc=0
+          code="$(curl -sS --connect-timeout 20 --max-time 180 -o /tmp/native.json -w '%{http_code}' \
+            -X POST "${BETA_BASE_URL}/api/v1/media/managed/transcriptions" \
+            -H 'Accept: application/json' \
+            -H 'Content-Type: application/json' \
+            -H "Authorization: Bearer ${ACTION_TOKEN}" \
+            --data "$payload")" || curl_rc=$?
+
+          echo "attempts=1" >> "$GITHUB_OUTPUT"
+          echo "curl_rc=$curl_rc" >> "$GITHUB_OUTPUT"
+          echo "http=${code:-000}" >> "$GITHUB_OUTPUT"
+          echo "status=$(jq -r '.status // "unknown"' /tmp/native.json 2>/dev/null)" >> "$GITHUB_OUTPUT"
+          echo "job_id=$(jq -r '.job_id // "unknown"' /tmp/native.json 2>/dev/null)" >> "$GITHUB_OUTPUT"
+          echo "language=$(jq -r '.detected_language // "none"' /tmp/native.json 2>/dev/null)" >> "$GITHUB_OUTPUT"
+          echo "segments=$(jq -r '.segment_count // 0' /tmp/native.json 2>/dev/null)" >> "$GITHUB_OUTPUT"
+          echo "credits=$(jq -r '.credits_charged // "unknown"' /tmp/native.json 2>/dev/null)" >> "$GITHUB_OUTPUT"
+          echo "uncertain=$(jq -r 'if has("credit_charge_uncertain") then (.credit_charge_uncertain|tostring) else "unknown" end' /tmp/native.json 2>/dev/null)" >> "$GITHUB_OUTPUT"
+          echo "reused=$(jq -r 'if has("reused") then (.reused|tostring) else "unknown" end' /tmp/native.json 2>/dev/null)" >> "$GITHUB_OUTPUT"
+          echo "error=$(jq -r '.error.code // .error_code // "none"' /tmp/native.json 2>/dev/null)" >> "$GITHUB_OUTPUT"
+          exit 0
+
+      - name: Read post-call balance using free preflight only
+        id: after
+        env:
+          ACTION_TOKEN: ${{ steps.action.outputs.token }}
+        shell: bash
+        run: |
+          set +e
+          payload="$(jq -nc --arg url "$FACEBOOK_URL" '{url:$url,language_hint:"auto"}')"
+          code="$(curl -sS --max-time 90 -o /tmp/after.json -w '%{http_code}' \
+            -X POST "${BETA_BASE_URL}/api/v1/media/managed/preflight" \
+            -H 'Accept: application/json' \
+            -H 'Content-Type: application/json' \
+            -H "Authorization: Bearer ${ACTION_TOKEN}" \
+            --data "$payload" || true)"
+          balance=unknown
+          if [[ "$code" == 200 ]]; then
+            balance="$(jq -r '.credits_available // "unknown"' /tmp/after.json)"
+          fi
+          echo "http=${code:-000}" >> "$GITHUB_OUTPUT"
+          echo "balance=$balance" >> "$GITHUB_OUTPUT"
+          exit 0
+
+      - name: Read returned fresh job read-only
+        id: readback
+        env:
+          ACTION_TOKEN: ${{ steps.action.outputs.token }}
+          NEW_JOB_ID: ${{ steps.native.outputs.job_id }}
+        shell: bash
+        run: |
+          set +e
+          code=skipped
+          status=unknown
+          language=none
+          segments=0
+          credits=unknown
+          uncertain=unknown
+          reused=unknown
+          error=none
+          if [[ "$NEW_JOB_ID" =~ ^KRCM_[A-Za-z0-9-]+$ ]]; then
+            code="$(curl -sS --max-time 60 -o /tmp/readback.json -w '%{http_code}' \
+              "${BETA_BASE_URL}/api/v1/media/managed/transcriptions/${NEW_JOB_ID}" \
+              -H 'Accept: application/json' \
+              -H "Authorization: Bearer ${ACTION_TOKEN}" || true)"
+            if [[ "$code" == 200 ]]; then
+              status="$(jq -r '.status // "unknown"' /tmp/readback.json)"
+              language="$(jq -r '.detected_language // "none"' /tmp/readback.json)"
+              segments="$(jq -r '.segment_count // 0' /tmp/readback.json)"
+              credits="$(jq -r '.credits_charged // "unknown"' /tmp/readback.json)"
+              uncertain="$(jq -r 'if has("credit_charge_uncertain") then (.credit_charge_uncertain|tostring) else "unknown" end' /tmp/readback.json)"
+              reused="$(jq -r 'if has("reused") then (.reused|tostring) else "unknown" end' /tmp/readback.json)"
+              error="$(jq -r '.error.code // "none"' /tmp/readback.json)"
+            fi
+          fi
+          echo "http=$code" >> "$GITHUB_OUTPUT"
+          echo "status=$status" >> "$GITHUB_OUTPUT"
+          echo "language=$language" >> "$GITHUB_OUTPUT"
+          echo "segments=$segments" >> "$GITHUB_OUTPUT"
+          echo "credits=$credits" >> "$GITHUB_OUTPUT"
+          echo "uncertain=$uncertain" >> "$GITHUB_OUTPUT"
+          echo "reused=$reused" >> "$GITHUB_OUTPUT"
+          echo "error=$error" >> "$GITHUB_OUTPUT"
+          exit 0
+
+      - name: Verify transcript page read-only if completed
+        id: page
+        if: steps.readback.outputs.status == 'COMPLETED'
+        env:
+          ACTION_TOKEN: ${{ steps.action.outputs.token }}
+          NEW_JOB_ID: ${{ steps.native.outputs.job_id }}
+        shell: bash
+        run: |
+          set +e
+          code="$(curl -sS --max-time 60 -o /tmp/segments.json -w '%{http_code}' \
+            "${BETA_BASE_URL}/api/v1/media/managed/transcriptions/${NEW_JOB_ID}/segments?cursor=0&limit=50" \
+            -H 'Accept: application/json' \
+            -H "Authorization: Bearer ${ACTION_TOKEN}" || true)"
+          count=0
+          if [[ "$code" == 200 ]]; then count="$(jq -r '.segments | length' /tmp/segments.json 2>/dev/null)"; fi
+          echo "http=$code" >> "$GITHUB_OUTPUT"
+          echo "count=$count" >> "$GITHUB_OUTPUT"
+          exit 0
+
+      - name: Report exact one-shot result
+        if: always()
+        env:
+          LIVE_SHA: ${{ steps.gate.outputs.live_sha }}
+          OLD_STATUS: ${{ steps.failed.outputs.status }}
+          OLD_CREDITS: ${{ steps.failed.outputs.credits }}
+          OLD_ERROR: ${{ steps.failed.outputs.error }}
+          BEFORE: ${{ steps.quote.outputs.available }}
+          QUOTED_AFTER: ${{ steps.quote.outputs.after }}
+          ATTEMPTS: ${{ steps.native.outputs.attempts }}
+          CURL_RC: ${{ steps.native.outputs.curl_rc }}
+          HTTP: ${{ steps.native.outputs.http }}
+          POST_STATUS: ${{ steps.native.outputs.status }}
+          NEW_JOB_ID: ${{ steps.native.outputs.job_id }}
+          POST_LANGUAGE: ${{ steps.native.outputs.language }}
+          POST_SEGMENTS: ${{ steps.native.outputs.segments }}
+          POST_CREDITS: ${{ steps.native.outputs.credits }}
+          POST_UNCERTAIN: ${{ steps.native.outputs.uncertain }}
+          POST_REUSED: ${{ steps.native.outputs.reused }}
+          POST_ERROR: ${{ steps.native.outputs.error }}
+          AFTER: ${{ steps.after.outputs.balance }}
+          READBACK_HTTP: ${{ steps.readback.outputs.http }}
+          READBACK_STATUS: ${{ steps.readback.outputs.status }}
+          READBACK_LANGUAGE: ${{ steps.readback.outputs.language }}
+          READBACK_SEGMENTS: ${{ steps.readback.outputs.segments }}
+          READBACK_CREDITS: ${{ steps.readback.outputs.credits }}
+          READBACK_UNCERTAIN: ${{ steps.readback.outputs.uncertain }}
+          READBACK_REUSED: ${{ steps.readback.outputs.reused }}
+          READBACK_ERROR: ${{ steps.readback.outputs.error }}
+          PAGE_HTTP: ${{ steps.page.outputs.http }}
+          PAGE_COUNT: ${{ steps.page.outputs.count }}
+        shell: bash
+        run: |
+          set -euo pipefail
+          gh pr comment 28 --repo kolemasakar/VoiceBridge --body "A9.6 Facebook FAILED-job fresh native retry: **EXECUTED ONE-SHOT**. Explicit owner authorization: exactly one fresh native retry for \`${FAILED_JOB_ID}\`, hard max \`1\` Supadata credit. live_sha=\`${LIVE_SHA:-unknown}\`; old_status=\`${OLD_STATUS:-unknown}\`, old_credits=\`${OLD_CREDITS:-unknown}\`, old_error=\`${OLD_ERROR:-unknown}\`; balance=\`${BEFORE:-unknown}\` -> \`${AFTER:-unknown}\` (quoted \`${QUOTED_AFTER:-unknown}\`); billable_capable_attempts=\`${ATTEMPTS:-0}\`; curl_rc=\`${CURL_RC:-unknown}\`; native_http=\`${HTTP:-unknown}\`; post_status=\`${POST_STATUS:-unknown}\`; new_job=\`${NEW_JOB_ID:-unknown}\`; post_language=\`${POST_LANGUAGE:-none}\`; post_segments=\`${POST_SEGMENTS:-0}\`; post_credits=\`${POST_CREDITS:-unknown}\`; post_charge_uncertain=\`${POST_UNCERTAIN:-unknown}\`; post_reused=\`${POST_REUSED:-unknown}\`; post_error=\`${POST_ERROR:-none}\`; readback_http=\`${READBACK_HTTP:-skipped}\`; readback_status=\`${READBACK_STATUS:-unknown}\`; readback_language=\`${READBACK_LANGUAGE:-none}\`; readback_segments=\`${READBACK_SEGMENTS:-0}\`; readback_credits=\`${READBACK_CREDITS:-unknown}\`; readback_charge_uncertain=\`${READBACK_UNCERTAIN:-unknown}\`; readback_reused=\`${READBACK_REUSED:-unknown}\`; readback_error=\`${READBACK_ERROR:-none}\`; segments_page_http=\`${PAGE_HTTP:-skipped}\`; first_page_segments=\`${PAGE_COUNT:-0}\`. No automatic retry/replay, metadata start, AI start, production, main, or merge action was executed."
