@@ -6,6 +6,7 @@ on:
       - agent/krc-media-transcript
     paths:
       - .github/triggers/a9-7-g1-cobalt-create-approved.txt
+      - .github/workflows/a9-7-g1-cobalt-create-approved.yml
 
 permissions:
   contents: read
@@ -86,11 +87,9 @@ PY
               --confirm -o json > /tmp/create.json
             created=true
 
-            # Do not persist the generated UUID anywhere except Render's secret file.
             shred -u /tmp/cobalt-keys.json 2>/dev/null || rm -f /tmp/cobalt-keys.json
           fi
 
-          # Resolve the exact service after create/reuse.
           service_id=''
           for i in $(seq 1 60); do
             curl -fsS --get "${RENDER_API_BASE}/services" "${api[@]}" \
@@ -113,14 +112,11 @@ PY
           [[ "$service_type" == web_service ]]
           [[ "$plan" == free ]]
           [[ "$region" == frankfurt ]]
-          # Image-backed services may expose the image field differently across API versions.
-          # If exposed, it must match the pinned digest exactly.
           if [[ -n "$image_seen" && "$image_seen" != "$IMAGE_URL" ]]; then
             echo "Unexpected image path for target service." >&2
             exit 1
           fi
 
-          # Wait only for this service's initial/image deploy to reach a terminal state.
           deploy_status=unknown
           deploy_id=none
           for i in $(seq 1 120); do
@@ -137,7 +133,6 @@ PY
           done
           [[ "$deploy_status" == live ]]
 
-          # Read-only health. GET / is intentionally unauthenticated in Cobalt.
           health_http=000
           for i in $(seq 1 30); do
             health_http="$(curl -sS --max-time 30 -o /tmp/health.json -w '%{http_code}' "${SERVICE_URL}/" || true)"
@@ -146,8 +141,6 @@ PY
           done
           [[ "$health_http" == 200 ]]
 
-          # Auth-gate test only. Reserved .invalid host guarantees this request cannot
-          # become a real media retrieval even if request validation order changes.
           unauth_http="$(curl -sS --max-time 30 -o /tmp/unauth.json -w '%{http_code}' \
             -X POST "${SERVICE_URL}/" \
             -H 'Accept: application/json' \
