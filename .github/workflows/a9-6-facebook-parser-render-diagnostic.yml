@@ -78,3 +78,5 @@ jobs:
         run: |
           set -euo pipefail
           gh pr comment 28 --repo kolemasakar/VoiceBridge --body "A9.6 Facebook parser Render diagnostic: service_http=\`${SERVICE_HTTP}\`, service=\`${SERVICE_NAME_ACTUAL}\`, branch=\`${SERVICE_BRANCH_ACTUAL}\`, deploy_http=\`${DEPLOY_HTTP}\`, latest_status=\`${LATEST_STATUS}\`, latest_sha=\`${LATEST_SHA}\`, expected_parser_sha_status=\`${EXPECTED_STATUS}\`, health_http=\`${HEALTH_HTTP}\`, health=\`${HEALTH_VALUE}\`. Render/service reads only; no Supadata or billable media endpoint was called. Production/main were not targeted."
+
+# retrigger after controlled redeploy
