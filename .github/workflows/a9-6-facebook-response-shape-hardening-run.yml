@@ -1,0 +1,73 @@
+name: A9.6 Facebook Response Shape Hardening Runner
+
+on:
+  push:
+    branches:
+      - agent/krc-media-transcript
+    paths:
+      - .github/triggers/a9-6-response-shape-hardening.txt
+
+permissions:
+  contents: write
+  issues: write
+  pull-requests: write
+
+concurrency:
+  group: a9-6-facebook-response-shape-hardening-runner
+  cancel-in-progress: false
+
+jobs:
+  harden:
+    runs-on: ubuntu-latest
+    env:
+      GH_TOKEN: ${{ github.token }}
+    steps:
+      - name: Checkout isolated beta branch
+        uses: actions/checkout@v4
+        with:
+          ref: agent/krc-media-transcript
+          fetch-depth: 0
+
+      - name: Apply deterministic patch
+        run: python scripts/a9_6_response_shape_hardening.py
+
+      - name: Build and test full cloud suite
+        working-directory: src/cloud
+        run: |
+          set -euo pipefail
+          npm ci
+          npm run check
+
+      - name: Verify exact patch scope
+        run: |
+          set -euo pipefail
+          git diff --check
+          mapfile -t files < <(git diff --name-only)
+          printf '%s\n' "${files[@]}"
+          [[ "${#files[@]}" -eq 2 ]]
+          [[ " ${files[*]} " == *" src/cloud/src/supadata_provider.ts "* ]]
+          [[ " ${files[*]} " == *" src/cloud/tests/supadata_provider.test.ts "* ]]
+
+      - name: Commit validated hardening
+        id: commit
+        run: |
+          set -euo pipefail
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git add src/cloud/src/supadata_provider.ts src/cloud/tests/supadata_provider.test.ts
+          git commit -m "A9.6: harden Supadata response-shape parsing"
+          git push origin HEAD:agent/krc-media-transcript
+          echo "sha=$(git rev-parse HEAD)" >> "$GITHUB_OUTPUT"
+
+      - name: Report
+        if: always()
+        env:
+          COMMIT_SHA: ${{ steps.commit.outputs.sha }}
+        run: |
+          set -euo pipefail
+          if [[ "${{ job.status }}" == "success" ]]; then
+            body="A9.6 Supadata response-shape hardening: **PASS**. Commit=\`${COMMIT_SHA}\`. Bounded recursive result unwrapping, chunk-language fallback, normalized async status handling, and shape-only invalid-payload diagnostics added. Full cloud build/tests passed. Diagnostics contain structure/types only and do not log transcript text. No Supadata/provider/preflight/transcript/metadata/AI endpoint was called. Production/main were not targeted."
+          else
+            body="A9.6 Supadata response-shape hardening: **FAILURE**. No Supadata/provider/preflight/transcript/metadata/AI endpoint was called. Production/main were not targeted."
+          fi
+          gh pr comment 28 --repo kolemasakar/VoiceBridge --body "$body"
