@@ -1,0 +1,116 @@
+name: A9.6 Facebook Current Metadata Preflight
+
+on:
+  push:
+    branches:
+      - agent/krc-media-transcript
+    paths:
+      - .github/workflows/a9-6-facebook-current-metadata-preflight.yml
+
+permissions:
+  contents: read
+  issues: write
+  pull-requests: write
+
+env:
+  RENDER_API_BASE: https://api.render.com/v1
+  SERVICE_ID: srv-da1kic5bedkc73d6fk60
+  SERVICE_NAME: voicebridge-krc-media-beta-kolemasakar
+  REQUIRED_BRANCH: agent/krc-media-transcript
+  BETA_BASE_URL: https://voicebridge-krc-media-beta-kolemasakar.onrender.com
+  JOB_ID: KRCM_1e99b074-fdf6-4144-9278-0e66e9a79713
+  REQUIRED_AVAILABLE: "85"
+  REQUIRED_AFTER: "84"
+
+jobs:
+  preflight:
+    runs-on: ubuntu-latest
+    env:
+      RENDER_API_KEY: ${{ secrets.RENDER_API_KEY }}
+      GH_TOKEN: ${{ github.token }}
+    steps:
+      - name: Enforce isolated target and read Action bearer
+        id: guard
+        shell: bash
+        run: |
+          set -euo pipefail
+          test -n "${RENDER_API_KEY:-}"
+          echo "::add-mask::$RENDER_API_KEY"
+          [[ "$GITHUB_REF_NAME" == "$REQUIRED_BRANCH" ]]
+          tmp="$(mktemp)"
+          code="$(curl -sS -o "$tmp" -w '%{http_code}' \
+            "${RENDER_API_BASE}/services/${SERVICE_ID}" \
+            -H 'Accept: application/json' \
+            -H "Authorization: Bearer ${RENDER_API_KEY}")"
+          [[ "$code" == 200 ]]
+          name="$(jq -r '.name // empty' "$tmp")"
+          branch="$(jq -r '.branch // empty' "$tmp")"
+          rm -f "$tmp"
+          [[ "$name" == "$SERVICE_NAME" ]]
+          [[ "$branch" == "$REQUIRED_BRANCH" ]]
+          tmp="$(mktemp)"
+          code="$(curl -sS -o "$tmp" -w '%{http_code}' \
+            "${RENDER_API_BASE}/services/${SERVICE_ID}/env-vars/KRC_MEDIA_ACTION_TOKEN" \
+            -H 'Accept: application/json' \
+            -H "Authorization: Bearer ${RENDER_API_KEY}")"
+          [[ "$code" == 200 ]]
+          token="$(jq -r '(.envVar.value // .value // empty)' "$tmp")"
+          rm -f "$tmp"
+          test -n "$token"
+          echo "::add-mask::$token"
+          echo "token=$token" >> "$GITHUB_OUTPUT"
+
+      - name: Verify current durable job read-only
+        id: job
+        env:
+          ACTION_TOKEN: ${{ steps.guard.outputs.token }}
+        shell: bash
+        run: |
+          set -euo pipefail
+          code="$(curl -sS --max-time 30 -o /tmp/job.json -w '%{http_code}' \
+            "${BETA_BASE_URL}/api/v1/media/managed/transcriptions/${JOB_ID}" \
+            -H 'Accept: application/json' \
+            -H "Authorization: Bearer ${ACTION_TOKEN}")"
+          [[ "$code" == 200 ]]
+          jq -e '.status == "AWAITING_AI_CONSENT" and .provider_mode == "native" and .credits_charged == 1 and ((.metadata_credits_charged // 0) == 0)' /tmp/job.json >/dev/null
+          echo "status=$(jq -r '.status' /tmp/job.json)" >> "$GITHUB_OUTPUT"
+          echo "metadata_credits=$(jq -r '.metadata_credits_charged // 0' /tmp/job.json)" >> "$GITHUB_OUTPUT"
+
+      - name: Free metadata-duration preflight only
+        id: quote
+        env:
+          ACTION_TOKEN: ${{ steps.guard.outputs.token }}
+        shell: bash
+        run: |
+          set -euo pipefail
+          code="$(curl -sS --max-time 60 -o /tmp/meta-quote.json -w '%{http_code}' \
+            "${BETA_BASE_URL}/api/v1/media/managed/transcriptions/${JOB_ID}/facebook-ai-estimate-preflight" \
+            -H 'Accept: application/json' \
+            -H "Authorization: Bearer ${ACTION_TOKEN}")"
+          [[ "$code" == 200 ]]
+          jq -e '.provider == "supadata" and .mode == "metadata" and .purpose == "facebook_ai_duration" and .estimated_credits == 1 and .consent_required == true and .can_continue == true' /tmp/meta-quote.json >/dev/null
+          available="$(jq -r '.credits_available' /tmp/meta-quote.json)"
+          after="$(jq -r '.credits_after_estimate' /tmp/meta-quote.json)"
+          [[ "$available" == "$REQUIRED_AVAILABLE" ]]
+          [[ "$after" == "$REQUIRED_AFTER" ]]
+          echo "available=$available" >> "$GITHUB_OUTPUT"
+          echo "after=$after" >> "$GITHUB_OUTPUT"
+          echo "estimated=1" >> "$GITHUB_OUTPUT"
+
+      - name: Report free metadata preflight
+        if: always()
+        env:
+          AVAILABLE: ${{ steps.quote.outputs.available }}
+          AFTER: ${{ steps.quote.outputs.after }}
+          ESTIMATED: ${{ steps.quote.outputs.estimated }}
+          JOB_STATUS: ${{ steps.job.outputs.status }}
+          META_CREDITS: ${{ steps.job.outputs.metadata_credits }}
+        shell: bash
+        run: |
+          set -euo pipefail
+          if [[ "${{ job.status }}" == "success" ]]; then
+            body="A9.6 Facebook current metadata-duration preflight: **SUCCESS**. job=\`${JOB_ID}\`, status=\`${JOB_STATUS}\`, provider_balance=\`${AVAILABLE}\`, estimated_metadata_credits=\`${ESTIMATED}\`, credits_after_estimate=\`${AFTER}\`, existing_metadata_credits=\`${META_CREDITS}\`. Free preflight only. No metadata start, AI start, transcript retry, production, main, or merge action was executed."
+          else
+            body="A9.6 Facebook current metadata-duration preflight: **FAILURE**. Free/read-only checks only; no metadata start, AI start, transcript retry, production, main, or merge action was executed."
+          fi
+          gh pr comment 28 --repo kolemasakar/VoiceBridge --body "$body"
