@@ -20,8 +20,8 @@ jobs:
       GH_TOKEN: ${{ github.token }}
       RENDER_API_BASE: https://api.render.com/v1
       SERVICE_ID: srv-da1kic5bedkc73d6fk60
-      FAILURE_START: 2026-08-23T09:11:30Z
-      FAILURE_END: 2026-08-23T09:14:30Z
+      FAILURE_START: 2026-08-23T10:48:30Z
+      FAILURE_END: 2026-08-23T10:52:30Z
     steps:
       - name: Read isolated runtime logs
         id: logs
@@ -47,23 +47,23 @@ jobs:
             --data-urlencode "startTime=${FAILURE_START}" \
             --data-urlencode "endTime=${FAILURE_END}" \
             --data-urlencode "direction=forward" \
-            --data-urlencode "limit=200")"
+            --data-urlencode "limit=300")"
           if [[ "$logs_code" != 200 ]]; then
             echo "logs_code=$logs_code" >> "$GITHUB_OUTPUT"
             echo "diagnostic=logs_api_http_${logs_code}" >> "$GITHUB_OUTPUT"
             exit 0
           fi
           jq -r '.. | objects | (.message? // .text? // empty) | strings' /tmp/logs.json \
-            | grep -Ei 'supadata|managed|transcript|provider|generate|invalid|empty|error|failed|failure|credit|KRCM_1e99b074' \
-            | tail -n 30 > /tmp/errors.txt || true
+            | grep -Ei 'supadata|managed|transcript|provider|generate|invalid|empty|error|failed|failure|credit|shape|keys|types|KRCM_e502967f' \
+            | tail -n 50 > /tmp/errors.txt || true
           if [[ ! -s /tmp/errors.txt ]]; then
-            jq -r '.. | objects | (.message? // .text? // empty) | strings' /tmp/logs.json | tail -n 20 > /tmp/errors.txt || true
+            jq -r '.. | objects | (.message? // .text? // empty) | strings' /tmp/logs.json | tail -n 30 > /tmp/errors.txt || true
           fi
           sed -E \
             -e 's/(Bearer[[:space:]]+)[A-Za-z0-9._~+\/-]+/\1<redacted>/Ig' \
             -e 's/((token|secret|password|api[_-]?key|key)[=:][[:space:]]*)[^[:space:]]+/\1<redacted>/Ig' \
             -e 's#(postgres(ql)?://)[^@[:space:]]+@#\1<redacted>@#Ig' \
-            /tmp/errors.txt | head -c 6000 > /tmp/safe.txt
+            /tmp/errors.txt | head -c 7000 > /tmp/safe.txt
           diagnostic="$(cat /tmp/safe.txt | tr '\n' '|' | sed 's/`/_/g')"
           [[ -n "$diagnostic" ]] || diagnostic="no_message_fields_found"
           echo "logs_code=$logs_code" >> "$GITHUB_OUTPUT"
@@ -75,4 +75,4 @@ jobs:
           DIAGNOSTIC: ${{ steps.logs.outputs.diagnostic }}
         shell: bash
         run: |
-          gh pr comment 28 --repo kolemasakar/VoiceBridge --body "A9.6 Facebook current AI runtime diagnostic: logs_http=\`${LOGS_CODE}\`; safe_runtime_excerpt=\`${DIAGNOSTIC}\`. Read-only isolated Render logs only; no Supadata/preflight/transcript/metadata/AI start or retry was executed."
+          gh pr comment 28 --repo kolemasakar/VoiceBridge --body "A9.6 Facebook fresh-job AI runtime diagnostic: logs_http=\`${LOGS_CODE}\`; safe_runtime_excerpt=\`${DIAGNOSTIC}\`. Read-only isolated Render logs only; no Supadata/preflight/transcript/metadata/AI start or retry was executed."
