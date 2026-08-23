@@ -134,8 +134,6 @@ unauth_http="$(curl -sS --max-time 30 -o /tmp/unauth.json -w '%{http_code}' \
 unauth_code="$(jq -r '.error.code // .error // empty' /tmp/unauth.json 2>/dev/null || true)"
 echo "A9.7-G1 unauth_http=${unauth_http} unauth_code=${unauth_code:-none}"
 
-# Persist only non-secret diagnostic outputs before the gate assertions so a
-# failed assertion remains auditable without printing response bodies.
 {
   echo "created=$created"
   echo "service_id=$service_id"
@@ -151,7 +149,9 @@ echo "A9.7-G1 unauth_http=${unauth_http} unauth_code=${unauth_code:-none}"
   echo "unauth_code=$unauth_code"
 } >> "$GITHUB_OUTPUT"
 
-[[ "$unauth_http" == 401 ]]
-[[ "$unauth_code" == *auth* ]]
+# Pinned Cobalt reports missing API credentials as a structured 400 error.
+# The exact auth error proves rejection happened at the auth gate.
+[[ "$unauth_http" == 400 ]]
+[[ "$unauth_code" == "error.api.auth.key.missing" ]]
 
 phase=done
