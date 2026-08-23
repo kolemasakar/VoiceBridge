@@ -303,3 +303,108 @@ test("Supadata generated transcript accepts nested async result payloads", async
     assert.equal(accountReads, 2);
   });
 });
+
+
+test("Supadata generated transcript accepts deeply nested result and infers chunk language", async () => {
+  let accountReads = 0;
+  await withMockServer((request, response) => {
+    const url = new URL(request.url || "/", "http://localhost");
+    if (url.pathname === "/me") {
+      accountReads += 1;
+      response.writeHead(200, { "content-type": "application/json" });
+      response.end(JSON.stringify({
+        organizationId: "org-fb-deep",
+        plan: "Free",
+        maxCredits: 100,
+        usedCredits: accountReads === 1 ? 20 : 22
+      }));
+      return;
+    }
+    if (url.pathname === "/transcript") {
+      response.writeHead(202, {
+        "content-type": "application/json",
+        "x-billable-requests": "2"
+      });
+      response.end(JSON.stringify({ jobId: "job-fb-deep" }));
+      return;
+    }
+    assert.equal(url.pathname, "/transcript/job-fb-deep");
+    response.writeHead(200, { "content-type": "application/json" });
+    response.end(JSON.stringify({
+      status: "COMPLETED",
+      result: {
+        result: {
+          content: [
+            { text: "Deep nested transcript", offset: 0, duration: 22000, lang: "uk" }
+          ]
+        }
+      }
+    }));
+  }, async (baseUrl) => {
+    const provider = new SupadataProvider("test-key", baseUrl, 0, 2);
+    const result = await provider.getGeneratedTranscript(
+      "https://www.facebook.com/reel/1234567890/",
+      2
+    );
+    assert.equal(result.status, "completed");
+    assert.equal(result.billable_credits, 2);
+    assert.equal(result.language, "uk");
+    assert.deepEqual(result.available_languages, ["uk"]);
+    assert.equal(result.segments.length, 1);
+    assert.equal(result.segments[0]?.end_ms, 22000);
+    assert.equal(accountReads, 2);
+  });
+});
+
+test("Supadata invalid transcript diagnostic exposes shape but never transcript text", async () => {
+  const secretTranscriptText = "DO-NOT-LOG-TRANSCRIPT-TEXT";
+  const warnings: string[] = [];
+  const originalWarn = console.warn;
+  console.warn = (...values: unknown[]) => {
+    warnings.push(values.map((value) => String(value)).join(" "));
+  };
+  try {
+    await withMockServer((request, response) => {
+      const url = new URL(request.url || "/", "http://localhost");
+      if (url.pathname === "/me") {
+        response.writeHead(200, { "content-type": "application/json" });
+        response.end(JSON.stringify({
+          organizationId: "org-shape",
+          plan: "Free",
+          maxCredits: 100,
+          usedCredits: 22
+        }));
+        return;
+      }
+      assert.equal(url.pathname, "/transcript");
+      response.writeHead(200, {
+        "content-type": "application/json",
+        "x-billable-requests": "2"
+      });
+      response.end(JSON.stringify({
+        status: "completed",
+        result: {
+          content: [
+            { text: secretTranscriptText, offset: "invalid", duration: 22000 }
+          ]
+        }
+      }));
+    }, async (baseUrl) => {
+      const provider = new SupadataProvider("test-key", baseUrl, 0, 2);
+      await assert.rejects(
+        provider.getGeneratedTranscript(
+          "https://www.facebook.com/reel/shape-only/",
+          2
+        ),
+        /empty or invalid transcript/
+      );
+    });
+  } finally {
+    console.warn = originalWarn;
+  }
+  assert.equal(warnings.length, 1);
+  assert.match(warnings[0] ?? "", /KRC_SUPADATA_TRANSCRIPT_SHAPE/);
+  assert.match(warnings[0] ?? "", /"content_length":1/);
+  assert.match(warnings[0] ?? "", /"content_item_keys":\["duration","offset","text"\]/);
+  assert.doesNotMatch(warnings[0] ?? "", new RegExp(secretTranscriptText));
+});

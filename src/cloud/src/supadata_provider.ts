@@ -163,33 +163,128 @@ function parseSegments(content: unknown): MediaTranscriptSegment[] {
   return segments;
 }
 
+function valueType(value: unknown): string {
+  if (value === null) return "null";
+  if (Array.isArray(value)) return "array";
+  return typeof value;
+}
+
+function objectKeys(value: unknown): string[] {
+  if (!value || typeof value !== "object" || Array.isArray(value)) return [];
+  return Object.keys(value as Record<string, unknown>).sort();
+}
+
+function nestedResultDepth(payload: SupadataTranscriptResponse): number {
+  let depth = 0;
+  let current: unknown = payload.result;
+  while (current && typeof current === "object" && !Array.isArray(current) && depth < 8) {
+    depth += 1;
+    current = (current as SupadataTranscriptResponse).result;
+  }
+  if (Array.isArray(current)) depth += 1;
+  return depth;
+}
+
 function unwrapTranscriptPayload(
   payload: SupadataTranscriptResponse
 ): SupadataTranscriptResponse {
-  const nested = payload.result;
-  if (!nested || typeof nested !== "object" || Array.isArray(nested)) {
-    return payload;
+  let merged: SupadataTranscriptResponse = { ...payload };
+  let nested: unknown = payload.result;
+  let depth = 0;
+  while (nested && typeof nested === "object" && !Array.isArray(nested) && depth < 4) {
+    const nestedPayload = nested as SupadataTranscriptResponse;
+    merged = { ...merged, ...nestedPayload };
+    nested = nestedPayload.result;
+    depth += 1;
   }
+  if (Array.isArray(nested) && !Array.isArray(merged.content)) {
+    merged = { ...merged, content: nested };
+  } else if (Array.isArray(payload.result) && !Array.isArray(merged.content)) {
+    merged = { ...merged, content: payload.result };
+  }
+  return merged;
+}
+
+function inferTranscriptLanguage(
+  payload: SupadataTranscriptResponse,
+  content: unknown
+): string | null {
+  const explicit = nonEmptyString(payload.lang);
+  if (explicit) return explicit;
+  if (!Array.isArray(content)) return null;
+  const languages = new Set<string>();
+  for (const value of content) {
+    if (!value || typeof value !== "object" || Array.isArray(value)) continue;
+    const language = nonEmptyString((value as SupadataTranscriptChunk).lang);
+    if (language) languages.add(language);
+  }
+  return languages.size === 1 ? [...languages][0] ?? null : null;
+}
+
+function safeTranscriptPayloadShape(payload: SupadataTranscriptResponse): Record<string, unknown> {
+  const unwrapped = unwrapTranscriptPayload(payload);
+  const content = unwrapped.content;
+  const firstItem = Array.isArray(content) && content.length > 0 ? content[0] : null;
+  const firstItemKeys = objectKeys(firstItem);
+  const firstItemTypes = firstItem && typeof firstItem === "object" && !Array.isArray(firstItem)
+    ? Object.fromEntries(firstItemKeys.map((key) => [
+        key,
+        valueType((firstItem as Record<string, unknown>)[key])
+      ]))
+    : {};
+  const firstResult = payload.result && typeof payload.result === "object" && !Array.isArray(payload.result)
+    ? payload.result as SupadataTranscriptResponse
+    : null;
   return {
-    ...payload,
-    ...(nested as SupadataTranscriptResponse)
+    top_level_keys: objectKeys(payload),
+    status: nonEmptyString(payload.status),
+    result_type: valueType(payload.result),
+    result_keys: objectKeys(payload.result),
+    nested_result_type: valueType(firstResult?.result),
+    nested_result_depth: nestedResultDepth(payload),
+    content_type: valueType(content),
+    content_length: Array.isArray(content) ? content.length : null,
+    content_item_keys: firstItemKeys,
+    content_item_types: firstItemTypes,
+    lang_type: valueType(unwrapped.lang),
+    available_langs_type: valueType(unwrapped.availableLangs)
   };
+}
+
+function emitSafeTranscriptShape(
+  payload: SupadataTranscriptResponse,
+  context: { phase: string; http_status?: number } | null
+): void {
+  console.warn(
+    "KRC_SUPADATA_TRANSCRIPT_SHAPE",
+    JSON.stringify({
+      phase: context?.phase ?? "unknown",
+      http_status: context?.http_status ?? null,
+      ...safeTranscriptPayloadShape(payload)
+    })
+  );
 }
 
 function parseTranscriptResult(
   payload: SupadataTranscriptResponse,
-  billableCredits: number
+  billableCredits: number,
+  context: { phase: string; http_status?: number } | null = null
 ): SupadataGeneratedTranscriptResult {
+  const rawPayload = payload;
   payload = unwrapTranscriptPayload(payload);
-  const language = nonEmptyString(payload.lang);
+  const language = inferTranscriptLanguage(payload, payload.content);
   const segments = parseSegments(payload.content);
-  const availableLanguages = Array.isArray(payload.availableLangs)
+  const explicitAvailableLanguages = Array.isArray(payload.availableLangs)
     ? payload.availableLangs.flatMap((value) => {
         const languageValue = nonEmptyString(value);
         return languageValue ? [languageValue] : [];
       })
     : [];
+  const availableLanguages = explicitAvailableLanguages.length > 0
+    ? explicitAvailableLanguages
+    : language ? [language] : [];
   if (!language || segments.length === 0) {
+    emitSafeTranscriptShape(rawPayload, context);
     throw new MediaTranscriptError(
       "MANAGED_PROVIDER_TRANSCRIPT_INVALID",
       "The managed transcript provider returned an empty or invalid transcript.",
@@ -523,7 +618,8 @@ export class SupadataProvider {
 
     const result = parseTranscriptResult(
       payload,
-      billableCredits || NATIVE_TRANSCRIPT_CREDITS
+      billableCredits || NATIVE_TRANSCRIPT_CREDITS,
+      { phase: "native", http_status: response.status }
     );
     return result;
   }
@@ -563,7 +659,8 @@ export class SupadataProvider {
       );
     }
 
-    let payload = initial.payload;
+    let payload = unwrapTranscriptPayload(initial.payload);
+    let finalHttpStatus = initial.response.status;
     if (initial.response.status === 202 || nonEmptyString(payload.jobId)) {
       const jobId = nonEmptyString(payload.jobId);
       if (!jobId) {
@@ -590,7 +687,8 @@ export class SupadataProvider {
             polled.response.status >= 500 || polled.response.status === 429
           );
         }
-        const status = nonEmptyString(polled.payload.status);
+        const polledPayload = unwrapTranscriptPayload(polled.payload);
+        const status = nonEmptyString(polledPayload.status)?.toLowerCase() ?? null;
         if (status === "queued" || status === "active") continue;
         if (status === "failed") {
           throw new MediaTranscriptError(
@@ -603,11 +701,16 @@ export class SupadataProvider {
           );
         }
         if (status === "completed") {
-          payload = polled.payload;
+          payload = polledPayload;
+          finalHttpStatus = polled.response.status;
           billedFromHeader = billedFromHeader || parseBillableCredits(polled.response.headers);
           completed = true;
           break;
         }
+        emitSafeTranscriptShape(polled.payload, {
+          phase: "generate-poll-status",
+          http_status: polled.response.status
+        });
         throw new MediaTranscriptError(
           "MANAGED_PROVIDER_AI_JOB_INVALID",
           "The managed AI transcript provider returned an unknown job status.",
@@ -625,7 +728,11 @@ export class SupadataProvider {
       }
     }
 
-    const preliminary = parseTranscriptResult(payload, billedFromHeader);
+    const preliminary = parseTranscriptResult(
+      payload,
+      billedFromHeader,
+      { phase: "generate-final", http_status: finalHttpStatus }
+    );
     const accountAfter = await this.getAccount();
     const balanceDelta = Math.max(
       0,
