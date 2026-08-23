@@ -108,6 +108,8 @@ export interface ManagedMediaAiCreditPreflight {
   };
 }
 
+const PAID_JOB_MIN_RETENTION_SECONDS = 86400;
+
 export type ManagedMediaStatus =
   | "PROCESSING"
   | "COMPLETED"
@@ -483,9 +485,19 @@ export class ManagedMediaService {
     }
   }
 
-  private expiryFrom(updatedAt: string): string {
+  private expiryFrom(updatedAt: string, job?: ManagedMediaJobView): string {
+    const paidOrUncertain = Boolean(
+      job && (
+        job.credit_charge_uncertain ||
+        job.credits_charged > 0 ||
+        (job.metadata_credits_charged ?? 0) > 0
+      )
+    );
+    const retentionSeconds = paidOrUncertain
+      ? Math.max(this.jobTtlSeconds, PAID_JOB_MIN_RETENTION_SECONDS)
+      : this.jobTtlSeconds;
     return new Date(
-      Date.parse(updatedAt) + this.jobTtlSeconds * 1000
+      Date.parse(updatedAt) + retentionSeconds * 1000
     ).toISOString();
   }
 
@@ -508,6 +520,7 @@ export class ManagedMediaService {
       },
       expiresAt: this.expiryFrom(updatedAt)
     };
+    interrupted.expiresAt = this.expiryFrom(updatedAt, interrupted.job);
     await this.store.put(interrupted);
     return interrupted;
   }
@@ -678,6 +691,7 @@ export class ManagedMediaService {
       },
       expiresAt: this.expiryFrom(startedAt)
     };
+    processing.expiresAt = this.expiryFrom(processing.job.updated_at, processing.job);
     await this.store.put(processing);
     this.inFlight.add(record.requestKey);
     try {
@@ -708,7 +722,8 @@ export class ManagedMediaService {
         },
         expiresAt: this.expiryFrom(updatedAt)
       };
-      await this.store.put(updated);
+      updated.expiresAt = this.expiryFrom(updated.job.updated_at, updated.job);
+    await this.store.put(updated);
       return this.publicJob(updated.job, false);
     } catch (error) {
       const normalized = error instanceof MediaTranscriptError
@@ -735,7 +750,8 @@ export class ManagedMediaService {
         },
         expiresAt: this.expiryFrom(updatedAt)
       };
-      await this.store.put(failed);
+      failed.expiresAt = this.expiryFrom(failed.job.updated_at, failed.job);
+    await this.store.put(failed);
       return this.publicJob(failed.job, false);
     } finally {
       this.inFlight.delete(record.requestKey);
@@ -886,6 +902,7 @@ export class ManagedMediaService {
       segments: [],
       expiresAt: this.expiryFrom(now)
     };
+    record.expiresAt = this.expiryFrom(job.updated_at, job);
     const reservation = await this.store.reserve(record);
     if (!reservation.created) {
       const resolved = reservation.record.job.status === "PROCESSING" &&
@@ -931,7 +948,8 @@ export class ManagedMediaService {
           : [],
         expiresAt: this.expiryFrom(updatedAt)
       };
-      await this.store.put(updated);
+      updated.expiresAt = this.expiryFrom(updated.job.updated_at, updated.job);
+    await this.store.put(updated);
       return this.publicJob(updated.job, false);
     } catch (error) {
       const normalized = error instanceof MediaTranscriptError
@@ -958,7 +976,8 @@ export class ManagedMediaService {
         },
         expiresAt: this.expiryFrom(updatedAt)
       };
-      await this.store.put(failed);
+      failed.expiresAt = this.expiryFrom(failed.job.updated_at, failed.job);
+    await this.store.put(failed);
       return this.publicJob(failed.job, false);
     } finally {
       this.inFlight.delete(requestKey);
@@ -1055,6 +1074,7 @@ export class ManagedMediaService {
       },
       expiresAt: this.expiryFrom(startedAt)
     };
+    processing.expiresAt = this.expiryFrom(processing.job.updated_at, processing.job);
     await this.store.put(processing);
     this.inFlight.add(record.requestKey);
     try {
@@ -1084,7 +1104,8 @@ export class ManagedMediaService {
         segments: result.segments.map((segment) => ({ ...segment })),
         expiresAt: this.expiryFrom(updatedAt)
       };
-      await this.store.put(updated);
+      updated.expiresAt = this.expiryFrom(updated.job.updated_at, updated.job);
+    await this.store.put(updated);
       return this.publicJob(updated.job, false);
     } catch (error) {
       const normalized = error instanceof MediaTranscriptError
@@ -1111,7 +1132,8 @@ export class ManagedMediaService {
         },
         expiresAt: this.expiryFrom(updatedAt)
       };
-      await this.store.put(failed);
+      failed.expiresAt = this.expiryFrom(failed.job.updated_at, failed.job);
+    await this.store.put(failed);
       return this.publicJob(failed.job, false);
     } finally {
       this.inFlight.delete(record.requestKey);

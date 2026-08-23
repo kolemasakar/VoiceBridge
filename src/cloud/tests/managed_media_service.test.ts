@@ -6,6 +6,9 @@ import {
   parseManagedMediaAiInput,
   parseManagedMediaNativeInput,
   parseManagedMediaPreflightInput,
+  type ManagedMediaJobStore,
+  type ManagedMediaStoredRecord,
+  type ManagedMediaStoreReservation,
   type ManagedNativeTranscriptProvider
 } from "../src/managed_media_service.js";
 
@@ -346,4 +349,55 @@ test("AI preflight refuses non-Reel source even after native unavailable", async
     }
   );
   assert.equal(fake.aiCalls(), 0);
+});
+
+class RecordingStore implements ManagedMediaJobStore {
+  readonly durable = true;
+  readonly kind = "postgres" as const;
+  record: ManagedMediaStoredRecord | null = null;
+
+  async ready(): Promise<void> {}
+  async purgeExpired(): Promise<void> {}
+  async findByRequestKey(requestKey: string): Promise<ManagedMediaStoredRecord | null> {
+    return this.record?.requestKey === requestKey ? structuredClone(this.record) : null;
+  }
+  async reserve(record: ManagedMediaStoredRecord): Promise<ManagedMediaStoreReservation> {
+    if (this.record) return { created: false, record: structuredClone(this.record) };
+    this.record = structuredClone(record);
+    return { created: true, record: structuredClone(record) };
+  }
+  async put(record: ManagedMediaStoredRecord): Promise<void> {
+    this.record = structuredClone(record);
+  }
+  async get(jobId: string): Promise<ManagedMediaStoredRecord | null> {
+    return this.record?.job.job_id === jobId ? structuredClone(this.record) : null;
+  }
+}
+
+test("paid native-unavailable jobs retain at least a 24-hour recovery window", async () => {
+  const store = new RecordingStore();
+  const service = new ManagedMediaService(
+    new MediaBetaGate([ACCESS_CODE]),
+    null,
+    provider("unavailable"),
+    { store, jobTtlSeconds: 300 }
+  );
+  const input = parseManagedMediaNativeInput({
+    url: "https://youtu.be/recovery-window",
+    beta_access_code: ACCESS_CODE,
+    credit_consent: {
+      provider: "supadata",
+      mode: "native",
+      max_credits: 1
+    }
+  });
+  assert.ok(input);
+  const job = await service.startNative(input);
+  assert.equal(job.status, "AWAITING_AI_CONSENT");
+  assert.equal(job.credits_charged, 1);
+  assert.ok(store.record);
+  const retentionSeconds = (
+    Date.parse(store.record.expiresAt) - Date.parse(store.record.job.updated_at)
+  ) / 1000;
+  assert.ok(retentionSeconds >= 86400);
 });
