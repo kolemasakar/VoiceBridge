@@ -1,0 +1,76 @@
+name: A9.6 Paid Job Retention Implementation
+
+on:
+  push:
+    branches:
+      - agent/krc-media-transcript
+    paths:
+      - .github/workflows/a9-6-paid-job-retention-implementation.yml
+
+permissions:
+  contents: write
+  issues: write
+  pull-requests: write
+
+jobs:
+  implement:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout feature branch
+        uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803
+        with:
+          ref: agent/krc-media-transcript
+          fetch-depth: 0
+
+      - name: Set up Node.js
+        uses: actions/setup-node@249970729cb0ef3589644e2896645e5dc5ba9c38
+        with:
+          node-version: "24"
+          cache: npm
+          cache-dependency-path: src/cloud/package-lock.json
+
+      - name: Apply paid-retention patch
+        id: patch
+        shell: bash
+        run: |
+          set -euo pipefail
+          python scripts/a9_6_paid_job_retention_patch.py
+          git diff --check
+
+      - name: Run full cloud check
+        id: test
+        working-directory: src/cloud
+        shell: bash
+        run: |
+          set -euo pipefail
+          npm ci
+          npm run check
+
+      - name: Commit source and regression test
+        id: commit
+        shell: bash
+        run: |
+          set -euo pipefail
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git add src/cloud/src/managed_media_service.ts src/cloud/tests/managed_media_service.test.ts
+          git diff --cached --check
+          git commit -m "A9.6: retain paid managed-media jobs for recovery"
+          git push origin HEAD:agent/krc-media-transcript
+          echo "sha=$(git rev-parse HEAD)" >> "$GITHUB_OUTPUT"
+
+      - name: Report implementation
+        if: always()
+        env:
+          GH_TOKEN: ${{ github.token }}
+          PATCH_OUTCOME: ${{ steps.patch.outcome }}
+          TEST_OUTCOME: ${{ steps.test.outcome }}
+          SHA: ${{ steps.commit.outputs.sha }}
+        shell: bash
+        run: |
+          set -euo pipefail
+          if [[ "$PATCH_OUTCOME" == success && "$TEST_OUTCOME" == success && -n "${SHA:-}" ]]; then
+            gh pr comment 28 --repo kolemasakar/VoiceBridge --body "A9.6 paid managed-job retention: **PASS**. Feature commit: \`${SHA}\`. Billable/charge-uncertain jobs retain at least 24 hours even when base TTL is shorter; regression coverage passed in the full Node 24 cloud suite. No provider or Render operation was executed by this workflow. Production/main were not targeted."
+          else
+            gh pr comment 28 --repo kolemasakar/VoiceBridge --body "A9.6 paid managed-job retention: **FAIL** before deploy. patch=\`${PATCH_OUTCOME}\`, test=\`${TEST_OUTCOME}\`. No provider or Render operation was executed. Production/main were not targeted."
+          fi
