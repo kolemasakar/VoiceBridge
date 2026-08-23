@@ -1,0 +1,67 @@
+name: A9.6 Facebook Parser Instance Timeline
+
+on:
+  push:
+    branches:
+      - agent/krc-media-transcript
+    paths:
+      - .github/workflows/a9-6-facebook-parser-instance-timeline.yml
+
+permissions:
+  contents: read
+  issues: write
+  pull-requests: write
+
+jobs:
+  diagnose:
+    runs-on: ubuntu-latest
+    env:
+      RENDER_API_KEY: ${{ secrets.RENDER_API_KEY }}
+      GH_TOKEN: ${{ github.token }}
+      RENDER_API_BASE: https://api.render.com/v1
+      SERVICE_ID: srv-da1kic5bedkc73d6fk60
+      FAILURE_START: 2026-08-21T08:10:00Z
+      FAILURE_END: 2026-08-21T08:25:30Z
+    steps:
+      - name: Build isolated instance timeline
+        id: timeline
+        shell: bash
+        run: |
+          set -euo pipefail
+          test -n "${RENDER_API_KEY:-}"
+          echo "::add-mask::$RENDER_API_KEY"
+          curl -sS "${RENDER_API_BASE}/services/${SERVICE_ID}" \
+            -H 'Accept: application/json' \
+            -H "Authorization: Bearer ${RENDER_API_KEY}" > /tmp/service.json
+          owner_id="$(jq -r '.ownerId // .owner.id // empty' /tmp/service.json)"
+          test -n "$owner_id"
+          curl -sS -G "${RENDER_API_BASE}/logs" \
+            -H 'Accept: application/json' \
+            -H "Authorization: Bearer ${RENDER_API_KEY}" \
+            --data-urlencode "ownerId=${owner_id}" \
+            --data-urlencode "resource=${SERVICE_ID}" \
+            --data-urlencode "startTime=${FAILURE_START}" \
+            --data-urlencode "endTime=${FAILURE_END}" \
+            --data-urlencode "direction=forward" \
+            --data-urlencode "limit=100" > /tmp/logs.json
+          jq -r '
+            .. | objects |
+            select((.message? // .text? // "") | tostring | test("service_started|service_stopping|service_start_failed|Timed Out|Port scan|no open ports"; "i")) |
+            [(.timestamp // .time // .ts // "?"), (.labels.instance // .instance // .instanceId // "?"), (.type // .labels.type // "?"), ((.message // .text // "") | tostring)] | @tsv
+          ' /tmp/logs.json > /tmp/timeline.tsv || true
+          sed -E \
+            -e 's/\x1B\[[0-9;]*[mK]//g' \
+            -e 's/(Bearer[[:space:]]+)[A-Za-z0-9._~+\/-]+/\1<redacted>/Ig' \
+            -e 's/((token|secret|password|api[_-]?key|key)[=:][[:space:]]*)[^[:space:]]+/\1<redacted>/Ig' \
+            /tmp/timeline.tsv | head -c 6000 > /tmp/safe.tsv
+          diag="$(cat /tmp/safe.tsv | tr '\n' '|' | sed 's/`/_/g')"
+          [[ -n "$diag" ]] || diag="no_matching_timeline_events"
+          echo "diag=$diag" >> "$GITHUB_OUTPUT"
+
+      - name: Report instance timeline
+        env:
+          DIAG: ${{ steps.timeline.outputs.diag }}
+        shell: bash
+        run: |
+          set -euo pipefail
+          gh pr comment 28 --repo kolemasakar/VoiceBridge --body "A9.6 Facebook parser instance timeline: \`${DIAG}\`. Read-only isolated Render logs; no Supadata or billable media endpoint was called."
