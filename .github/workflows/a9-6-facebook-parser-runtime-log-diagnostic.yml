@@ -1,0 +1,87 @@
+name: A9.6 Facebook Parser Runtime Log Diagnostic
+
+on:
+  push:
+    branches:
+      - agent/krc-media-transcript
+    paths:
+      - .github/workflows/a9-6-facebook-parser-runtime-log-diagnostic.yml
+
+permissions:
+  contents: read
+  issues: write
+  pull-requests: write
+
+jobs:
+  diagnose:
+    runs-on: ubuntu-latest
+    env:
+      RENDER_API_KEY: ${{ secrets.RENDER_API_KEY }}
+      GH_TOKEN: ${{ github.token }}
+      RENDER_API_BASE: https://api.render.com/v1
+      SERVICE_ID: srv-da1kic5bedkc73d6fk60
+      FAILURE_START: 2026-08-21T08:10:00Z
+      FAILURE_END: 2026-08-21T08:25:00Z
+    steps:
+      - name: Read isolated runtime logs
+        id: logs
+        shell: bash
+        run: |
+          set -euo pipefail
+          test -n "${RENDER_API_KEY:-}"
+          echo "::add-mask::$RENDER_API_KEY"
+
+          service_code="$(curl -sS -o /tmp/service.json -w '%{http_code}' \
+            "${RENDER_API_BASE}/services/${SERVICE_ID}" \
+            -H 'Accept: application/json' \
+            -H "Authorization: Bearer ${RENDER_API_KEY}")"
+          [[ "$service_code" == 200 ]]
+          owner_id="$(jq -r '.ownerId // .owner.id // empty' /tmp/service.json)"
+          test -n "$owner_id"
+
+          logs_code="$(curl -sS -G -o /tmp/logs.json -w '%{http_code}' \
+            "${RENDER_API_BASE}/logs" \
+            -H 'Accept: application/json' \
+            -H "Authorization: Bearer ${RENDER_API_KEY}" \
+            --data-urlencode "ownerId=${owner_id}" \
+            --data-urlencode "resource=${SERVICE_ID}" \
+            --data-urlencode "type=app" \
+            --data-urlencode "startTime=${FAILURE_START}" \
+            --data-urlencode "endTime=${FAILURE_END}" \
+            --data-urlencode "direction=forward" \
+            --data-urlencode "limit=100")"
+
+          if [[ "$logs_code" != 200 ]]; then
+            echo "logs_code=$logs_code" >> "$GITHUB_OUTPUT"
+            echo "diagnostic=logs_api_http_${logs_code}" >> "$GITHUB_OUTPUT"
+            exit 0
+          fi
+
+          jq -r '.. | objects | (.message? // .text? // empty) | strings' /tmp/logs.json \
+            | grep -Ei 'error|fatal|exception|failed|failure|uncaught|unhandled|EADDR|ECONN|postgres|database|listen|port|syntax|typeerror|referenceerror' \
+            | tail -n 20 > /tmp/errors.txt || true
+
+          if [[ ! -s /tmp/errors.txt ]]; then
+            jq -r '.. | objects | (.message? // .text? // empty) | strings' /tmp/logs.json \
+              | tail -n 12 > /tmp/errors.txt || true
+          fi
+
+          sed -E \
+            -e 's/(Bearer[[:space:]]+)[A-Za-z0-9._~+\/-]+/\1<redacted>/Ig' \
+            -e 's/((token|secret|password|api[_-]?key|key)[=:][[:space:]]*)[^[:space:]]+/\1<redacted>/Ig' \
+            -e 's#(postgres(ql)?://)[^@[:space:]]+@#\1<redacted>@#Ig' \
+            /tmp/errors.txt | head -c 4000 > /tmp/safe.txt
+
+          diagnostic="$(cat /tmp/safe.txt | tr '\n' '|' | sed 's/`/_/g')"
+          [[ -n "$diagnostic" ]] || diagnostic="no_message_fields_found"
+          echo "logs_code=$logs_code" >> "$GITHUB_OUTPUT"
+          echo "diagnostic=$diagnostic" >> "$GITHUB_OUTPUT"
+
+      - name: Report safe runtime diagnostic
+        env:
+          LOGS_CODE: ${{ steps.logs.outputs.logs_code }}
+          DIAGNOSTIC: ${{ steps.logs.outputs.diagnostic }}
+        shell: bash
+        run: |
+          set -euo pipefail
+          gh pr comment 28 --repo kolemasakar/VoiceBridge --body "A9.6 Facebook parser runtime diagnostic: logs_http=\`${LOGS_CODE}\`; safe_runtime_excerpt=\`${DIAGNOSTIC}\`. Read-only isolated Render app logs only; no Supadata or billable media endpoint was called. Production/main were not targeted."
