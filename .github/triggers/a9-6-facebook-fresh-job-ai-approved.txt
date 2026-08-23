@@ -1,0 +1,6 @@
+approved_at=2026-08-23T13:49:00+03:00
+job_id=KRCM_e502967f-05cb-44ec-bb65-cdc014181d5d
+hard_max_supadata_credits=2
+mode=generate
+one_shot=true
+no_retry=true
