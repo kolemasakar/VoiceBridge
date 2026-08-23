@@ -1,0 +1,98 @@
+name: A9.6 Facebook Parser Controlled Redeploy
+
+on:
+  push:
+    branches:
+      - agent/krc-media-transcript
+    paths:
+      - .github/workflows/a9-6-facebook-parser-redeploy.yml
+
+permissions:
+  contents: read
+  issues: write
+  pull-requests: write
+
+concurrency:
+  group: a9-6-facebook-parser-controlled-redeploy
+  cancel-in-progress: false
+
+jobs:
+  redeploy:
+    runs-on: ubuntu-latest
+    env:
+      RENDER_API_KEY: ${{ secrets.RENDER_API_KEY }}
+      GH_TOKEN: ${{ github.token }}
+      RENDER_API_BASE: https://api.render.com/v1
+      SERVICE_ID: srv-da1kic5bedkc73d6fk60
+      SERVICE_NAME: voicebridge-krc-media-beta-kolemasakar
+      REQUIRED_BRANCH: agent/krc-media-transcript
+      BETA_BASE_URL: https://voicebridge-krc-media-beta-kolemasakar.onrender.com
+      CODE_SHA: f6b32c2a03425deaecadd10fc902671d62eaab5d
+    steps:
+      - name: Redeploy exact parser commit with cleared cache
+        id: deploy
+        shell: bash
+        run: |
+          set -euo pipefail
+          test -n "${RENDER_API_KEY:-}"
+          echo "::add-mask::$RENDER_API_KEY"
+
+          curl -sS "${RENDER_API_BASE}/services/${SERVICE_ID}" \
+            -H 'Accept: application/json' \
+            -H "Authorization: Bearer ${RENDER_API_KEY}" > /tmp/service.json
+          [[ "$(jq -r '.name // empty' /tmp/service.json)" == "$SERVICE_NAME" ]]
+          [[ "$(jq -r '.branch // empty' /tmp/service.json)" == "$REQUIRED_BRANCH" ]]
+
+          payload="$(jq -nc --arg commitId "$CODE_SHA" '{commitId:$commitId,clearCache:"clear"}')"
+          code="$(curl -sS -o /tmp/create.json -w '%{http_code}' \
+            -X POST "${RENDER_API_BASE}/services/${SERVICE_ID}/deploys" \
+            -H 'Accept: application/json' -H 'Content-Type: application/json' \
+            -H "Authorization: Bearer ${RENDER_API_KEY}" --data "$payload")"
+          [[ "$code" == 201 || "$code" == 202 ]]
+          deploy_id="$(jq -r '(.deploy // .).id // empty' /tmp/create.json)"
+          test -n "$deploy_id"
+
+          final_status="timeout"
+          final_sha="unknown"
+          for i in $(seq 1 120); do
+            curl -sS "${RENDER_API_BASE}/services/${SERVICE_ID}/deploys/${deploy_id}" \
+              -H 'Accept: application/json' \
+              -H "Authorization: Bearer ${RENDER_API_KEY}" > /tmp/deploy.json
+            final_status="$(jq -r '(.deploy // .).status // "unknown"' /tmp/deploy.json)"
+            final_sha="$(jq -r '(.deploy // .).commit.id // (.deploy // .).commitId // "unknown"' /tmp/deploy.json)"
+            case "$final_status" in
+              live|build_failed|update_failed|canceled|deactivated) break ;;
+            esac
+            sleep 5
+          done
+          health_http="000"
+          health_value="none"
+          if [[ "$final_status" == "live" && "$final_sha" == "$CODE_SHA" ]]; then
+            for i in $(seq 1 12); do
+              health_http="$(curl -sS --max-time 15 -o /tmp/health.json -w '%{http_code}' "${BETA_BASE_URL}/health" || true)"
+              if [[ "$health_http" == 200 ]]; then
+                health_value="$(jq -r '.status // .ok // "unknown"' /tmp/health.json 2>/dev/null)"
+                break
+              fi
+              sleep 5
+            done
+          fi
+          echo "deploy_id=$deploy_id" >> "$GITHUB_OUTPUT"
+          echo "status=$final_status" >> "$GITHUB_OUTPUT"
+          echo "sha=$final_sha" >> "$GITHUB_OUTPUT"
+          echo "health_http=$health_http" >> "$GITHUB_OUTPUT"
+          echo "health_value=$health_value" >> "$GITHUB_OUTPUT"
+
+      - name: Report controlled redeploy
+        env:
+          DEPLOY_ID: ${{ steps.deploy.outputs.deploy_id }}
+          STATUS: ${{ steps.deploy.outputs.status }}
+          SHA: ${{ steps.deploy.outputs.sha }}
+          HEALTH_HTTP: ${{ steps.deploy.outputs.health_http }}
+          HEALTH_VALUE: ${{ steps.deploy.outputs.health_value }}
+        shell: bash
+        run: |
+          set -euo pipefail
+          result=FAIL
+          if [[ "$STATUS" == "live" && "$SHA" == "$CODE_SHA" && "$HEALTH_HTTP" == "200" ]]; then result=PASS; fi
+          gh pr comment 28 --repo kolemasakar/VoiceBridge --body "A9.6 Facebook parser controlled redeploy: **${result}**. deploy_id=\`${DEPLOY_ID}\`, status=\`${STATUS}\`, sha=\`${SHA}\`, health_http=\`${HEALTH_HTTP}\`, health=\`${HEALTH_VALUE}\`. Exact parser commit only, isolated beta, cleared build cache. No Supadata or billable media endpoint was called. Production/main were not targeted."
