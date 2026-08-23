@@ -1,0 +1,85 @@
+name: A9.6 Facebook Paid Job Lookup
+
+on:
+  push:
+    branches:
+      - agent/krc-media-transcript
+    paths:
+      - .github/workflows/a9-6-facebook-paid-job-lookup.yml
+
+permissions:
+  contents: read
+  issues: write
+  pull-requests: write
+
+jobs:
+  lookup:
+    runs-on: ubuntu-latest
+    env:
+      RENDER_API_KEY: ${{ secrets.RENDER_API_KEY }}
+      GH_TOKEN: ${{ github.token }}
+      RENDER_API_BASE: https://api.render.com/v1
+      SERVICE_ID: srv-da1kic5bedkc73d6fk60
+      BETA_BASE_URL: https://voicebridge-krc-media-beta-kolemasakar.onrender.com
+      FACEBOOK_URL: https://www.facebook.com/reel/1114235920664408/
+    steps:
+      - name: Lookup durable Facebook job only
+        id: lookup
+        shell: bash
+        run: |
+          set -euo pipefail
+          test -n "${RENDER_API_KEY:-}"
+          echo "::add-mask::$RENDER_API_KEY"
+          curl -sS "${RENDER_API_BASE}/services/${SERVICE_ID}/env-vars/KRC_MEDIA_ACTION_TOKEN" \
+            -H 'Accept: application/json' -H "Authorization: Bearer ${RENDER_API_KEY}" > /tmp/env.json
+          action_token="$(jq -r '(.envVar.value // .value // empty)' /tmp/env.json)"
+          test -n "$action_token"
+          echo "::add-mask::$action_token"
+          payload="$(jq -nc --arg url "$FACEBOOK_URL" '{url:$url,language_hint:"auto"}')"
+          code="$(curl -sS --max-time 30 -o /tmp/job.json -w '%{http_code}' \
+            -X POST "${BETA_BASE_URL}/api/v1/media/managed/lookup" \
+            -H 'Accept: application/json' -H 'Content-Type: application/json' \
+            -H "Authorization: Bearer ${action_token}" --data "$payload")"
+          status="not_found"
+          provider_mode="none"
+          credits="unknown"
+          metadata="unknown"
+          duration="unknown"
+          ceiling="unknown"
+          uncertain="unknown"
+          error_code="none"
+          if [[ "$code" == 200 ]]; then
+            status="$(jq -r '.status // "unknown"' /tmp/job.json)"
+            provider_mode="$(jq -r '.provider_mode // "none"' /tmp/job.json)"
+            credits="$(jq -r '.credits_charged // "unknown"' /tmp/job.json)"
+            metadata="$(jq -r '.metadata_credits_charged // "unknown"' /tmp/job.json)"
+            duration="$(jq -r '.media_duration_seconds // "unknown"' /tmp/job.json)"
+            ceiling="$(jq -r '.ai_credit_ceiling // "unknown"' /tmp/job.json)"
+            uncertain="$(jq -r '.credit_charge_uncertain // "unknown"' /tmp/job.json)"
+            error_code="$(jq -r '.error.code // "none"' /tmp/job.json)"
+          fi
+          echo "http=$code" >> "$GITHUB_OUTPUT"
+          echo "status=$status" >> "$GITHUB_OUTPUT"
+          echo "provider_mode=$provider_mode" >> "$GITHUB_OUTPUT"
+          echo "credits=$credits" >> "$GITHUB_OUTPUT"
+          echo "metadata=$metadata" >> "$GITHUB_OUTPUT"
+          echo "duration=$duration" >> "$GITHUB_OUTPUT"
+          echo "ceiling=$ceiling" >> "$GITHUB_OUTPUT"
+          echo "uncertain=$uncertain" >> "$GITHUB_OUTPUT"
+          echo "error_code=$error_code" >> "$GITHUB_OUTPUT"
+
+      - name: Report lookup
+        env:
+          HTTP: ${{ steps.lookup.outputs.http }}
+          STATUS: ${{ steps.lookup.outputs.status }}
+          PROVIDER_MODE: ${{ steps.lookup.outputs.provider_mode }}
+          CREDITS: ${{ steps.lookup.outputs.credits }}
+          METADATA: ${{ steps.lookup.outputs.metadata }}
+          DURATION: ${{ steps.lookup.outputs.duration }}
+          CEILING: ${{ steps.lookup.outputs.ceiling }}
+          UNCERTAIN: ${{ steps.lookup.outputs.uncertain }}
+          ERROR_CODE: ${{ steps.lookup.outputs.error_code }}
+        shell: bash
+        run: |
+          set -euo pipefail
+          gh pr comment 28 --repo kolemasakar/VoiceBridge --body "A9.6 Facebook paid-job read-only lookup: http=\`${HTTP}\`, status=\`${STATUS}\`, provider_mode=\`${PROVIDER_MODE}\`, credits_charged=\`${CREDITS}\`, metadata_credits=\`${METADATA}\`, duration_seconds=\`${DURATION}\`, ai_ceiling=\`${CEILING}\`, charge_uncertain=\`${UNCERTAIN}\`, error_code=\`${ERROR_CODE}\`. Backend durable lookup only; no Supadata endpoint was called."
