@@ -21,7 +21,7 @@ jobs:
       RENDER_API_BASE: https://api.render.com/v1
       SERVICE_ID: srv-da1kic5bedkc73d6fk60
       BETA_BASE_URL: https://voicebridge-krc-media-beta-kolemasakar.onrender.com
-      FACEBOOK_URL: https://www.facebook.com/reel/1114235920664408/
+      FACEBOOK_URL: https://www.facebook.com/reel/1114235920664408
     steps:
       - name: Lookup durable Facebook job only
         id: lookup
