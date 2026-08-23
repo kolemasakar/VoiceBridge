@@ -1,0 +1,101 @@
+name: A9.6 Facebook Current AI Guard Diagnostic
+
+on:
+  push:
+    branches:
+      - agent/krc-media-transcript
+    paths:
+      - .github/workflows/a9-6-facebook-current-ai-guard-diagnostic.yml
+
+permissions:
+  contents: read
+  issues: write
+  pull-requests: write
+
+env:
+  RENDER_API_BASE: https://api.render.com/v1
+  SERVICE_ID: srv-da1kic5bedkc73d6fk60
+  BETA_BASE_URL: https://voicebridge-krc-media-beta-kolemasakar.onrender.com
+  FACEBOOK_URL: https://www.facebook.com/reel/1114235920664408
+  JOB_ID: KRCM_1e99b074-fdf6-4144-9278-0e66e9a79713
+
+jobs:
+  diagnose:
+    runs-on: ubuntu-latest
+    env:
+      RENDER_API_KEY: ${{ secrets.RENDER_API_KEY }}
+      GH_TOKEN: ${{ github.token }}
+    steps:
+      - name: Read Action bearer
+        id: action
+        shell: bash
+        run: |
+          set -euo pipefail
+          test -n "${RENDER_API_KEY:-}"
+          echo "::add-mask::$RENDER_API_KEY"
+          tmp="$(mktemp)"
+          code="$(curl -sS -o "$tmp" -w '%{http_code}' \
+            "${RENDER_API_BASE}/services/${SERVICE_ID}/env-vars/KRC_MEDIA_ACTION_TOKEN" \
+            -H 'Accept: application/json' -H "Authorization: Bearer ${RENDER_API_KEY}")"
+          [[ "$code" == 200 ]]
+          token="$(jq -r '(.envVar.value // .value // empty)' "$tmp")"
+          rm -f "$tmp"
+          test -n "$token"
+          echo "::add-mask::$token"
+          echo "token=$token" >> "$GITHUB_OUTPUT"
+
+      - name: Read lookup and AI preflight only
+        id: read
+        env:
+          ACTION_TOKEN: ${{ steps.action.outputs.token }}
+        shell: bash
+        run: |
+          set -euo pipefail
+          payload="$(jq -nc --arg url "$FACEBOOK_URL" '{url:$url,language_hint:"auto"}')"
+          lookup_http="$(curl -sS --max-time 60 -o /tmp/lookup.json -w '%{http_code}' \
+            -X POST "${BETA_BASE_URL}/api/v1/media/managed/lookup" \
+            -H 'Accept: application/json' -H 'Content-Type: application/json' \
+            -H "Authorization: Bearer ${ACTION_TOKEN}" --data "$payload")"
+          ai_http="$(curl -sS --max-time 60 -o /tmp/quote.json -w '%{http_code}' \
+            "${BETA_BASE_URL}/api/v1/media/managed/transcriptions/${JOB_ID}/ai-preflight" \
+            -H 'Accept: application/json' -H "Authorization: Bearer ${ACTION_TOKEN}")"
+          echo "lookup_http=$lookup_http" >> "$GITHUB_OUTPUT"
+          echo "job=$(jq -r '.job_id // "none"' /tmp/lookup.json 2>/dev/null || echo none)" >> "$GITHUB_OUTPUT"
+          echo "status=$(jq -r '.status // "none"' /tmp/lookup.json 2>/dev/null || echo none)" >> "$GITHUB_OUTPUT"
+          echo "provider=$(jq -r '.provider // "none"' /tmp/lookup.json 2>/dev/null || echo none)" >> "$GITHUB_OUTPUT"
+          echo "mode=$(jq -r '.provider_mode // "none"' /tmp/lookup.json 2>/dev/null || echo none)" >> "$GITHUB_OUTPUT"
+          echo "credits=$(jq -r '.credits_charged // "none"' /tmp/lookup.json 2>/dev/null || echo none)" >> "$GITHUB_OUTPUT"
+          echo "metadata=$(jq -r '.metadata_credits_charged // "none"' /tmp/lookup.json 2>/dev/null || echo none)" >> "$GITHUB_OUTPUT"
+          echo "segments=$(jq -r '.segment_count // "none"' /tmp/lookup.json 2>/dev/null || echo none)" >> "$GITHUB_OUTPUT"
+          echo "duration=$(jq -r '.media_duration_seconds // "none"' /tmp/lookup.json 2>/dev/null || echo none)" >> "$GITHUB_OUTPUT"
+          echo "ceiling=$(jq -r '.ai_credit_ceiling // "none"' /tmp/lookup.json 2>/dev/null || echo none)" >> "$GITHUB_OUTPUT"
+          echo "quote_http=$ai_http" >> "$GITHUB_OUTPUT"
+          echo "available=$(jq -r '.credits_available // "none"' /tmp/quote.json 2>/dev/null || echo none)" >> "$GITHUB_OUTPUT"
+          echo "maximum=$(jq -r '.maximum_credits // "none"' /tmp/quote.json 2>/dev/null || echo none)" >> "$GITHUB_OUTPUT"
+          echo "after=$(jq -r '.credits_after_estimate // "none"' /tmp/quote.json 2>/dev/null || echo none)" >> "$GITHUB_OUTPUT"
+          echo "basis=$(jq -r '.estimate_basis // "none"' /tmp/quote.json 2>/dev/null || echo none)" >> "$GITHUB_OUTPUT"
+          echo "quote_duration=$(jq -r '.media_duration_seconds // "none"' /tmp/quote.json 2>/dev/null || echo none)" >> "$GITHUB_OUTPUT"
+          echo "can_continue=$(jq -r '.can_continue // "none"' /tmp/quote.json 2>/dev/null || echo none)" >> "$GITHUB_OUTPUT"
+
+      - name: Report
+        env:
+          LOOKUP_HTTP: ${{ steps.read.outputs.lookup_http }}
+          JOB: ${{ steps.read.outputs.job }}
+          STATUS: ${{ steps.read.outputs.status }}
+          PROVIDER: ${{ steps.read.outputs.provider }}
+          MODE: ${{ steps.read.outputs.mode }}
+          CREDITS: ${{ steps.read.outputs.credits }}
+          METADATA: ${{ steps.read.outputs.metadata }}
+          SEGMENTS: ${{ steps.read.outputs.segments }}
+          DURATION: ${{ steps.read.outputs.duration }}
+          CEILING: ${{ steps.read.outputs.ceiling }}
+          QUOTE_HTTP: ${{ steps.read.outputs.quote_http }}
+          AVAILABLE: ${{ steps.read.outputs.available }}
+          MAXIMUM: ${{ steps.read.outputs.maximum }}
+          AFTER: ${{ steps.read.outputs.after }}
+          BASIS: ${{ steps.read.outputs.basis }}
+          QUOTE_DURATION: ${{ steps.read.outputs.quote_duration }}
+          CAN_CONTINUE: ${{ steps.read.outputs.can_continue }}
+        shell: bash
+        run: |
+          gh pr comment 28 --repo kolemasakar/VoiceBridge --body "A9.6 Facebook current AI guard diagnostic: lookup_http=\`${LOOKUP_HTTP}\`, job=\`${JOB}\`, status=\`${STATUS}\`, provider=\`${PROVIDER}\`, provider_mode=\`${MODE}\`, credits=\`${CREDITS}\`, metadata=\`${METADATA}\`, segments=\`${SEGMENTS}\`, duration=\`${DURATION}\`, ceiling=\`${CEILING}\`; ai_preflight_http=\`${QUOTE_HTTP}\`, available=\`${AVAILABLE}\`, maximum=\`${MAXIMUM}\`, after=\`${AFTER}\`, basis=\`${BASIS}\`, quote_duration=\`${QUOTE_DURATION}\`, can_continue=\`${CAN_CONTINUE}\`. Read-only/free preflight only; no AI/native/metadata start was executed."
