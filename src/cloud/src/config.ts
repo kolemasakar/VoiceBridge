@@ -13,6 +13,11 @@ export interface AppConfig {
   mediaDailySttSeconds?: number;
   assemblyAiApiKey: string | null;
   supadataApiKey?: string | null;
+  cobaltEndpoint?: string | null;
+  cobaltApiKey?: string | null;
+  scrapeCreatorsApiKey?: string | null;
+  scrapeCreatorsEndpoint?: string;
+  scrapeCreatorsCacheMaxAge?: string;
   geminiApiKey: string | null;
   geminiTranslationModel: string;
   translationProvider?: TranslationProviderName;
@@ -98,6 +103,25 @@ function parseHttpsEndpoint(
   return raw.replace(/\/+$/, "");
 }
 
+
+function parseOptionalHttpsEndpoint(
+  value: string | undefined,
+  name: string
+): string | null {
+  if (!value || !value.trim()) return null;
+  return parseHttpsEndpoint(value.trim(), value.trim(), name);
+}
+
+function parseCacheMaxAge(value: string | undefined): string {
+  const normalized = (value || "30d").trim().toLowerCase();
+  if (!/^\d{1,4}[smhdw]$/.test(normalized)) {
+    throw new Error(
+      "SCRAPECREATORS_CACHE_MAX_AGE must be an integer followed by s, m, h, d, or w."
+    );
+  }
+  return normalized;
+}
+
 export function loadConfig(
   environment: NodeJS.ProcessEnv = process.env
 ): AppConfig {
@@ -130,6 +154,20 @@ export function loadConfig(
     ),
     assemblyAiApiKey: environment.ASSEMBLYAI_API_KEY || null,
     supadataApiKey: environment.SUPADATA_API_KEY || null,
+    cobaltEndpoint: parseOptionalHttpsEndpoint(
+      environment.KRC_MEDIA_COBALT_ENDPOINT,
+      "KRC_MEDIA_COBALT_ENDPOINT"
+    ),
+    cobaltApiKey: environment.KRC_MEDIA_COBALT_API_KEY || null,
+    scrapeCreatorsApiKey: environment.SCRAPECREATORS_API_KEY || null,
+    scrapeCreatorsEndpoint: parseHttpsEndpoint(
+      environment.SCRAPECREATORS_ENDPOINT,
+      "https://api.scrapecreators.com",
+      "SCRAPECREATORS_ENDPOINT"
+    ),
+    scrapeCreatorsCacheMaxAge: parseCacheMaxAge(
+      environment.SCRAPECREATORS_CACHE_MAX_AGE
+    ),
     geminiApiKey: environment.GEMINI_API_KEY || null,
     geminiTranslationModel: parseIdentifier(
       environment.GEMINI_TRANSLATION_MODEL,

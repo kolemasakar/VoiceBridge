@@ -3,10 +3,19 @@ import { authenticate } from "./auth.js";
 import type { AppConfig } from "./config.js";
 import { createRequestContext, type RequestContext } from "./identifiers.js";
 import { MediaBetaGate } from "./media_beta.js";
+import {
+  CobaltFacebookRetriever,
+  ScrapeCreatorsFacebookRetriever
+} from "./facebook_media_retrieval.js";
+import {
+  AssemblyAiFacebookMediaStt,
+  DefaultManagedFacebookPipeline
+} from "./facebook_managed_pipeline.js";
 import { ManagedMediaPersistentStore } from "./managed_media_persistence.js";
 import {
   ManagedMediaService,
   parseManagedMediaAiInput,
+  parseManagedMediaFacebookFallbackConsentInput,
   parseManagedMediaFacebookMetadataInput,
   parseManagedMediaNativeInput,
   parseManagedMediaPreflightInput
@@ -21,8 +30,11 @@ const ROOT = "/api/v1/media/managed";
 const PREFLIGHT = `${ROOT}/preflight`;
 const LOOKUP = `${ROOT}/lookup`;
 const TRANSCRIPTIONS = `${ROOT}/transcriptions`;
+const FACEBOOK_FALLBACK = `${ROOT}/facebook-fallback`;
 const JOB_PATH = /^\/api\/v1\/media\/managed\/transcriptions\/(KRCM_[A-Za-z0-9-]+)$/;
 const SEGMENTS_PATH = /^\/api\/v1\/media\/managed\/transcriptions\/(KRCM_[A-Za-z0-9-]+)\/segments$/;
+const FACEBOOK_RETRIEVAL_PREFLIGHT_PATH = /^\/api\/v1\/media\/managed\/transcriptions\/(KRCM_[A-Za-z0-9-]+)\/facebook-retrieval-preflight$/;
+const FACEBOOK_RETRIEVAL_START_PATH = /^\/api\/v1\/media\/managed\/transcriptions\/(KRCM_[A-Za-z0-9-]+)\/facebook-retrieval$/;
 const FACEBOOK_METADATA_PREFLIGHT_PATH = /^\/api\/v1\/media\/managed\/transcriptions\/(KRCM_[A-Za-z0-9-]+)\/facebook-ai-estimate-preflight$/;
 const FACEBOOK_METADATA_START_PATH = /^\/api\/v1\/media\/managed\/transcriptions\/(KRCM_[A-Za-z0-9-]+)\/facebook-ai-estimate$/;
 const AI_PREFLIGHT_PATH = /^\/api\/v1\/media\/managed\/transcriptions\/(KRCM_[A-Za-z0-9-]+)\/ai-preflight$/;
@@ -166,6 +178,24 @@ function defaultManagedService(config: AppConfig): ManagedMediaService {
   const store = databaseUrl
     ? new ManagedMediaPersistentStore(databaseUrl)
     : undefined;
+  const freeRetriever = config.cobaltEndpoint
+    ? new CobaltFacebookRetriever(
+      config.cobaltEndpoint,
+      config.cobaltApiKey ?? null
+    )
+    : null;
+  const paidRetriever = config.scrapeCreatorsApiKey
+    ? new ScrapeCreatorsFacebookRetriever(
+      config.scrapeCreatorsApiKey,
+      config.scrapeCreatorsEndpoint ?? "https://api.scrapecreators.com",
+      config.scrapeCreatorsCacheMaxAge ?? "30d"
+    )
+    : null;
+  const facebookPipeline = new DefaultManagedFacebookPipeline(
+    freeRetriever,
+    paidRetriever,
+    new AssemblyAiFacebookMediaStt(config.assemblyAiApiKey)
+  );
   return new ManagedMediaService(
     new MediaBetaGate(
       config.mediaBetaCodes ?? [],
@@ -175,7 +205,8 @@ function defaultManagedService(config: AppConfig): ManagedMediaService {
     undefined,
     {
       ...(store ? { store } : {}),
-      jobTtlSeconds: config.mediaJobTtlSeconds ?? 3600
+      jobTtlSeconds: config.mediaJobTtlSeconds ?? 3600,
+      facebookPipeline
     }
   );
 }
@@ -198,6 +229,16 @@ export function createManagedMediaHttpHandler(
     facebook_ai_fallback: true,
     facebook_ai_requires_duration_metadata: true,
     facebook_ai_metadata_credits: 1,
+    facebook_retrieval_stt_fallback: true,
+    facebook_free_retrieval_provider: "cobalt",
+    facebook_free_retrieval_configured: Boolean(config.cobaltEndpoint),
+    facebook_paid_retrieval_provider: "scrapecreators",
+    facebook_paid_retrieval_configured: Boolean(config.scrapeCreatorsApiKey),
+    facebook_paid_retrieval_max_credits: 1,
+    facebook_paid_retrieval_requires_separate_consent: true,
+    facebook_automatic_paid_retrieval: false,
+    facebook_stt_provider: "assemblyai",
+    facebook_stt_configured: Boolean(config.assemblyAiApiKey),
     ai_requires_separate_preflight: true,
     ai_requires_separate_user_consent: true,
     ai_generate_credits_per_minute: GENERATED_TRANSCRIPT_CREDITS_PER_MINUTE,
@@ -305,6 +346,30 @@ export function createManagedMediaHttpHandler(
         return true;
       }
 
+
+if (method === "POST" && path === FACEBOOK_FALLBACK) {
+  const rawBody = await readJsonBody(request, config.maxRequestBodyBytes);
+  const body = withServerOwnerAccessCode(rawBody, config.mediaBetaCodes);
+  const input = parseManagedMediaPreflightInput(body);
+  if (!input) {
+    throw new MediaTranscriptError(
+      "INVALID_REQUEST",
+      "The managed Facebook fallback request is not valid.",
+      400,
+      false
+    );
+  }
+  const job = await service.startFacebookFallback(input);
+  sendJson(
+    response,
+    200,
+    { request_id: context.requestId, ...job },
+    context,
+    config.corsAllowedOrigin
+  );
+  return true;
+}
+
       if (method === "POST" && path === TRANSCRIPTIONS) {
         const rawBody = await readJsonBody(request, config.maxRequestBodyBytes);
         const body = withServerOwnerAccessCode(rawBody, config.mediaBetaCodes);
@@ -327,6 +392,50 @@ export function createManagedMediaHttpHandler(
         );
         return true;
       }
+
+
+const facebookRetrievalPreflightMatch = FACEBOOK_RETRIEVAL_PREFLIGHT_PATH.exec(path);
+if (method === "GET" && facebookRetrievalPreflightMatch?.[1]) {
+  const quote = await service.facebookFallbackPreflight(
+    facebookRetrievalPreflightMatch[1],
+    serverOwnerAccessCode(config.mediaBetaCodes)
+  );
+  sendJson(
+    response,
+    200,
+    { request_id: context.requestId, ...quote },
+    context,
+    config.corsAllowedOrigin
+  );
+  return true;
+}
+
+const facebookRetrievalStartMatch = FACEBOOK_RETRIEVAL_START_PATH.exec(path);
+if (method === "POST" && facebookRetrievalStartMatch?.[1]) {
+  const rawBody = await readJsonBody(request, config.maxRequestBodyBytes);
+  const body = withServerOwnerAccessCode(rawBody, config.mediaBetaCodes);
+  const input = parseManagedMediaFacebookFallbackConsentInput(body);
+  if (!input) {
+    throw new MediaTranscriptError(
+      "FACEBOOK_RETRIEVAL_CREDIT_CONSENT_REQUIRED",
+      "Separate one-credit ScrapeCreators consent is required before paid Facebook retrieval.",
+      409,
+      false
+    );
+  }
+  const job = await service.continueFacebookFallback(
+    facebookRetrievalStartMatch[1],
+    input
+  );
+  sendJson(
+    response,
+    200,
+    { request_id: context.requestId, ...job },
+    context,
+    config.corsAllowedOrigin
+  );
+  return true;
+}
 
       const facebookMetadataPreflightMatch = FACEBOOK_METADATA_PREFLIGHT_PATH.exec(path);
       if (method === "GET" && facebookMetadataPreflightMatch?.[1]) {
