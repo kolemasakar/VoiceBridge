@@ -1,4 +1,4 @@
-name: A9.6 Failed Job Fresh Retry Hardening V2
+name: A9.7-B Registered Managed Facebook Patch
 
 on:
   push:
@@ -13,7 +13,7 @@ permissions:
   pull-requests: write
 
 concurrency:
-  group: a9-6-failed-job-fresh-retry-hardening-v2
+  group: a9-7-b-registered-managed-facebook-patch
   cancel-in-progress: false
 
 jobs:
@@ -28,260 +28,12 @@ jobs:
           ref: agent/krc-media-transcript
           fetch-depth: 0
 
-      - name: Apply controlled FAILED-job retry patch
+      - name: Apply A9.7-B exact patch
         id: patch
         shell: bash
         run: |
           set -euo pipefail
-          python - <<'PY'
-          from pathlib import Path
-          from textwrap import dedent
-
-          service_path = Path('src/cloud/src/managed_media_service.ts')
-          text = service_path.read_text(encoding='utf-8')
-
-          needle = 'export interface ManagedMediaNativeInput extends ManagedMediaPreflightInput {\n'
-          if needle not in text:
-              raise SystemExit('interface anchor missing')
-          text = text.replace(
-              needle,
-              needle + '  retry_failed_job_id?: string;\n',
-              1,
-          )
-
-          needle = 'const PAID_JOB_MIN_RETENTION_SECONDS = 86400;\n'
-          if needle not in text:
-              raise SystemExit('constant anchor missing')
-          text = text.replace(
-              needle,
-              needle + 'const MANAGED_MEDIA_JOB_ID = /^KRCM_[A-Za-z0-9-]+$/;\n',
-              1,
-          )
-
-          marker = 'function parseLanguageHint(value: unknown): MediaLanguageHint | null {'
-          if marker not in text:
-              raise SystemExit('parseLanguageHint anchor missing')
-          helper = dedent('''
-          function managedMediaRetryRequestKey(
-            normalizedUrl: string,
-            languageHint: MediaLanguageHint,
-            accessCode: string,
-            failedJobId: string
-          ): string {
-            return createHash("sha256")
-              .update(
-                `supadata|native-retry|${normalizedUrl}|${languageHint}|${managedMediaAccessDigest(accessCode)}|${failedJobId}`,
-                "utf8"
-              )
-              .digest("hex");
-          }
-          ''').strip()
-          text = text.replace(marker, helper + '\n\n' + marker, 1)
-
-          parser_old = (
-              '  return {\n'
-              '    ...common,\n'
-              '    credit_consent: {\n'
-              '      provider: "supadata",\n'
-              '      mode: "native",\n'
-              '      max_credits: 1\n'
-              '    }\n'
-              '  };\n'
-              '}\n'
-          )
-          parser_new = (
-              '  const retryFailedJobId = (value as Record<string, unknown>).retry_failed_job_id;\n'
-              '  if (\n'
-              '    retryFailedJobId !== undefined &&\n'
-              '    (typeof retryFailedJobId !== "string" || !MANAGED_MEDIA_JOB_ID.test(retryFailedJobId))\n'
-              '  ) {\n'
-              '    return null;\n'
-              '  }\n'
-              '  return {\n'
-              '    ...common,\n'
-              '    ...(retryFailedJobId ? { retry_failed_job_id: retryFailedJobId } : {}),\n'
-              '    credit_consent: {\n'
-              '      provider: "supadata",\n'
-              '      mode: "native",\n'
-              '      max_credits: 1\n'
-              '    }\n'
-              '  };\n'
-              '}\n'
-          )
-          if parser_old not in text:
-              raise SystemExit('native parser return anchor missing')
-          text = text.replace(parser_old, parser_new, 1)
-
-          start_old = (
-              '    const requestKey = managedMediaRequestKey(\n'
-              '      sourceUrl,\n'
-              '      input.language_hint,\n'
-              '      input.beta_access_code\n'
-              '    );\n'
-              '    const existing = await this.reusableRecord(requestKey);\n'
-              '    if (existing) return this.publicJob(existing.job, true);\n'
-          )
-          start_new = (
-              '    const baseRequestKey = managedMediaRequestKey(\n'
-              '      sourceUrl,\n'
-              '      input.language_hint,\n'
-              '      input.beta_access_code\n'
-              '    );\n'
-              '    let requestKey = baseRequestKey;\n'
-              '    if (input.retry_failed_job_id) {\n'
-              '      const retryTarget = await this.authorizedRecord(\n'
-              '        input.retry_failed_job_id,\n'
-              '        input.beta_access_code\n'
-              '      );\n'
-              '      if (\n'
-              '        retryTarget.job.status !== "FAILED" ||\n'
-              '        retryTarget.job.source_url !== sourceUrl ||\n'
-              '        retryTarget.job.language_hint !== input.language_hint\n'
-              '      ) {\n'
-              '        throw new MediaTranscriptError(\n'
-              '          "MEDIA_FAILED_RETRY_NOT_APPLICABLE",\n'
-              '          "A fresh native retry requires the exact failed job for the same source and language.",\n'
-              '          409,\n'
-              '          false\n'
-              '        );\n'
-              '      }\n'
-              '      requestKey = managedMediaRetryRequestKey(\n'
-              '        sourceUrl,\n'
-              '        input.language_hint,\n'
-              '        input.beta_access_code,\n'
-              '        retryTarget.job.job_id\n'
-              '      );\n'
-              '    }\n'
-              '    const existing = await this.reusableRecord(requestKey);\n'
-              '    if (existing) return this.publicJob(existing.job, true);\n'
-          )
-          if start_old not in text:
-              raise SystemExit('startNative anchor missing')
-          text = text.replace(start_old, start_new, 1)
-          service_path.write_text(text, encoding='utf-8')
-
-          test_path = Path('src/cloud/tests/managed_media_service.test.ts')
-          tests = test_path.read_text(encoding='utf-8')
-          marker = 'test("FAILED job supports one explicit fresh native retry key while preserving idempotency"'
-          if marker not in tests:
-              addition = dedent('''
-
-              test("FAILED job supports one explicit fresh native retry key while preserving idempotency", async () => {
-                let nativeCalls = 0;
-                const baseProvider = provider("completed");
-                const fake: ManagedNativeTranscriptProvider = {
-                  ...baseProvider,
-                  async getNativeTranscript() {
-                    nativeCalls += 1;
-                    if (nativeCalls === 1) throw new Error("simulated provider failure");
-                    return {
-                      status: "completed",
-                      language: "uk",
-                      available_languages: ["uk"],
-                      segments: [{
-                        index: 0,
-                        start_ms: 0,
-                        end_ms: 1000,
-                        text: "Fresh retry segment",
-                        confidence: null
-                      }],
-                      transcript_text: "Fresh retry segment",
-                      billable_credits: 1
-                    };
-                  }
-                };
-                const service = new ManagedMediaService(
-                  new MediaBetaGate([ACCESS_CODE]),
-                  null,
-                  fake
-                );
-                const firstInput = parseManagedMediaNativeInput({
-                  url: "https://www.facebook.com/reel/1114235920664408",
-                  beta_access_code: ACCESS_CODE,
-                  credit_consent: { provider: "supadata", mode: "native", max_credits: 1 }
-                });
-                assert.ok(firstInput);
-                const failed = await service.startNative(firstInput);
-                assert.equal(failed.status, "FAILED");
-                assert.equal(failed.reused, false);
-                assert.equal(nativeCalls, 1);
-
-                const retryInput = parseManagedMediaNativeInput({
-                  url: "https://www.facebook.com/reel/1114235920664408",
-                  beta_access_code: ACCESS_CODE,
-                  retry_failed_job_id: failed.job_id,
-                  credit_consent: { provider: "supadata", mode: "native", max_credits: 1 }
-                });
-                assert.ok(retryInput);
-                const fresh = await service.startNative(retryInput);
-                assert.equal(fresh.status, "COMPLETED");
-                assert.notEqual(fresh.job_id, failed.job_id);
-                assert.equal(fresh.reused, false);
-                assert.equal(nativeCalls, 2);
-
-                const duplicate = await service.startNative(retryInput);
-                assert.equal(duplicate.job_id, fresh.job_id);
-                assert.equal(duplicate.reused, true);
-                assert.equal(nativeCalls, 2);
-              });
-
-              test("fresh native retry rejects malformed or non-FAILED retry targets", async () => {
-                assert.equal(
-                  parseManagedMediaNativeInput({
-                    url: "https://youtu.be/retry-parser",
-                    beta_access_code: ACCESS_CODE,
-                    retry_failed_job_id: "not-a-managed-job",
-                    credit_consent: { provider: "supadata", mode: "native", max_credits: 1 }
-                  }),
-                  null
-                );
-
-                let nativeCalls = 0;
-                const completedProvider = provider("completed");
-                const fake: ManagedNativeTranscriptProvider = {
-                  ...completedProvider,
-                  async getNativeTranscript(url, languageHint) {
-                    nativeCalls += 1;
-                    return completedProvider.getNativeTranscript(url, languageHint);
-                  }
-                };
-                const service = new ManagedMediaService(
-                  new MediaBetaGate([ACCESS_CODE]),
-                  null,
-                  fake
-                );
-                const firstInput = parseManagedMediaNativeInput({
-                  url: "https://youtu.be/retry-completed",
-                  beta_access_code: ACCESS_CODE,
-                  credit_consent: { provider: "supadata", mode: "native", max_credits: 1 }
-                });
-                assert.ok(firstInput);
-                const completed = await service.startNative(firstInput);
-                assert.equal(completed.status, "COMPLETED");
-                assert.equal(nativeCalls, 1);
-
-                const retryInput = parseManagedMediaNativeInput({
-                  url: "https://youtu.be/retry-completed",
-                  beta_access_code: ACCESS_CODE,
-                  retry_failed_job_id: completed.job_id,
-                  credit_consent: { provider: "supadata", mode: "native", max_credits: 1 }
-                });
-                assert.ok(retryInput);
-                await assert.rejects(
-                  () => service.startNative(retryInput),
-                  (error: unknown) => {
-                    assert.equal(
-                      (error as { code?: string }).code,
-                      "MEDIA_FAILED_RETRY_NOT_APPLICABLE"
-                    );
-                    return true;
-                  }
-                );
-                assert.equal(nativeCalls, 1);
-              });
-              ''').lstrip()
-              test_path.write_text(tests.rstrip() + '\n\n' + addition, encoding='utf-8')
-          PY
+          python3 .github/scripts/a9_7_b_patch.py
           echo "patch=success" >> "$GITHUB_OUTPUT"
 
       - name: Run full cloud check
@@ -301,20 +53,18 @@ jobs:
           set -euo pipefail
           files="$(git diff --name-only)"
           printf '%s\n' "$files"
-          test -n "$files"
-          bad="$(printf '%s\n' "$files" | grep -Ev '^(src/cloud/src/managed_media_service\.ts|src/cloud/tests/managed_media_service\.test\.ts)$' || true)"
-          test -z "$bad"
+          test "$files" = "src/cloud/src/managed_media_service.ts"
           echo "scope=success" >> "$GITHUB_OUTPUT"
 
-      - name: Commit and push tested patch
+      - name: Commit and push tested source patch
         id: commit
         shell: bash
         run: |
           set -euo pipefail
           git config user.name github-actions[bot]
           git config user.email 41898282+github-actions[bot]@users.noreply.github.com
-          git add src/cloud/src/managed_media_service.ts src/cloud/tests/managed_media_service.test.ts
-          git commit -m "A9.6 allow explicit fresh retry of failed managed job"
+          git add src/cloud/src/managed_media_service.ts
+          git commit -m "A9.7-B integrate Facebook retrieval with managed jobs"
           git push origin HEAD:agent/krc-media-transcript
           echo "sha=$(git rev-parse HEAD)" >> "$GITHUB_OUTPUT"
           echo "commit=success" >> "$GITHUB_OUTPUT"
@@ -331,4 +81,4 @@ jobs:
         run: |
           set -euo pipefail
           if [[ "${{ job.status }}" == "success" ]]; then result=PASS; else result=FAIL; fi
-          gh pr comment 28 --repo kolemasakar/VoiceBridge --body "A9.6 FAILED-job fresh native retry hardening V2: **${result}**. patch=\`${PATCH:-failed}\`, cloud_check=\`${CHECK:-failed}\`, scope=\`${SCOPE:-failed}\`, commit=\`${COMMIT:-failed}\`, sha=\`${SHA:-none}\`. Explicit \`retry_failed_job_id\` creates one fresh request key only for an authorized FAILED job with the same source/language; repeats remain idempotent. No Render or Supadata/provider/preflight/transcript/metadata/AI endpoint was called by this workflow. Production/main were not targeted."
+          gh pr comment 28 --repo kolemasakar/VoiceBridge --body "A9.7-B managed Facebook integration runner: **${result}**. patch=\`${PATCH:-failed}\`, cloud_check=\`${CHECK:-failed}\`, scope=\`${SCOPE:-failed}\`, commit=\`${COMMIT:-failed}\`, sha=\`${SHA:-none}\`. ManagedMediaService gains durable Facebook free-retrieval -> explicit one-credit consent -> AssemblyAI STT states. No Render, Cobalt, ScrapeCreators, Supadata, AssemblyAI, metadata, transcript, or AI external endpoint was called by this workflow. Production/main were not targeted."
