@@ -4,4 +4,4 @@ render=forbidden
 production=forbidden
 main=forbidden
 action=A9.7-C-runtime-http-v2
-trigger=2026-08-23T15:16+03:00
+trigger=2026-08-23T15:18+03:00
