@@ -1,4 +1,4 @@
 trigger=2026-08-23T12:17+03:00
-attempt=2
+attempt=3
 scope=isolated-beta-only
 provider_calls=forbidden
