@@ -83,7 +83,7 @@ test("attachment probe parser requires the runtime object form, exactly one file
   assert.ok(parseManagedAttachmentProbeInput(runtimeBody()));
 });
 
-test("attachment probe accepts only the documented OpenAI file host and never follows redirects", async () => {
+test("attachment probe accepts only OpenAI oaiusercontent subdomains and never follows redirects", async () => {
   const arbitrary = parsedInput();
   arbitrary.file.download_link = "https://attacker.example/file-A9_10_owner_test?sig=secret";
   let fetchCalls = 0;
@@ -99,7 +99,6 @@ test("attachment probe accepts only the documented OpenAI file host and never fo
       assert.equal(error.code, "ATTACHMENT_DOWNLOAD_URL_REJECTED");
       assert.match(error.message, /observed_host=attacker\.example/);
       assert.match(error.message, /host_ok=false/);
-      assert.match(error.message, /path_shape=file-id/);
       assert.doesNotMatch(error.message, /A9_10_owner_test/);
       assert.doesNotMatch(error.message, /secret/);
       return true;
@@ -107,20 +106,12 @@ test("attachment probe accepts only the documented OpenAI file host and never fo
   );
   assert.equal(fetchCalls, 0);
 
-  const wrongPath = parsedInput();
-  wrongPath.file.download_link = "https://files.oaiusercontent.com/download/opaque?sig=secret";
+  const lookalike = parsedInput();
+  lookalike.file.download_link = "https://evil-oaiusercontent.com/download/opaque?sig=secret";
   await assert.rejects(
-    () => probeManagedAttachmentTransport(wrongPath, neverFetch),
-    (error: unknown) => {
-      if (!(error instanceof MediaTranscriptError)) return false;
-      assert.equal(error.code, "ATTACHMENT_DOWNLOAD_URL_REJECTED");
-      assert.match(error.message, /observed_host=files\.oaiusercontent\.com/);
-      assert.match(error.message, /host_ok=true/);
-      assert.match(error.message, /path_shape=other/);
-      assert.doesNotMatch(error.message, /download\/opaque/);
-      assert.doesNotMatch(error.message, /secret/);
-      return true;
-    }
+    () => probeManagedAttachmentTransport(lookalike, neverFetch),
+    (error: unknown) => error instanceof MediaTranscriptError &&
+      error.code === "ATTACHMENT_DOWNLOAD_URL_REJECTED"
   );
   assert.equal(fetchCalls, 0);
 
@@ -139,10 +130,12 @@ test("attachment probe accepts only the documented OpenAI file host and never fo
   );
 });
 
-test("attachment probe performs a bounded Range GET and returns safe transport metadata", async () => {
+test("attachment probe accepts regional OpenAI CDN host and opaque path with bounded Range GET", async () => {
+  const regional = parsedInput();
+  regional.file.download_link = "https://sdmntprcacentral.oaiusercontent.com/download/opaque/runtime-shape?sig=redacted";
   const fakeFetch = (async (input: Parameters<typeof fetch>[0], init?: RequestInit) => {
     const url = new URL(String(input));
-    assert.equal(url.hostname, "files.oaiusercontent.com");
+    assert.equal(url.hostname, "sdmntprcacentral.oaiusercontent.com");
     assert.equal(init?.method, "GET");
     assert.equal(init?.redirect, "manual");
     const headers = new Headers(init?.headers);
@@ -159,7 +152,7 @@ test("attachment probe performs a bounded Range GET and returns safe transport m
     });
   }) as typeof fetch;
 
-  const result = await probeManagedAttachmentTransport(parsedInput(), fakeFetch);
+  const result = await probeManagedAttachmentTransport(regional, fakeFetch);
   assert.deepEqual(result, {
     transport_available: true,
     file_class: "audio",
