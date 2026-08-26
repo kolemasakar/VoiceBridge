@@ -85,7 +85,7 @@ test("attachment probe parser requires the runtime object form, exactly one file
 
 test("attachment probe accepts only the documented OpenAI file host and never follows redirects", async () => {
   const arbitrary = parsedInput();
-  arbitrary.file.download_link = "https://attacker.example/file-A9_10_owner_test";
+  arbitrary.file.download_link = "https://attacker.example/file-A9_10_owner_test?sig=secret";
   let fetchCalls = 0;
   const neverFetch = (async () => {
     fetchCalls += 1;
@@ -94,8 +94,33 @@ test("attachment probe accepts only the documented OpenAI file host and never fo
 
   await assert.rejects(
     () => probeManagedAttachmentTransport(arbitrary, neverFetch),
-    (error: unknown) => error instanceof MediaTranscriptError &&
-      error.code === "ATTACHMENT_DOWNLOAD_URL_REJECTED"
+    (error: unknown) => {
+      if (!(error instanceof MediaTranscriptError)) return false;
+      assert.equal(error.code, "ATTACHMENT_DOWNLOAD_URL_REJECTED");
+      assert.match(error.message, /observed_host=attacker\.example/);
+      assert.match(error.message, /host_ok=false/);
+      assert.match(error.message, /path_shape=file-id/);
+      assert.doesNotMatch(error.message, /A9_10_owner_test/);
+      assert.doesNotMatch(error.message, /secret/);
+      return true;
+    }
+  );
+  assert.equal(fetchCalls, 0);
+
+  const wrongPath = parsedInput();
+  wrongPath.file.download_link = "https://files.oaiusercontent.com/download/opaque?sig=secret";
+  await assert.rejects(
+    () => probeManagedAttachmentTransport(wrongPath, neverFetch),
+    (error: unknown) => {
+      if (!(error instanceof MediaTranscriptError)) return false;
+      assert.equal(error.code, "ATTACHMENT_DOWNLOAD_URL_REJECTED");
+      assert.match(error.message, /observed_host=files\.oaiusercontent\.com/);
+      assert.match(error.message, /host_ok=true/);
+      assert.match(error.message, /path_shape=other/);
+      assert.doesNotMatch(error.message, /download\/opaque/);
+      assert.doesNotMatch(error.message, /secret/);
+      return true;
+    }
   );
   assert.equal(fetchCalls, 0);
 
