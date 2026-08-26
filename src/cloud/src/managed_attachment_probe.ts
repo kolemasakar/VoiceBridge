@@ -133,6 +133,15 @@ function validateDeclaredFile(ref: OpenAiConversationFileRef): ManagedAttachment
   return fileClass;
 }
 
+function rejectedUrlShape(url: URL): string {
+  const observedHost = url.hostname.toLowerCase() || "none";
+  const hostOk = observedHost === OPENAI_FILE_HOST;
+  const pathShape = /^\/file-[A-Za-z0-9_-]+/.test(url.pathname)
+    ? "file-id"
+    : "other";
+  return `observed_host=${observedHost}; host_ok=${hostOk}; path_shape=${pathShape}`;
+}
+
 function validateDownloadUrl(value: string): URL {
   let url: URL;
   try {
@@ -140,7 +149,7 @@ function validateDownloadUrl(value: string): URL {
   } catch {
     throw new MediaTranscriptError(
       "ATTACHMENT_DOWNLOAD_URL_REJECTED",
-      "The attachment download URL is invalid.",
+      "The attachment download URL is not an absolute URL. No path, file id, or signed query was echoed.",
       400,
       false
     );
@@ -156,7 +165,7 @@ function validateDownloadUrl(value: string): URL {
   ) {
     throw new MediaTranscriptError(
       "ATTACHMENT_DOWNLOAD_URL_REJECTED",
-      "Only the temporary OpenAI conversation-file download host is allowed.",
+      `Attachment download URL rejected (${rejectedUrlShape(url)}). No path, file id, or signed query was echoed.`,
       400,
       false
     );
