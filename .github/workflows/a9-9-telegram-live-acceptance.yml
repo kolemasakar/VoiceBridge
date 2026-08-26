@@ -1,0 +1,262 @@
+name: A9.9 Telegram Live Acceptance
+
+on:
+  push:
+    branches:
+      - agent/krc-media-transcript
+    paths:
+      - .github/workflows/a9-9-telegram-live-acceptance.yml
+
+permissions:
+  contents: read
+  pull-requests: write
+
+concurrency:
+  group: a9-9-telegram-live-acceptance
+  cancel-in-progress: false
+
+env:
+  RENDER_API_BASE: https://api.render.com/v1
+  SERVICE_ID: srv-da1kic5bedkc73d6fk60
+  SERVICE_NAME: voicebridge-krc-media-beta-kolemasakar
+  REQUIRED_BRANCH: agent/krc-media-transcript
+  BASE_URL: https://voicebridge-krc-media-beta-kolemasakar.onrender.com
+  TARGET_URL: https://t.me/techcrimes/12101
+  REQUIRED_FEATURE_SHA: 4c985b10c946d6f89d1045cd01fabb7048db8931
+
+jobs:
+  live-acceptance:
+    runs-on: ubuntu-latest
+    timeout-minutes: 35
+    env:
+      RENDER_API_KEY: ${{ secrets.RENDER_API_KEY }}
+    steps:
+      - name: Checkout isolated feature branch
+        uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803
+        with:
+          ref: agent/krc-media-transcript
+          fetch-depth: 0
+
+      - name: Verify feature and isolated Render identity
+        shell: bash
+        run: |
+          set -euo pipefail
+          test -n "${RENDER_API_KEY:-}" || { echo "RENDER_API_KEY missing" >&2; exit 1; }
+          git merge-base --is-ancestor "$REQUIRED_FEATURE_SHA" HEAD || {
+            echo "Telegram managed feature commit is not an ancestor of this run." >&2
+            exit 1
+          }
+          tmp="$(mktemp)"
+          code="$(curl -sS -o "$tmp" -w '%{http_code}' \
+            "${RENDER_API_BASE}/services/${SERVICE_ID}" \
+            -H 'Accept: application/json' \
+            -H "Authorization: Bearer ${RENDER_API_KEY}")"
+          [[ "$code" == 200 ]] || { echo "Render service lookup failed HTTP $code" >&2; rm -f "$tmp"; exit 1; }
+          name="$(jq -r '.name // empty' "$tmp")"
+          branch="$(jq -r '.branch // empty' "$tmp")"
+          rm -f "$tmp"
+          [[ "$name" == "$SERVICE_NAME" ]] || { echo "Unexpected Render service identity" >&2; exit 1; }
+          [[ "$branch" == "$REQUIRED_BRANCH" ]] || { echo "Unexpected Render branch: $branch" >&2; exit 1; }
+          echo "Isolation boundary: PASS / service=$name / branch=$branch"
+
+      - name: Deploy current Telegram-capable commit to isolated beta
+        id: deploy
+        shell: bash
+        run: |
+          set -euo pipefail
+          payload="$(jq -nc --arg commitId "$GITHUB_SHA" '{commitId:$commitId,clearCache:"do_not_clear"}')"
+          tmp="$(mktemp)"
+          code="$(curl -sS -o "$tmp" -w '%{http_code}' \
+            -X POST "${RENDER_API_BASE}/services/${SERVICE_ID}/deploys" \
+            -H 'Accept: application/json' \
+            -H 'Content-Type: application/json' \
+            -H "Authorization: Bearer ${RENDER_API_KEY}" \
+            --data "$payload")"
+          [[ "$code" == 201 || "$code" == 202 ]] || {
+            echo "Render deploy request failed HTTP $code" >&2
+            rm -f "$tmp"
+            exit 1
+          }
+          deploy_id="$(jq -r '(.deploy // .).id // empty' "$tmp")"
+          rm -f "$tmp"
+          test -n "$deploy_id" || { echo "Render deploy ID missing" >&2; exit 1; }
+          echo "deploy_id=$deploy_id" >> "$GITHUB_OUTPUT"
+          echo "Isolated deploy requested: $deploy_id / commit=$GITHUB_SHA"
+
+      - name: Wait for isolated deploy to become live
+        env:
+          DEPLOY_ID: ${{ steps.deploy.outputs.deploy_id }}
+        shell: bash
+        run: |
+          set -euo pipefail
+          for i in $(seq 1 60); do
+            tmp="$(mktemp)"
+            code="$(curl -sS -o "$tmp" -w '%{http_code}' \
+              "${RENDER_API_BASE}/services/${SERVICE_ID}/deploys/${DEPLOY_ID}" \
+              -H 'Accept: application/json' \
+              -H "Authorization: Bearer ${RENDER_API_KEY}")"
+            [[ "$code" == 200 ]] || { rm -f "$tmp"; echo "Deploy status lookup failed HTTP $code" >&2; exit 1; }
+            status="$(jq -r '(.deploy // .).status // "unknown"' "$tmp")"
+            commit="$(jq -r '(.deploy // .).commit.id // (.deploy // .).commitId // "unknown"' "$tmp")"
+            rm -f "$tmp"
+            case "$status" in
+              live)
+                [[ "$commit" == "$GITHUB_SHA" ]] || { echo "Live deploy commit mismatch: $commit" >&2; exit 1; }
+                echo "Isolated deploy live: $DEPLOY_ID / commit=$commit"
+                exit 0
+                ;;
+              build_failed|update_failed|canceled|deactivated)
+                echo "Isolated deploy failed: $status" >&2
+                exit 1
+                ;;
+            esac
+            sleep 10
+          done
+          echo "Timed out waiting for isolated Telegram deploy." >&2
+          exit 1
+
+      - name: Load masked action token from isolated service
+        shell: bash
+        run: |
+          set -euo pipefail
+          tmp="$(mktemp)"
+          code="$(curl -sS -o "$tmp" -w '%{http_code}' \
+            "${RENDER_API_BASE}/services/${SERVICE_ID}/env-vars/KRC_MEDIA_ACTION_TOKEN" \
+            -H 'Accept: application/json' \
+            -H "Authorization: Bearer ${RENDER_API_KEY}")"
+          [[ "$code" == 200 ]] || { echo "Action token lookup failed HTTP $code" >&2; rm -f "$tmp"; exit 1; }
+          action_token="$(jq -r '(.envVar.value // .value // empty)' "$tmp")"
+          rm -f "$tmp"
+          test -n "$action_token" || { echo "KRC_MEDIA_ACTION_TOKEN missing" >&2; exit 1; }
+          echo "::add-mask::$action_token"
+          printf '%s' "$action_token" > /tmp/krc-media-action-token
+          echo "Masked Action credential: READY"
+
+      - name: Verify health and Telegram managed capability
+        shell: bash
+        run: |
+          set -euo pipefail
+          action_token="$(cat /tmp/krc-media-action-token)"
+          health_code="$(curl -sS --retry 8 --retry-delay 5 --max-time 120 \
+            -o /tmp/health.json -w '%{http_code}' "${BASE_URL}/api/v1/health")"
+          [[ "$health_code" == 200 ]] || { echo "Health failed HTTP $health_code" >&2; exit 1; }
+
+          capability_code="$(curl -sS --max-time 60 -o /tmp/capability.json -w '%{http_code}' \
+            "${BASE_URL}/api/v1/media/managed" \
+            -H "Authorization: Bearer ${action_token}" \
+            -H 'Accept: application/json')"
+          [[ "$capability_code" == 200 ]] || { echo "Managed capability failed HTTP $capability_code" >&2; exit 1; }
+          jq -e '
+            .configured == true and
+            (.platforms | index("telegram")) != null and
+            .telegram_public_retrieval == true and
+            .telegram_retrieval_provider == "telegram_public_web" and
+            .telegram_retrieval_credits == 0 and
+            .telegram_stt_provider == "assemblyai" and
+            .telegram_stt_configured == true
+          ' /tmp/capability.json >/dev/null
+          jq -c '{configured,platforms,telegram_public_retrieval,telegram_retrieval_provider,telegram_retrieval_credits,telegram_stt_provider,telegram_stt_configured}' /tmp/capability.json
+
+      - name: Run live public Telegram positive path
+        id: positive
+        shell: bash
+        run: |
+          set -euo pipefail
+          action_token="$(cat /tmp/krc-media-action-token)"
+          payload="$(jq -nc --arg url "$TARGET_URL" '{url:$url,language_hint:"auto"}')"
+          code="$(curl -sS --max-time 1200 -o /tmp/telegram-start.json -w '%{http_code}' \
+            -X POST "${BASE_URL}/api/v1/media/managed/telegram" \
+            -H "Authorization: Bearer ${action_token}" \
+            -H 'Content-Type: application/json' \
+            -H 'Accept: application/json' \
+            --data "$payload")"
+          [[ "$code" == 200 ]] || {
+            echo "Telegram start failed HTTP $code" >&2
+            jq -c '{status,error}' /tmp/telegram-start.json 2>/dev/null || true
+            exit 1
+          }
+          jq -e '
+            .status == "COMPLETED" and
+            .provider == "assemblyai" and
+            .provider_mode == "telegram_public_retrieval_stt" and
+            .retrieval_provider == "telegram_public_web" and
+            .retrieval_credits_charged == 0 and
+            .credits_charged == 0 and
+            (.stt_seconds_charged > 0) and
+            (.segment_count > 0) and
+            (.transcript_characters > 0) and
+            .error == null
+          ' /tmp/telegram-start.json >/dev/null || {
+            echo "Telegram positive path did not meet acceptance contract" >&2
+            jq -c '{status,provider,provider_mode,retrieval_provider,retrieval_credits_charged,credits_charged,stt_seconds_charged,segment_count,transcript_characters,error,reused}' /tmp/telegram-start.json
+            exit 1
+          }
+          job_id="$(jq -r '.job_id // empty' /tmp/telegram-start.json)"
+          test -n "$job_id" || { echo "Telegram KRCM job id missing" >&2; exit 1; }
+          echo "job_id=$job_id" >> "$GITHUB_OUTPUT"
+          jq -c '{status,provider,provider_mode,retrieval_provider,retrieval_credits_charged,credits_charged,stt_seconds_charged,segment_count,transcript_characters,provider_data_deleted,reused}' /tmp/telegram-start.json
+
+      - name: Verify durable Telegram readback and duplicate reuse
+        env:
+          JOB_ID: ${{ steps.positive.outputs.job_id }}
+        shell: bash
+        run: |
+          set -euo pipefail
+          action_token="$(cat /tmp/krc-media-action-token)"
+
+          status_code="$(curl -sS --max-time 60 -o /tmp/telegram-status.json -w '%{http_code}' \
+            "${BASE_URL}/api/v1/media/managed/transcriptions/${JOB_ID}" \
+            -H "Authorization: Bearer ${action_token}" -H 'Accept: application/json')"
+          [[ "$status_code" == 200 ]] || { echo "Telegram durable status read failed HTTP $status_code" >&2; exit 1; }
+          jq -e '.status == "COMPLETED" and .job_id == env.JOB_ID and .retrieval_credits_charged == 0' /tmp/telegram-status.json >/dev/null
+
+          segments_code="$(curl -sS --max-time 60 -o /tmp/telegram-segments.json -w '%{http_code}' \
+            "${BASE_URL}/api/v1/media/managed/transcriptions/${JOB_ID}/segments?cursor=0&limit=20" \
+            -H "Authorization: Bearer ${action_token}" -H 'Accept: application/json')"
+          [[ "$segments_code" == 200 ]] || { echo "Telegram segment read failed HTTP $segments_code" >&2; exit 1; }
+          jq -e '.status == "COMPLETED" and (.segments | length) > 0' /tmp/telegram-segments.json >/dev/null
+
+          payload="$(jq -nc --arg url "$TARGET_URL" '{url:$url,language_hint:"auto"}')"
+          duplicate_code="$(curl -sS --max-time 120 -o /tmp/telegram-duplicate.json -w '%{http_code}' \
+            -X POST "${BASE_URL}/api/v1/media/managed/telegram" \
+            -H "Authorization: Bearer ${action_token}" \
+            -H 'Content-Type: application/json' \
+            -H 'Accept: application/json' \
+            --data "$payload")"
+          [[ "$duplicate_code" == 200 ]] || { echo "Telegram duplicate start failed HTTP $duplicate_code" >&2; exit 1; }
+          jq -e --arg job "$JOB_ID" '
+            .status == "COMPLETED" and
+            .job_id == $job and
+            .reused == true and
+            .retrieval_credits_charged == 0
+          ' /tmp/telegram-duplicate.json >/dev/null
+          jq -c '{status,reused,retrieval_provider,retrieval_credits_charged,stt_seconds_charged,segment_count}' /tmp/telegram-duplicate.json
+          jq -c '{status,returned_segments:(.segments|length),next_cursor}' /tmp/telegram-segments.json
+
+      - name: Verify invalid Telegram boundary
+        shell: bash
+        run: |
+          set -euo pipefail
+          action_token="$(cat /tmp/krc-media-action-token)"
+          payload='{"url":"https://t.me/+privateInviteExample","language_hint":"auto"}'
+          code="$(curl -sS --max-time 60 -o /tmp/telegram-invalid.json -w '%{http_code}' \
+            -X POST "${BASE_URL}/api/v1/media/managed/telegram" \
+            -H "Authorization: Bearer ${action_token}" \
+            -H 'Content-Type: application/json' \
+            -H 'Accept: application/json' \
+            --data "$payload")"
+          [[ "$code" == 400 ]] || { echo "Invalid Telegram boundary expected HTTP 400, got $code" >&2; exit 1; }
+          jq -e '.error.code == "INVALID_REQUEST"' /tmp/telegram-invalid.json >/dev/null
+          echo "Invalid/private Telegram input boundary: PASS"
+
+      - name: Report isolated Telegram live result
+        if: always()
+        env:
+          GH_TOKEN: ${{ github.token }}
+          WORKFLOW_STATUS: ${{ job.status }}
+          DEPLOY_ID: ${{ steps.deploy.outputs.deploy_id }}
+          TELEGRAM_JOB_ID: ${{ steps.positive.outputs.job_id }}
+        shell: bash
+        run: |
+          set -euo pipefail
+          gh pr comment 28 --repo kolemasakar/VoiceBridge --body "A9.9 Telegram isolated live acceptance: **${WORKFLOW_STATUS^^}**. Workflow run: \`${GITHUB_RUN_ID}\`; deployed commit: \`${GITHUB_SHA}\`; Render deploy: \`${DEPLOY_ID:-not-created}\`; KRCM job: \`${TELEGRAM_JOB_ID:-not-created}\`. Target: public Telegram post \`techcrimes/12101\`. Retrieval path has zero retrieval credits and no paid fallback. Only isolated MEDIA BETA was deployed/tested; production and main were not changed."
