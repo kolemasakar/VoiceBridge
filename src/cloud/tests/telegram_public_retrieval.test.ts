@@ -14,6 +14,7 @@ import {
 
 const TELEGRAM_URL = "https://t.me/techcrimes/12101";
 const TELEGRAM_MEDIA_URL = "https://cdn4.cdn-telegram.org/file/119b6ffe41.mp4?token=test&amp;expires=1";
+const TELEGRAM_LIVE_MEDIA_URL = "https://cdn4.telesco.pe/file/119b6ffe41.mp4?token=test&amp;expires=1";
 
 function embedHtml(options?: {
   post?: string;
@@ -83,6 +84,19 @@ test("A9.9 parses the exact Telegram embed video and charges zero retrieval cred
   assert.equal(asset.duration_seconds, 16);
   assert.equal(asset.provider, "telegram_public_web");
   assert.equal(asset.provider_mode, "telegram_post");
+  assert.equal(asset.credits_charged, 0);
+});
+
+test("A9.9 accepts live Telegram telesco.pe CDN subdomains", () => {
+  const asset = parseTelegramPublicEmbedHtml(
+    embedHtml({ mediaUrl: TELEGRAM_LIVE_MEDIA_URL }),
+    TELEGRAM_URL
+  );
+  assert.ok(asset);
+  assert.equal(
+    asset.media_url,
+    "https://cdn4.telesco.pe/file/119b6ffe41.mp4?token=test&expires=1"
+  );
   assert.equal(asset.credits_charged, 0);
 });
 
