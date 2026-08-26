@@ -16,9 +16,14 @@ import {
   DefaultManagedTelegramPipeline
 } from "./telegram_managed_pipeline.js";
 import { TelegramPublicWebRetriever } from "./telegram_public_retrieval.js";
+import {
+  DefaultManagedAttachmentPipeline,
+  MANAGED_ATTACHMENT_MAX_BYTES
+} from "./attachment_managed_pipeline.js";
 import { ManagedMediaPersistentStore } from "./managed_media_persistence.js";
 import {
   ManagedMediaService,
+  parseManagedMediaAttachmentInput,
   parseManagedMediaAiInput,
   parseManagedMediaFacebookFallbackConsentInput,
   parseManagedMediaFacebookMetadataInput,
@@ -37,6 +42,7 @@ const LOOKUP = `${ROOT}/lookup`;
 const TRANSCRIPTIONS = `${ROOT}/transcriptions`;
 const FACEBOOK_FALLBACK = `${ROOT}/facebook-fallback`;
 const TELEGRAM_PUBLIC = `${ROOT}/telegram`;
+const ATTACHMENT = `${ROOT}/attachment`;
 const JOB_PATH = /^\/api\/v1\/media\/managed\/transcriptions\/(KRCM_[A-Za-z0-9-]+)$/;
 const SEGMENTS_PATH = /^\/api\/v1\/media\/managed\/transcriptions\/(KRCM_[A-Za-z0-9-]+)\/segments$/;
 const FACEBOOK_RETRIEVAL_PREFLIGHT_PATH = /^\/api\/v1\/media\/managed\/transcriptions\/(KRCM_[A-Za-z0-9-]+)\/facebook-retrieval-preflight$/;
@@ -206,6 +212,10 @@ function defaultManagedService(config: AppConfig): ManagedMediaService {
     new TelegramPublicWebRetriever(),
     new AssemblyAiTelegramMediaStt(config.assemblyAiApiKey)
   );
+  const attachmentPipeline = new DefaultManagedAttachmentPipeline(
+    config.assemblyAiApiKey,
+    config.mediaMaxDurationSeconds ?? 3600
+  );
   return new ManagedMediaService(
     new MediaBetaGate(
       config.mediaBetaCodes ?? [],
@@ -217,7 +227,8 @@ function defaultManagedService(config: AppConfig): ManagedMediaService {
       ...(store ? { store } : {}),
       jobTtlSeconds: config.mediaJobTtlSeconds ?? 3600,
       facebookPipeline,
-      telegramPipeline
+      telegramPipeline,
+      attachmentPipeline
     }
   );
 }
@@ -255,6 +266,12 @@ export function createManagedMediaHttpHandler(
     telegram_retrieval_credits: 0,
     telegram_stt_provider: "assemblyai",
     telegram_stt_configured: Boolean(config.assemblyAiApiKey),
+    local_attachment_transport: true,
+    local_attachment_transcription: Boolean(config.assemblyAiApiKey),
+    local_attachment_provider: "assemblyai",
+    local_attachment_retrieval_provider: "openai_attachment",
+    local_attachment_max_bytes: MANAGED_ATTACHMENT_MAX_BYTES,
+    local_attachment_max_duration_seconds: config.mediaMaxDurationSeconds ?? 3600,
     ai_requires_separate_preflight: true,
     ai_requires_separate_user_consent: true,
     ai_generate_credits_per_minute: GENERATED_TRANSCRIPT_CREDITS_PER_MINUTE,
@@ -362,6 +379,30 @@ export function createManagedMediaHttpHandler(
         return true;
       }
 
+
+
+      if (method === "POST" && path === ATTACHMENT) {
+        const rawBody = await readJsonBody(request, config.maxRequestBodyBytes);
+        const body = withServerOwnerAccessCode(rawBody, config.mediaBetaCodes);
+        const input = parseManagedMediaAttachmentInput(body);
+        if (!input) {
+          throw new MediaTranscriptError(
+            "INVALID_REQUEST",
+            "Exactly one runtime OpenAI audio/video attachment reference is required.",
+            400,
+            false
+          );
+        }
+        const job = await service.startAttachment(input);
+        sendJson(
+          response,
+          200,
+          { request_id: context.requestId, ...job },
+          context,
+          config.corsAllowedOrigin
+        );
+        return true;
+      }
 
       if (method === "POST" && path === TELEGRAM_PUBLIC) {
         const rawBody = await readJsonBody(request, config.maxRequestBodyBytes);

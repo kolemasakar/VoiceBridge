@@ -25,6 +25,11 @@ import {
   type ManagedFacebookPipeline
 } from "./facebook_managed_pipeline.js";
 import type { ManagedTelegramPipeline } from "./telegram_managed_pipeline.js";
+import type { ManagedAttachmentPipeline } from "./attachment_managed_pipeline.js";
+import {
+  parseManagedAttachmentProbeInput,
+  type OpenAiConversationFileRef
+} from "./managed_attachment_probe.js";
 import {
   INSTAGRAM_REEL_GENERATE_MAX_CREDITS,
   SupadataProvider,
@@ -38,6 +43,12 @@ import {
 
 export interface ManagedMediaPreflightInput {
   url: string;
+  language_hint: MediaLanguageHint;
+  beta_access_code: string;
+}
+
+export interface ManagedMediaAttachmentInput {
+  openaiFileIdRefs: [OpenAiConversationFileRef];
   language_hint: MediaLanguageHint;
   beta_access_code: string;
 }
@@ -156,7 +167,8 @@ export interface ManagedMediaJobView {
     | "native"
     | "generate"
     | "facebook_retrieval_stt"
-    | "telegram_public_retrieval_stt";
+    | "telegram_public_retrieval_stt"
+    | "attachment_upload_stt";
   detected_language: string | null;
   available_languages: string[];
   credits_charged: number;
@@ -169,7 +181,7 @@ export interface ManagedMediaJobView {
   media_duration_seconds?: number | null;
   ai_credit_ceiling?: number | null;
   metadata_credits_charged?: number;
-  retrieval_provider?: "cobalt" | "scrapecreators" | "telegram_public_web" | null;
+  retrieval_provider?: "cobalt" | "scrapecreators" | "telegram_public_web" | "openai_attachment" | null;
   free_retrieval_error_code?: string | null;
   free_retrieval_provider?: FacebookMediaRetrievalProvider | null;
   free_retrieval_http_status_class?: FacebookRetrievalHttpStatusClass;
@@ -237,6 +249,7 @@ export interface ManagedMediaServiceOptions {
   jobTtlSeconds?: number;
   facebookPipeline?: ManagedFacebookPipeline;
   telegramPipeline?: ManagedTelegramPipeline;
+  attachmentPipeline?: ManagedAttachmentPipeline;
 }
 
 function cloneRecord(record: ManagedMediaStoredRecord): ManagedMediaStoredRecord {
@@ -351,6 +364,19 @@ export function managedFacebookFallbackRequestKey(
     .digest("hex");
 }
 
+export function managedAttachmentRequestKey(
+  file: OpenAiConversationFileRef,
+  languageHint: MediaLanguageHint,
+  accessCode: string
+): string {
+  return createHash("sha256")
+    .update(
+      `attachment-upload-stt|${file.id}|${file.name}|${file.mime_type}|${languageHint}|${managedMediaAccessDigest(accessCode)}`,
+      "utf8"
+    )
+    .digest("hex");
+}
+
 export function managedTelegramRequestKey(
   normalizedUrl: string,
   languageHint: MediaLanguageHint,
@@ -397,6 +423,25 @@ export function parseManagedMediaPreflightInput(
   value: unknown
 ): ManagedMediaPreflightInput | null {
   return parseCommonInput(value);
+}
+
+export function parseManagedMediaAttachmentInput(
+  value: unknown
+): ManagedMediaAttachmentInput | null {
+  if (!value || typeof value !== "object" || Array.isArray(value)) return null;
+  const input = value as Record<string, unknown>;
+  if (!validAccessCode(input.beta_access_code)) return null;
+  const languageHint = parseLanguageHint(input.language_hint);
+  if (!languageHint) return null;
+  const parsed = parseManagedAttachmentProbeInput({
+    openaiFileIdRefs: input.openaiFileIdRefs
+  });
+  if (!parsed) return null;
+  return {
+    openaiFileIdRefs: [parsed.file],
+    language_hint: languageHint,
+    beta_access_code: input.beta_access_code
+  };
 }
 
 export function parseManagedMediaNativeInput(
@@ -501,6 +546,7 @@ export class ManagedMediaService {
   private readonly transcriptProvider: ManagedNativeTranscriptProvider | null;
   private readonly facebookPipeline: ManagedFacebookPipeline | null;
   private readonly telegramPipeline: ManagedTelegramPipeline | null;
+  private readonly attachmentPipeline: ManagedAttachmentPipeline | null;
   private readonly store: ManagedMediaJobStore;
   private readonly jobTtlSeconds: number;
   private readonly inFlight = new Set<string>();
@@ -516,6 +562,7 @@ export class ManagedMediaService {
       (supadataApiKey ? new SupadataProvider(supadataApiKey) : null);
     this.facebookPipeline = options.facebookPipeline ?? null;
     this.telegramPipeline = options.telegramPipeline ?? null;
+    this.attachmentPipeline = options.attachmentPipeline ?? null;
     this.store = options.store || new ManagedMediaMemoryStore();
     this.jobTtlSeconds = options.jobTtlSeconds ?? 3600;
     this.durableStore = this.store.durable;
@@ -523,7 +570,8 @@ export class ManagedMediaService {
     this.configured = betaGate.configured && Boolean(
       this.transcriptProvider !== null ||
       this.facebookPipeline?.configured ||
-      this.telegramPipeline?.configured
+      this.telegramPipeline?.configured ||
+      this.attachmentPipeline?.configured
     );
   }
 
@@ -556,6 +604,18 @@ export class ManagedMediaService {
       throw new MediaTranscriptError(
         "FACEBOOK_MANAGED_PIPELINE_NOT_CONFIGURED",
         "The managed Facebook retrieval and STT fallback is not configured.",
+        503,
+        false
+      );
+    }
+  }
+
+  private authorizeAttachmentPipeline(accessCode: string): void {
+    this.authorizeAccess(accessCode);
+    if (!this.attachmentPipeline?.configured) {
+      throw new MediaTranscriptError(
+        "ATTACHMENT_MANAGED_PIPELINE_NOT_CONFIGURED",
+        "Managed local attachment transcription is not configured.",
         503,
         false
       );
@@ -1016,6 +1076,143 @@ export class ManagedMediaService {
     };
   }
 
+
+
+  async startAttachment(
+    input: ManagedMediaAttachmentInput
+  ): Promise<ManagedMediaJobView> {
+    this.authorizeAttachmentPipeline(input.beta_access_code);
+    await this.ensureStore();
+    const file = input.openaiFileIdRefs[0];
+    const requestKey = managedAttachmentRequestKey(
+      file,
+      input.language_hint,
+      input.beta_access_code
+    );
+    const existing = await this.reusableRecord(requestKey);
+    if (existing) return this.publicJob(existing.job, true);
+
+    const now = new Date().toISOString();
+    const job: ManagedMediaJobView = {
+      job_id: `KRCM_${randomUUID()}`,
+      status: "PROCESSING",
+      created_at: now,
+      updated_at: now,
+      source_url: "attachment://local-media",
+      language_hint: input.language_hint,
+      provider: "assemblyai",
+      provider_mode: "attachment_upload_stt",
+      detected_language: null,
+      available_languages: [],
+      credits_charged: 0,
+      credits_remaining_estimate: 0,
+      credit_charge_uncertain: false,
+      reused: false,
+      segment_count: 0,
+      transcript_characters: 0,
+      ai_fallback_requires_new_consent: false,
+      media_duration_seconds: null,
+      ai_credit_ceiling: null,
+      metadata_credits_charged: 0,
+      retrieval_provider: "openai_attachment",
+      retrieval_credits_charged: 0,
+      stt_seconds_charged: 0,
+      provider_data_deleted: null,
+      language_confidence: null,
+      error: null
+    };
+    const record: ManagedMediaStoredRecord = {
+      job,
+      requestKey,
+      accessCodeDigest: managedMediaAccessDigest(input.beta_access_code),
+      segments: [],
+      expiresAt: this.expiryFrom(now, job)
+    };
+    const reservation = await this.store.reserve(record);
+    if (!reservation.created) {
+      const resolved = reservation.record.job.status === "PROCESSING" &&
+        !this.inFlight.has(requestKey)
+        ? await this.interruptedRecord(reservation.record)
+        : reservation.record;
+      return this.publicJob(resolved.job, true);
+    }
+
+    this.inFlight.add(requestKey);
+    try {
+      const stt = await this.attachmentPipeline!.transcribe(
+        file,
+        input.language_hint,
+        (seconds) => {
+          const quota = this.betaGate.reserveSttSeconds(seconds);
+          if (!quota.allowed) {
+            throw new MediaTranscriptError(
+              "MEDIA_BETA_STT_QUOTA_EXHAUSTED",
+              "The closed MEDIA BETA daily STT quota is exhausted.",
+              429,
+              false
+            );
+          }
+        }
+      );
+      const updatedAt = new Date().toISOString();
+      const completed: ManagedMediaStoredRecord = {
+        ...record,
+        job: {
+          ...job,
+          status: "COMPLETED",
+          updated_at: updatedAt,
+          detected_language: stt.detected_language,
+          available_languages: stt.detected_language ? [stt.detected_language] : [],
+          credit_charge_uncertain: false,
+          segment_count: stt.segments.length,
+          transcript_characters: stt.transcript_text.length,
+          media_duration_seconds: stt.duration_seconds,
+          retrieval_provider: "openai_attachment",
+          retrieval_credits_charged: 0,
+          stt_seconds_charged: Math.ceil(stt.duration_seconds),
+          provider_data_deleted: stt.provider_data_deleted,
+          language_confidence: stt.language_confidence,
+          error: null
+        },
+        segments: stt.segments.map((segment) => ({ ...segment })),
+        expiresAt: this.expiryFrom(updatedAt, job)
+      };
+      completed.expiresAt = this.expiryFrom(updatedAt, completed.job);
+      await this.store.put(completed);
+      return this.publicJob(completed.job, false);
+    } catch (error) {
+      const normalized = error instanceof MediaTranscriptError
+        ? error
+        : new MediaTranscriptError(
+          "ATTACHMENT_MANAGED_PIPELINE_FAILED",
+          "Managed local attachment transcription failed.",
+          500,
+          false
+        );
+      const updatedAt = new Date().toISOString();
+      const failed: ManagedMediaStoredRecord = {
+        ...record,
+        job: {
+          ...job,
+          status: "FAILED",
+          updated_at: updatedAt,
+          credit_charge_uncertain: false,
+          retrieval_provider: "openai_attachment",
+          retrieval_credits_charged: 0,
+          error: {
+            code: normalized.code,
+            message: normalized.message,
+            retryable: normalized.retryable
+          }
+        },
+        expiresAt: this.expiryFrom(updatedAt, job)
+      };
+      await this.store.put(failed);
+      return this.publicJob(failed.job, false);
+    } finally {
+      this.inFlight.delete(requestKey);
+    }
+  }
 
   async startTelegram(
     input: ManagedMediaPreflightInput
