@@ -401,23 +401,32 @@ export class FacebookMediaRetrievalChain {
     consent?: FacebookRetrievalCreditConsent
   ): Promise<FacebookMediaAsset> {
     const source = normalizedFacebookUrl(sourceUrl);
+    void consent;
+    void this.paidRetriever;
+
+    let provider: FacebookMediaRetrievalProvider | null = this.freeRetriever.provider;
+    let statusClass: FacebookRetrievalHttpStatusClass = null;
     try {
       return await this.freeRetriever.retrieve(source);
     } catch (error) {
       if (error instanceof MediaTranscriptError && error.code === "MEDIA_URL_INVALID") {
         throw error;
       }
+      if (error instanceof FacebookMediaRetrievalError) {
+        provider = error.provider ?? this.freeRetriever.provider;
+        statusClass = error.providerHttpStatusClass;
+      }
     }
 
-    if (!this.paidRetriever || !consent) {
-      throw new FacebookMediaRetrievalError(
-        "FACEBOOK_RETRIEVAL_CREDIT_CONSENT_REQUIRED",
-        "The free Facebook retrieval attempt failed. Explicit consent is required before the one-credit paid fallback.",
-        409,
-        false,
-        this.paidRetriever ? "scrapecreators" : null
-      );
-    }
-    return this.paidRetriever.retrieve(source, consent);
+    throw new FacebookMediaRetrievalError(
+      "FACEBOOK_RETRIEVAL_UNAVAILABLE",
+      "The free Facebook retrieval attempt failed. Paid fallback is disabled in active Media Beta.",
+      422,
+      false,
+      provider,
+      null,
+      null,
+      statusClass
+    );
   }
 }

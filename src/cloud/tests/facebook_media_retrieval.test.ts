@@ -53,7 +53,7 @@ async function bodyText(request: IncomingMessage): Promise<string> {
   return Buffer.concat(chunks).toString("utf8");
 }
 
-test("Facebook paid retrieval preflight is local and capped at one credit", () => {
+test("Facebook paid retrieval preflight remains reserve-only provider metadata", () => {
   assert.deepEqual(facebookRetrievalCreditPreflight(FACEBOOK_URL), {
     source_url: FACEBOOK_URL,
     provider: "scrapecreators",
@@ -109,7 +109,7 @@ test("Cobalt returns a zero-credit Facebook media asset without paid fallback", 
   assert.equal(cobaltCalls, 1);
 });
 
-test("failed free retrieval stops before paid fallback when consent is absent", async () => {
+test("Cobalt failure is terminal unavailable and never calls reserve paid fallback", async () => {
   let cobaltCalls = 0;
   let paidCalls = 0;
   await withMockServer((_request, response) => {
@@ -121,67 +121,67 @@ test("failed free retrieval stops before paid fallback when consent is absent", 
       provider: "scrapecreators" as const,
       async retrieve(): Promise<never> {
         paidCalls += 1;
-        throw new Error("paid fallback must not run without consent");
+        throw new Error("paid fallback is reserve-only");
       }
     };
     const chain = new FacebookMediaRetrievalChain(
       new CobaltFacebookRetriever(cobaltBase),
       paidRetriever
     );
+    for (const consent of [undefined, CONSENT]) {
+      await assert.rejects(
+        chain.retrieve(FACEBOOK_URL, consent),
+        (error: unknown) => {
+          assert.ok(error instanceof FacebookMediaRetrievalError);
+          assert.equal(error.code, "FACEBOOK_RETRIEVAL_UNAVAILABLE");
+          assert.equal(error.provider, "cobalt");
+          return true;
+        }
+      );
+    }
+  });
+  assert.equal(cobaltCalls, 2);
+  assert.equal(paidCalls, 0);
+});
+
+test("ScrapeCreators reserve retriever still requires explicit one-credit consent", async () => {
+  let calls = 0;
+  await withMockServer((request, response) => {
+    calls += 1;
+    assert.equal(request.method, "GET");
+    const url = new URL(request.url || "/", "http://localhost");
+    assert.equal(url.pathname, "/v1/facebook/post");
+    assert.equal(url.searchParams.get("url"), FACEBOOK_URL);
+    assert.equal(url.searchParams.get("cache_max_age"), "30d");
+    assert.equal(request.headers["x-api-key"], "test-key");
+    response.writeHead(200, { "content-type": "application/json" });
+    response.end(JSON.stringify({
+      success: true,
+      credits_remaining: 77,
+      credits_charged: 1,
+      hd_url: "https://video.example.test/reel-hd.mp4",
+      sd_url: "https://video.example.test/reel-sd.mp4",
+      length_in_second: 23.36
+    }));
+  }, async (paidBase) => {
+    const retriever = new ScrapeCreatorsFacebookRetriever("test-key", paidBase);
     await assert.rejects(
-      chain.retrieve(FACEBOOK_URL),
+      retriever.retrieve(FACEBOOK_URL),
       (error: unknown) => {
         assert.ok(error instanceof FacebookMediaRetrievalError);
         assert.equal(error.code, "FACEBOOK_RETRIEVAL_CREDIT_CONSENT_REQUIRED");
         return true;
       }
     );
+    const asset = await retriever.retrieve(FACEBOOK_URL, CONSENT);
+    assert.equal(asset.provider, "scrapecreators");
+    assert.equal(asset.provider_mode, "facebook_post");
+    assert.equal(asset.credits_charged, 1);
+    assert.equal(asset.credits_remaining, 77);
+    assert.equal(asset.duration_seconds, 23.36);
+    assert.equal(asset.media_url, "https://video.example.test/reel-hd.mp4");
   });
-  assert.equal(cobaltCalls, 1);
-  assert.equal(paidCalls, 0);
-});
-
-test("explicit one-credit consent permits exactly one ScrapeCreators fallback request", async () => {
-  let cobaltCalls = 0;
-  let paidCalls = 0;
-  await withMockServer((_request, response) => {
-    cobaltCalls += 1;
-    response.writeHead(502, { "content-type": "application/json" });
-    response.end(JSON.stringify({ status: "error" }));
-  }, async (cobaltBase) => {
-    await withMockServer((request, response) => {
-      paidCalls += 1;
-      assert.equal(request.method, "GET");
-      const url = new URL(request.url || "/", "http://localhost");
-      assert.equal(url.pathname, "/v1/facebook/post");
-      assert.equal(url.searchParams.get("url"), FACEBOOK_URL);
-      assert.equal(url.searchParams.get("cache_max_age"), "30d");
-      assert.equal(request.headers["x-api-key"], "test-key");
-      response.writeHead(200, { "content-type": "application/json" });
-      response.end(JSON.stringify({
-        success: true,
-        credits_remaining: 77,
-        credits_charged: 1,
-        hd_url: "https://video.example.test/reel-hd.mp4",
-        sd_url: "https://video.example.test/reel-sd.mp4",
-        length_in_second: 23.36
-      }));
-    }, async (paidBase) => {
-      const chain = new FacebookMediaRetrievalChain(
-        new CobaltFacebookRetriever(cobaltBase),
-        new ScrapeCreatorsFacebookRetriever("test-key", paidBase)
-      );
-      const asset = await chain.retrieve(FACEBOOK_URL, CONSENT);
-      assert.equal(asset.provider, "scrapecreators");
-      assert.equal(asset.provider_mode, "facebook_post");
-      assert.equal(asset.credits_charged, 1);
-      assert.equal(asset.credits_remaining, 77);
-      assert.equal(asset.duration_seconds, 23.36);
-      assert.equal(asset.media_url, "https://video.example.test/reel-hd.mp4");
-    });
-  });
-  assert.equal(cobaltCalls, 1);
-  assert.equal(paidCalls, 1);
+  assert.equal(calls, 1);
 });
 
 test("ScrapeCreators cached response may charge zero credits and remains valid", async () => {
@@ -234,7 +234,7 @@ test("paid retrieval never retries and reports credit cap breach", async () => {
   assert.equal(calls, 1);
 });
 
-test("paid provider 5xx is a single non-retryable billable-capable attempt", async () => {
+test("paid provider 5xx is a single non-retryable reserve-provider attempt", async () => {
   let calls = 0;
   await withMockServer((_request, response) => {
     calls += 1;

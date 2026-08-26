@@ -406,30 +406,36 @@ export class DefaultManagedFacebookPipeline implements ManagedFacebookPipeline {
 
   async freeRetrieve(sourceUrl: string): Promise<ManagedFacebookFreeRetrievalResult> {
     if (!this.freeRetriever) {
-      return {
-        kind: "failure",
-        error_code: "FACEBOOK_FREE_RETRIEVER_NOT_CONFIGURED",
-        provider: null,
-        http_status_class: null
-      };
+      throw new FacebookMediaRetrievalError(
+        "FACEBOOK_RETRIEVAL_UNAVAILABLE",
+        "Free Facebook retrieval is not configured. Paid fallback is disabled in active Media Beta.",
+        503,
+        false,
+        null
+      );
     }
     try {
       return await this.freeRetriever.retrieve(sourceUrl);
     } catch (error) {
       if (error instanceof FacebookMediaRetrievalError) {
-        return {
-          kind: "failure",
-          error_code: error.code,
-          provider: error.provider ?? this.freeRetriever.provider,
-          http_status_class: error.providerHttpStatusClass
-        };
+        throw new FacebookMediaRetrievalError(
+          "FACEBOOK_RETRIEVAL_UNAVAILABLE",
+          "Free Facebook retrieval is unavailable. Paid fallback is disabled in active Media Beta.",
+          422,
+          false,
+          error.provider ?? this.freeRetriever.provider,
+          null,
+          null,
+          error.providerHttpStatusClass
+        );
       }
-      return {
-        kind: "failure",
-        error_code: "FACEBOOK_FREE_RETRIEVAL_UNKNOWN",
-        provider: this.freeRetriever.provider,
-        http_status_class: null
-      };
+      throw new FacebookMediaRetrievalError(
+        "FACEBOOK_RETRIEVAL_UNAVAILABLE",
+        "Free Facebook retrieval is unavailable. Paid fallback is disabled in active Media Beta.",
+        502,
+        false,
+        this.freeRetriever.provider
+      );
     }
   }
 
