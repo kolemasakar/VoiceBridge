@@ -14,21 +14,17 @@ jobs:
   diagnostic:
     runs-on: ubuntu-latest
     steps:
-      - name: Inspect safe Telegram embed shape
+      - name: Find fresh public Telegram video target
         shell: bash
         run: |
           set -euo pipefail
           python - <<'PY'
+          import html as html_lib
           import re
           import urllib.request
           from urllib.parse import urlparse
 
-          targets = [
-              "https://t.me/techcrimes/12101",
-              "https://t.me/TelegramTips/310",
-              "https://t.me/TelegramTips/308",
-              "https://t.me/TelegramTips/300",
-          ]
+          targets = [f"https://t.me/techcrimes/{post_id}" for post_id in range(12095, 12111)]
 
           for source in targets:
               embed = source + "?embed=1&single=1"
@@ -41,52 +37,35 @@ jobs:
               )
               try:
                   with urllib.request.urlopen(req, timeout=20) as response:
-                      html = response.read(2 * 1024 * 1024).decode("utf-8", "replace")
-                      final = response.geturl()
+                      raw = response.read(2 * 1024 * 1024)
+                      page = raw.decode("utf-8", "replace")
                       status = response.status
               except Exception as exc:
                   print(f"target={source} fetch_error={type(exc).__name__}")
                   continue
 
               channel, post_id = source.rstrip("/").split("/")[-2:]
-              expected = f'{channel}/{post_id}'
-              data_posts = re.findall(r'data-post=[\"\']([^\"\']+)[\"\']', html, re.I)
-              video_player = len(re.findall(r'tgme_widget_message_video_player', html, re.I))
-              video_tags = re.findall(r'<video\b([^>]*)>', html, re.I)
-              srcs = []
-              src_shapes = []
+              exact = bool(re.search(rf'data-post=[\"\']{re.escape(channel)}/{re.escape(post_id)}[\"\']', page, re.I))
+              video_tags = re.findall(r'<video\b([^>]*)>', page, re.I)
+              src_hosts = []
               for attrs in video_tags:
                   match = re.search(r'\bsrc\s*=\s*([\"\'])(.*?)\1', attrs, re.I)
                   if match:
-                      src = match.group(2).replace('&amp;', '&')
-                      srcs.append(src)
-                      try:
-                          parsed = urlparse(src)
-                          host = (parsed.hostname or '').lower()
-                          suffix = parsed.path[-40:]
-                          src_shapes.append(f"{parsed.scheme}://{host}/...{suffix}")
-                      except Exception:
-                          src_shapes.append("invalid")
-              trusted_mp4 = []
-              for src in srcs:
-                  try:
-                      parsed = urlparse(src)
-                      host = (parsed.hostname or '').lower()
-                      trusted = host == 'cdn.telesco.pe' or host == 'cdn-telegram.org' or host.endswith('.cdn-telegram.org')
-                      if parsed.scheme == 'https' and trusted and parsed.path.lower().endswith('.mp4'):
-                          trusted_mp4.append((host, parsed.path[-24:]))
-                  except Exception:
-                      pass
+                      parsed = urlparse(html_lib.unescape(match.group(2)))
+                      src_hosts.append((parsed.hostname or '').lower())
+              duration_match = re.search(
+                  r'<time\b[^>]*class=[\"\'][^\"\']*(?:message_video_duration|js-message_video_duration)[^\"\']*[\"\'][^>]*>([^<]*)</time>',
+                  page,
+                  re.I,
+              )
+              duration = duration_match.group(1).strip() if duration_match else "none"
+              text_match = re.search(r'<div\b[^>]*class=[\"\'][^\"\']*tgme_widget_message_text[^\"\']*[\"\'][^>]*>([\s\S]*?)</div>', page, re.I)
+              text = ""
+              if text_match:
+                  text = re.sub(r'<[^>]+>', ' ', text_match.group(1))
+                  text = html_lib.unescape(re.sub(r'\s+', ' ', text)).strip()[:120]
               print(
-                  "target=" + source,
-                  "http=" + str(status),
-                  "final_host=" + (urlparse(final).hostname or ""),
-                  "bytes=" + str(len(html.encode('utf-8'))),
-                  "exact_data_post=" + str(expected in data_posts).lower(),
-                  "video_player_class=" + str(video_player),
-                  "video_tags=" + str(len(video_tags)),
-                  "video_srcs=" + str(len(srcs)),
-                  "trusted_mp4=" + str(len(trusted_mp4)),
-                  "src_shapes=" + repr(src_shapes),
+                  f"target={source} http={status} exact={str(exact).lower()} "
+                  f"video_tags={len(video_tags)} duration={duration} hosts={src_hosts} text={text!r}"
               )
           PY
