@@ -1,0 +1,55 @@
+name: A9.10 Attachment Probe Validate
+
+on:
+  pull_request:
+    paths:
+      - src/cloud/src/managed_attachment_probe.ts
+      - src/cloud/src/managed_attachment_probe_http.ts
+      - src/cloud/src/managed_server.ts
+      - src/cloud/tests/managed_attachment_probe.test.ts
+      - .github/workflows/a9-10-attachment-probe-validate.yml
+  push:
+    branches:
+      - agent/krc-media-transcript
+    paths:
+      - src/cloud/src/managed_attachment_probe.ts
+      - src/cloud/src/managed_attachment_probe_http.ts
+      - src/cloud/src/managed_server.ts
+      - src/cloud/tests/managed_attachment_probe.test.ts
+      - .github/workflows/a9-10-attachment-probe-validate.yml
+
+permissions:
+  contents: read
+
+jobs:
+  validate:
+    runs-on: ubuntu-latest
+    defaults:
+      run:
+        working-directory: src/cloud
+    steps:
+      - name: Checkout
+        uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803
+      - name: Set up Node.js
+        uses: actions/setup-node@249970729cb0ef3589644e2896645e5dc5ba9c38
+        with:
+          node-version: "24"
+          cache: npm
+          cache-dependency-path: src/cloud/package-lock.json
+      - name: Install dependencies
+        run: npm ci
+      - name: Build and test cloud service
+        run: npm run check
+      - name: Verify probe stays non-STT and OpenAI-host bounded
+        shell: bash
+        run: |
+          set -euo pipefail
+          grep -Fq 'files.oaiusercontent.com' src/managed_attachment_probe.ts
+          grep -Fq 'redirect: "manual"' src/managed_attachment_probe.ts
+          grep -Fq 'MANAGED_ATTACHMENT_PROBE_MAX_BYTES = 64 * 1024' src/managed_attachment_probe.ts
+          grep -Fq 'retrieval_credits_charged: 0' src/managed_attachment_probe_http.ts
+          grep -Fq 'stt_seconds_charged: 0' src/managed_attachment_probe_http.ts
+          if grep -Eq 'AssemblyAi|assemblyAiApiKey|startManagedAttachmentTranscription' src/managed_attachment_probe.ts src/managed_attachment_probe_http.ts; then
+            echo 'A9.10 transport probe must not invoke STT or full attachment transcription.' >&2
+            exit 1
+          fi
