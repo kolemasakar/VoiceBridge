@@ -1,6 +1,6 @@
 import { MediaTranscriptError } from "./media_transcript.js";
 
-export type ManagedMediaPlatform = "youtube" | "instagram" | "facebook";
+export type ManagedMediaPlatform = "youtube" | "instagram" | "facebook" | "telegram";
 
 function isYoutubeHost(hostname: string): boolean {
   const host = hostname.toLowerCase();
@@ -24,8 +24,31 @@ function isFacebookWatchHost(hostname: string): boolean {
   return hostname.toLowerCase() === "fb.watch";
 }
 
+function isTelegramHost(hostname: string): boolean {
+  const host = hostname.toLowerCase();
+  return host === "t.me" || host === "telegram.me";
+}
+
 function safeFacebookToken(value: string | undefined): value is string {
   return Boolean(value && /^[A-Za-z0-9._-]+$/.test(value));
+}
+
+function safeTelegramChannel(value: string | undefined): value is string {
+  if (!value || !/^[A-Za-z0-9_]{5,64}$/.test(value)) return false;
+  return ![
+    "addlist",
+    "joinchat",
+    "login",
+    "proxy",
+    "share",
+    "socks"
+  ].includes(value.toLowerCase());
+}
+
+function safeTelegramPostId(value: string | undefined): value is string {
+  if (!value || !/^\d+$/.test(value)) return false;
+  const numeric = Number(value);
+  return Number.isSafeInteger(numeric) && numeric > 0;
 }
 
 function invalidUrl(message: string): never {
@@ -53,8 +76,9 @@ export function managedMediaPlatform(url: string): ManagedMediaPlatform {
   if (isFacebookHost(parsed.hostname) || isFacebookWatchHost(parsed.hostname)) {
     return "facebook";
   }
+  if (isTelegramHost(parsed.hostname)) return "telegram";
   return unsupportedUrl(
-    "Only public HTTPS YouTube, Instagram and Facebook video URLs are supported by the managed beta."
+    "Only public HTTPS YouTube, Instagram, Facebook and Telegram video URLs are supported by the managed beta."
   );
 }
 
@@ -64,6 +88,14 @@ export function isManagedInstagramReelUrl(value: string): boolean {
     const parsed = new URL(normalized);
     const parts = parsed.pathname.split("/").filter(Boolean);
     return managedMediaPlatform(normalized) === "instagram" && parts[0] === "reel";
+  } catch {
+    return false;
+  }
+}
+
+export function isManagedTelegramPublicPostUrl(value: string): boolean {
+  try {
+    return managedMediaPlatform(normalizeManagedMediaUrl(value)) === "telegram";
   } catch {
     return false;
   }
@@ -165,7 +197,27 @@ export function normalizeManagedMediaUrl(value: string): string {
     );
   }
 
+  if (isTelegramHost(url.hostname)) {
+    const parts = url.pathname.split("/").filter(Boolean);
+    const preview = parts[0]?.toLowerCase() === "s";
+    const channel = preview ? parts[1] : parts[0];
+    const postId = preview ? parts[2] : parts[1];
+    const expectedParts = preview ? 3 : 2;
+
+    if (
+      parts.length !== expectedParts ||
+      !safeTelegramChannel(channel) ||
+      !safeTelegramPostId(postId)
+    ) {
+      return unsupportedUrl(
+        "Only public Telegram channel/group post URLs in the form https://t.me/<channel>/<post_id> are supported; invite, login and non-post URLs are not supported."
+      );
+    }
+
+    return `https://t.me/${channel}/${postId}`;
+  }
+
   return unsupportedUrl(
-    "Only public HTTPS YouTube, Instagram and Facebook video URLs are supported by the managed beta."
+    "Only public HTTPS YouTube, Instagram, Facebook and Telegram video URLs are supported by the managed beta."
   );
 }
