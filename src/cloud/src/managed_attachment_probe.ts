@@ -2,6 +2,7 @@ import { MediaTranscriptError } from "./media_transcript.js";
 
 export const MANAGED_ATTACHMENT_PROBE_MAX_BYTES = 64 * 1024;
 const ATTACHMENT_PROBE_TIMEOUT_MS = 8000;
+// OpenAI historically documents files.oaiusercontent.com; current ChatGPT runtime may use regional *.oaiusercontent.com hosts.
 const OPENAI_FILE_HOST_SUFFIX = ".oaiusercontent.com";
 
 export type ManagedAttachmentClass = "audio" | "video";
