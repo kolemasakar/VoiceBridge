@@ -52,7 +52,8 @@ jobs:
           set -euo pipefail
           npm ci
           npm run check
-          grep -Fq 'files.oaiusercontent.com' src/managed_attachment_probe.ts
+          grep -Fq 'OPENAI_FILE_HOST_SUFFIX = ".oaiusercontent.com"' src/managed_attachment_probe.ts
+          grep -Fq 'isAllowedOpenAiFileHost' src/managed_attachment_probe.ts
           grep -Fq 'observed_host=' src/managed_attachment_probe.ts
           grep -Fq 'redirect: "manual"' src/managed_attachment_probe.ts
           grep -Fq 'MANAGED_ATTACHMENT_PROBE_MAX_BYTES = 64 * 1024' src/managed_attachment_probe.ts
