@@ -1,0 +1,103 @@
+name: A9.10 Attachment Ingestion Implementation
+
+on:
+  push:
+    branches:
+      - agent/krc-media-transcript
+    paths:
+      - scripts/a9_10_attachment_ingestion_patch.py
+      - .github/workflows/a9-10-attachment-ingestion-implementation.yml
+
+permissions:
+  contents: write
+  pull-requests: write
+
+jobs:
+  implement:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout isolated feature branch
+        uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803
+        with:
+          ref: agent/krc-media-transcript
+          fetch-depth: 0
+
+      - name: Set up Node.js
+        uses: actions/setup-node@249970729cb0ef3589644e2896645e5dc5ba9c38
+        with:
+          node-version: "24"
+          cache: npm
+          cache-dependency-path: src/cloud/package-lock.json
+
+      - name: Apply A9.10 attachment ingestion patch
+        id: patch
+        continue-on-error: true
+        shell: bash
+        run: |
+          set +e
+          python scripts/a9_10_attachment_ingestion_patch.py > /tmp/a9-10-ingestion-patch.log 2>&1
+          code=$?
+          cat /tmp/a9-10-ingestion-patch.log
+          exit $code
+
+      - name: Build and test cloud service
+        id: test
+        if: steps.patch.outcome == 'success'
+        continue-on-error: true
+        working-directory: src/cloud
+        shell: bash
+        run: |
+          set +e
+          npm ci > /tmp/a9-10-ingestion-test.log 2>&1
+          code=$?
+          if [[ $code -eq 0 ]]; then
+            npm run check >> /tmp/a9-10-ingestion-test.log 2>&1
+            code=$?
+          fi
+          cat /tmp/a9-10-ingestion-test.log
+          exit $code
+
+      - name: Commit managed local attachment ingestion
+        id: commit
+        if: steps.patch.outcome == 'success' && steps.test.outcome == 'success'
+        shell: bash
+        run: |
+          set -euo pipefail
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git add \
+            src/cloud/src/attachment_managed_pipeline.ts \
+            src/cloud/src/managed_media_service.ts \
+            src/cloud/src/managed_media_http.ts \
+            src/cloud/tests/managed_attachment_ingestion.test.ts \
+            src/cloud/tests/managed_media_attachment_http.test.ts
+          git diff --cached --check
+          git commit -m "A9.10 implement managed local attachment transcription"
+          git push origin HEAD:agent/krc-media-transcript
+          echo "sha=$(git rev-parse HEAD)" >> "$GITHUB_OUTPUT"
+
+      - name: Report result
+        if: always()
+        env:
+          GH_TOKEN: ${{ github.token }}
+          PATCH_SHA: ${{ steps.commit.outputs.sha }}
+          PATCH_OUTCOME: ${{ steps.patch.outcome }}
+          TEST_OUTCOME: ${{ steps.test.outcome }}
+        shell: bash
+        run: |
+          set -euo pipefail
+          if [[ "$PATCH_OUTCOME" == "success" && "$TEST_OUTCOME" == "success" && -n "${PATCH_SHA:-}" ]]; then
+            gh pr comment 28 --repo kolemasakar/VoiceBridge --body "A9.10 managed local attachment ingestion: **CODE PASS**. Commit: \`${PATCH_SHA}\`. Full trusted OpenAI attachment download -> ffmpeg normalization -> AssemblyAI -> durable KRCM is implemented on the isolated feature branch with 32 MiB media cap, configured duration cap, zero retrieval credits, duplicate-job reuse, and temporary/provider cleanup. Cloud build/tests passed. No production or main change was performed."
+          else
+            if [[ "$PATCH_OUTCOME" != "success" ]]; then
+              diag="$(tail -n 50 /tmp/a9-10-ingestion-patch.log 2>/dev/null || true)"
+              phase="patch"
+            else
+              diag="$(tail -n 80 /tmp/a9-10-ingestion-test.log 2>/dev/null || true)"
+              phase="test"
+            fi
+            [[ ${#diag} -le 6000 ]] || diag="${diag:0:6000}"
+            body=$(printf 'A9.10 managed local attachment ingestion: **FAIL** at `%s`. Safe diagnostic:\n```text\n%s\n```\nNo production or main change was performed.' "$phase" "$diag")
+            gh pr comment 28 --repo kolemasakar/VoiceBridge --body "$body"
+            exit 1
+          fi
