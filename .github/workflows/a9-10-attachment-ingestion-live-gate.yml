@@ -1,0 +1,198 @@
+name: A9.10 Attachment Ingestion Live Gate
+
+on:
+  workflow_dispatch:
+  push:
+    branches:
+      - agent/krc-media-transcript
+    paths:
+      - .github/workflows/a9-10-attachment-ingestion-live-gate.yml
+
+permissions:
+  contents: read
+
+concurrency:
+  group: a9-10-attachment-ingestion-live-gate
+  cancel-in-progress: false
+
+env:
+  RENDER_API_BASE: https://api.render.com/v1
+  SERVICE_ID: srv-da1kic5bedkc73d6fk60
+  SERVICE_NAME: voicebridge-krc-media-beta-kolemasakar
+  REQUIRED_BRANCH: agent/krc-media-transcript
+  BASE_URL: https://voicebridge-krc-media-beta-kolemasakar.onrender.com
+
+jobs:
+  live-gate:
+    runs-on: ubuntu-latest
+    timeout-minutes: 35
+    env:
+      RENDER_API_KEY: ${{ secrets.RENDER_API_KEY }}
+    steps:
+      - name: Checkout isolated feature branch
+        uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803
+        with:
+          ref: agent/krc-media-transcript
+          fetch-depth: 0
+
+      - name: Set up Node.js
+        uses: actions/setup-node@249970729cb0ef3589644e2896645e5dc5ba9c38
+        with:
+          node-version: "24"
+          cache: npm
+          cache-dependency-path: src/cloud/package-lock.json
+
+      - name: Validate full attachment ingestion before any deploy
+        working-directory: src/cloud
+        shell: bash
+        run: |
+          set -euo pipefail
+          npm ci
+          npm run check
+          grep -Fq 'MANAGED_ATTACHMENT_MAX_BYTES = 32 * 1024 * 1024' src/attachment_managed_pipeline.ts
+          grep -Fq 'OPENAI_FILE_HOST_SUFFIX = ".oaiusercontent.com"' src/attachment_managed_pipeline.ts
+          grep -Fq 'redirect: "manual"' src/attachment_managed_pipeline.ts
+          grep -Fq 'ffmpeg' src/attachment_managed_pipeline.ts
+          grep -Fq 'ffprobe' src/attachment_managed_pipeline.ts
+          grep -Fq 'provider_mode: "attachment_upload_stt"' src/managed_media_service.ts
+          grep -Fq 'retrieval_provider: "openai_attachment"' src/managed_media_service.ts
+          grep -Fq 'const ATTACHMENT = `${ROOT}/attachment`' src/managed_media_http.ts
+          grep -Fq 'local_attachment_retrieval_provider: "openai_attachment"' src/managed_media_http.ts
+          echo "A9.10 full local validation: PASS"
+
+      - name: Verify isolated Render identity and branch
+        shell: bash
+        run: |
+          set -euo pipefail
+          test -n "${RENDER_API_KEY:-}" || { echo "RENDER_API_KEY missing" >&2; exit 1; }
+          tmp="$(mktemp)"
+          code="$(curl -sS -o "$tmp" -w '%{http_code}' \
+            "${RENDER_API_BASE}/services/${SERVICE_ID}" \
+            -H 'Accept: application/json' \
+            -H "Authorization: Bearer ${RENDER_API_KEY}")"
+          [[ "$code" == 200 ]] || { echo "Render service lookup failed HTTP $code" >&2; rm -f "$tmp"; exit 1; }
+          name="$(jq -r '.name // empty' "$tmp")"
+          branch="$(jq -r '.branch // empty' "$tmp")"
+          rm -f "$tmp"
+          [[ "$name" == "$SERVICE_NAME" ]] || { echo "Unexpected Render service: $name" >&2; exit 1; }
+          [[ "$branch" == "$REQUIRED_BRANCH" ]] || { echo "Unexpected Render branch: $branch" >&2; exit 1; }
+          [[ "$GITHUB_REF_NAME" == "$REQUIRED_BRANCH" ]] || { echo "Workflow ref is not isolated feature branch" >&2; exit 1; }
+          echo "Isolation boundary: PASS / service=$name / branch=$branch"
+
+      - name: Deploy exact validated commit to isolated beta
+        id: deploy
+        shell: bash
+        run: |
+          set -euo pipefail
+          payload="$(jq -nc --arg commitId "$GITHUB_SHA" '{commitId:$commitId,clearCache:"do_not_clear"}')"
+          tmp="$(mktemp)"
+          code="$(curl -sS -o "$tmp" -w '%{http_code}' \
+            -X POST "${RENDER_API_BASE}/services/${SERVICE_ID}/deploys" \
+            -H 'Accept: application/json' \
+            -H 'Content-Type: application/json' \
+            -H "Authorization: Bearer ${RENDER_API_KEY}" \
+            --data "$payload")"
+          [[ "$code" == 201 || "$code" == 202 ]] || {
+            echo "Render deploy request failed HTTP $code" >&2
+            rm -f "$tmp"
+            exit 1
+          }
+          deploy_id="$(jq -r '(.deploy // .).id // empty' "$tmp")"
+          rm -f "$tmp"
+          test -n "$deploy_id" || { echo "Render deploy ID missing" >&2; exit 1; }
+          echo "deploy_id=$deploy_id" >> "$GITHUB_OUTPUT"
+          echo "Isolated deploy requested: $deploy_id / commit=$GITHUB_SHA"
+
+      - name: Wait for exact commit to become live
+        env:
+          DEPLOY_ID: ${{ steps.deploy.outputs.deploy_id }}
+        shell: bash
+        run: |
+          set -euo pipefail
+          for i in $(seq 1 60); do
+            tmp="$(mktemp)"
+            code="$(curl -sS -o "$tmp" -w '%{http_code}' \
+              "${RENDER_API_BASE}/services/${SERVICE_ID}/deploys/${DEPLOY_ID}" \
+              -H 'Accept: application/json' \
+              -H "Authorization: Bearer ${RENDER_API_KEY}")"
+            [[ "$code" == 200 ]] || { rm -f "$tmp"; echo "Deploy status lookup failed HTTP $code" >&2; exit 1; }
+            status="$(jq -r '(.deploy // .).status // "unknown"' "$tmp")"
+            commit="$(jq -r '(.deploy // .).commit.id // (.deploy // .).commitId // "unknown"' "$tmp")"
+            rm -f "$tmp"
+            case "$status" in
+              live)
+                [[ "$commit" == "$GITHUB_SHA" ]] || { echo "Live deploy commit mismatch: $commit" >&2; exit 1; }
+                echo "Isolated deploy live: $DEPLOY_ID / commit=$commit"
+                exit 0
+                ;;
+              build_failed|update_failed|canceled|deactivated)
+                echo "Isolated deploy failed: $status" >&2
+                exit 1
+                ;;
+            esac
+            sleep 10
+          done
+          echo "Timed out waiting for A9.10 isolated deploy." >&2
+          exit 1
+
+      - name: Load masked Action bearer from isolated service
+        shell: bash
+        run: |
+          set -euo pipefail
+          tmp="$(mktemp)"
+          code="$(curl -sS -o "$tmp" -w '%{http_code}' \
+            "${RENDER_API_BASE}/services/${SERVICE_ID}/env-vars/KRC_MEDIA_ACTION_TOKEN" \
+            -H 'Accept: application/json' \
+            -H "Authorization: Bearer ${RENDER_API_KEY}")"
+          [[ "$code" == 200 ]] || { echo "Action token lookup failed HTTP $code" >&2; rm -f "$tmp"; exit 1; }
+          action_token="$(jq -r '(.envVar.value // .value // empty)' "$tmp")"
+          rm -f "$tmp"
+          test -n "$action_token" || { echo "KRC_MEDIA_ACTION_TOKEN missing" >&2; exit 1; }
+          echo "::add-mask::$action_token"
+          printf '%s' "$action_token" > /tmp/krc-media-action-token
+          echo "Masked Action bearer: READY"
+
+      - name: Verify attachment capability and safe HTTP boundary
+        shell: bash
+        run: |
+          set -euo pipefail
+          action_token="$(cat /tmp/krc-media-action-token)"
+          health_code="$(curl -sS --retry 8 --retry-delay 5 --max-time 120 \
+            -o /tmp/health.json -w '%{http_code}' "${BASE_URL}/api/v1/health")"
+          [[ "$health_code" == 200 ]] || { echo "Health failed HTTP $health_code" >&2; exit 1; }
+
+          capability_code="$(curl -sS --max-time 60 -o /tmp/capability.json -w '%{http_code}' \
+            "${BASE_URL}/api/v1/media/managed" \
+            -H "Authorization: Bearer ${action_token}" -H 'Accept: application/json')"
+          [[ "$capability_code" == 200 ]] || { echo "Managed capability failed HTTP $capability_code" >&2; exit 1; }
+          jq -e '.configured == true' /tmp/capability.json >/dev/null
+          jq -e '.local_attachment_transport == true' /tmp/capability.json >/dev/null
+          jq -e '.local_attachment_transcription == true' /tmp/capability.json >/dev/null
+          jq -e '.local_attachment_provider == "assemblyai"' /tmp/capability.json >/dev/null
+          jq -e '.local_attachment_retrieval_provider == "openai_attachment"' /tmp/capability.json >/dev/null
+          jq -e '.local_attachment_max_bytes == 33554432' /tmp/capability.json >/dev/null
+
+          payload='{"openaiFileIdRefs":["file-placeholder"],"language_hint":"auto"}'
+          unauth_code="$(curl -sS --max-time 60 -o /tmp/attachment-unauth.json -w '%{http_code}' \
+            -X POST "${BASE_URL}/api/v1/media/managed/attachment" \
+            -H 'Content-Type: application/json' -H 'Accept: application/json' \
+            --data "$payload")"
+          [[ "$unauth_code" == 401 ]] || {
+            echo "Attachment unauthenticated boundary expected 401, got $unauth_code" >&2
+            cat /tmp/attachment-unauth.json >&2 || true
+            exit 1
+          }
+
+          auth_code="$(curl -sS --max-time 60 -o /tmp/attachment-placeholder.json -w '%{http_code}' \
+            -X POST "${BASE_URL}/api/v1/media/managed/attachment" \
+            -H "Authorization: Bearer ${action_token}" \
+            -H 'Content-Type: application/json' -H 'Accept: application/json' \
+            --data "$payload")"
+          [[ "$auth_code" == 400 ]] || {
+            echo "Attachment placeholder boundary expected 400, got $auth_code" >&2
+            cat /tmp/attachment-placeholder.json >&2 || true
+            exit 1
+          }
+          jq -e '.error.code == "INVALID_REQUEST"' /tmp/attachment-placeholder.json >/dev/null
+          echo "A9.10 full attachment endpoint live boundary: PASS"
+          echo "No real file, AssemblyAI request, retrieval credit, or STT operation was invoked by this gate."
