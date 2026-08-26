@@ -1,0 +1,91 @@
+name: A9.7-I Facebook Cobalt Current Diagnostic
+
+on:
+  push:
+    branches:
+      - agent/krc-media-transcript
+    paths:
+      - .github/workflows/a9-7-i-facebook-cobalt-current-diagnostic.yml
+
+permissions:
+  contents: read
+
+concurrency:
+  group: a9-7-i-facebook-cobalt-current-diagnostic
+  cancel-in-progress: false
+
+jobs:
+  diagnostic:
+    runs-on: ubuntu-latest
+    env:
+      RENDER_API_KEY: ${{ secrets.RENDER_API_KEY }}
+      RENDER_API_BASE: https://api.render.com/v1
+      VOICEBRIDGE_SERVICE_ID: srv-da1kic5bedkc73d6fk60
+      BASE_URL: https://voicebridge-krc-media-beta-kolemasakar.onrender.com
+      TARGET_URL: https://www.facebook.com/reel/1114235920664408/
+    steps:
+      - name: Probe direct Cobalt and one fresh free VoiceBridge start
+        shell: bash
+        run: |
+          set -euo pipefail
+          test -n "${RENDER_API_KEY:-}"
+          echo "::add-mask::$RENDER_API_KEY"
+
+          read_env() {
+            local key="$1"
+            curl -fsS "${RENDER_API_BASE}/services/${VOICEBRIDGE_SERVICE_ID}/env-vars/${key}" \
+              -H 'Accept: application/json' \
+              -H "Authorization: Bearer ${RENDER_API_KEY}" \
+              | jq -r '(.envVar.value // .value // empty)'
+          }
+
+          ACTION_TOKEN="$(read_env KRC_MEDIA_ACTION_TOKEN)"
+          COBALT_ENDPOINT="$(read_env KRC_MEDIA_COBALT_ENDPOINT)"
+          COBALT_KEY="$(read_env KRC_MEDIA_COBALT_API_KEY)"
+          test -n "$ACTION_TOKEN"
+          test -n "$COBALT_ENDPOINT"
+          test -n "$COBALT_KEY"
+          echo "::add-mask::$ACTION_TOKEN"
+          echo "::add-mask::$COBALT_KEY"
+
+          cobalt_http="$(curl -sS --max-time 120 -o /tmp/cobalt.json -w '%{http_code}' \
+            -X POST "${COBALT_ENDPOINT%/}/" \
+            -H "Api-Key: ${COBALT_KEY}" \
+            -H 'Content-Type: application/json' \
+            -H 'Accept: application/json' \
+            --data "$(jq -nc --arg url "$TARGET_URL" '{url:$url,downloadMode:"auto",videoQuality:"720",disableMetadata:true}')")"
+          cobalt_status="$(jq -r '.status // empty' /tmp/cobalt.json 2>/dev/null || true)"
+          cobalt_error="$(jq -r '.error.code // .error // .text // empty' /tmp/cobalt.json 2>/dev/null || true)"
+          printf 'direct_cobalt_http=%s\n' "$cobalt_http"
+          printf 'direct_cobalt_status=%s\n' "${cobalt_status:-none}"
+          printf 'direct_cobalt_error=%s\n' "${cobalt_error:-none}" | cut -c1-240
+
+          # language_hint=uk deliberately creates a request key distinct from the owner Builder auto-language test.
+          vb_http="$(curl -sS --max-time 600 -o /tmp/vb.json -w '%{http_code}' \
+            -X POST "${BASE_URL}/api/v1/media/managed/facebook-fallback" \
+            -H "Authorization: Bearer ${ACTION_TOKEN}" \
+            -H 'Content-Type: application/json' \
+            -H 'Accept: application/json' \
+            --data "$(jq -nc --arg url "$TARGET_URL" '{url:$url,language_hint:"uk"}')")"
+
+          printf 'voicebridge_http=%s\n' "$vb_http"
+          jq -r '[
+            "status=" + (.status // "none"),
+            "provider=" + (.provider // "none"),
+            "provider_mode=" + (.provider_mode // "none"),
+            "retrieval_provider=" + (.retrieval_provider // "none"),
+            "retrieval_credits=" + ((.retrieval_credits_charged // 0)|tostring),
+            "stt_seconds=" + ((.stt_seconds_charged // 0)|tostring),
+            "segments=" + ((.segment_count // 0)|tostring),
+            "transcript_chars=" + ((.transcript_characters // 0)|tostring),
+            "free_error=" + (.free_retrieval_error_code // "none"),
+            "free_provider=" + (.free_retrieval_provider // "none"),
+            "free_http_class=" + (.free_retrieval_http_status_class // "none"),
+            "terminal_error=" + (.error.code // "none"),
+            "reused=" + ((.reused // false)|tostring)
+          ] | .[]' /tmp/vb.json
+
+          test "$vb_http" = 200
+          test "$(jq -r '.retrieval_credits_charged // 0' /tmp/vb.json)" = 0
+
+          # This diagnostic never calls the paid continuation endpoint or any paid provider.
