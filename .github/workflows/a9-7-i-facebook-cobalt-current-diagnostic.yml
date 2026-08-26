@@ -24,7 +24,7 @@ jobs:
       BASE_URL: https://voicebridge-krc-media-beta-kolemasakar.onrender.com
       TARGET_URL: https://www.facebook.com/reel/1114235920664408/
     steps:
-      - name: Probe direct Cobalt and one fresh free VoiceBridge start
+      - name: Probe direct Cobalt and owner-equivalent auto VoiceBridge start
         shell: bash
         run: |
           set -euo pipefail
@@ -50,7 +50,7 @@ jobs:
 
           cobalt_http="$(curl -sS --max-time 120 -o /tmp/cobalt.json -w '%{http_code}' \
             -X POST "${COBALT_ENDPOINT%/}/" \
-            -H "Api-Key: ${COBALT_KEY}" \
+            -H "Authorization: Api-Key ${COBALT_KEY}" \
             -H 'Content-Type: application/json' \
             -H 'Accept: application/json' \
             --data "$(jq -nc --arg url "$TARGET_URL" '{url:$url,downloadMode:"auto",videoQuality:"720",disableMetadata:true}')")"
@@ -60,13 +60,13 @@ jobs:
           printf 'direct_cobalt_status=%s\n' "${cobalt_status:-none}"
           printf 'direct_cobalt_error=%s\n' "${cobalt_error:-none}" | cut -c1-240
 
-          # language_hint=uk deliberately creates a request key distinct from the owner Builder auto-language test.
+          # auto matches the normal private-GPT request key and exposes stale durable reuse if present.
           vb_http="$(curl -sS --max-time 600 -o /tmp/vb.json -w '%{http_code}' \
             -X POST "${BASE_URL}/api/v1/media/managed/facebook-fallback" \
             -H "Authorization: Bearer ${ACTION_TOKEN}" \
             -H 'Content-Type: application/json' \
             -H 'Accept: application/json' \
-            --data "$(jq -nc --arg url "$TARGET_URL" '{url:$url,language_hint:"uk"}')")"
+            --data "$(jq -nc --arg url "$TARGET_URL" '{url:$url,language_hint:"auto"}')")"
 
           printf 'voicebridge_http=%s\n' "$vb_http"
           jq -r '[
