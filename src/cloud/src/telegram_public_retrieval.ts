@@ -89,7 +89,8 @@ function safeTelegramMediaUrl(value: string): string | null {
   }
   if (parsed.protocol !== "https:") return null;
   const host = parsed.hostname.toLowerCase();
-  const trustedHost = host === "cdn.telesco.pe" ||
+  const trustedHost = host === "telesco.pe" ||
+    host.endsWith(".telesco.pe") ||
     host === "cdn-telegram.org" ||
     host.endsWith(".cdn-telegram.org");
   if (!trustedHost) return null;
