@@ -21,8 +21,8 @@ env:
   SERVICE_NAME: voicebridge-krc-media-beta-kolemasakar
   REQUIRED_BRANCH: agent/krc-media-transcript
   BASE_URL: https://voicebridge-krc-media-beta-kolemasakar.onrender.com
-  TARGET_URL: https://t.me/techcrimes/12101
-  REQUIRED_FEATURE_SHA: 4c985b10c946d6f89d1045cd01fabb7048db8931
+  TARGET_URL: https://t.me/techcrimes/12107
+  REQUIRED_FEATURE_SHA: c58210761a58c36ddef16cd120737fea034ae119
 
 jobs:
   live-acceptance:
@@ -259,4 +259,4 @@ jobs:
         shell: bash
         run: |
           set -euo pipefail
-          gh pr comment 28 --repo kolemasakar/VoiceBridge --body "A9.9 Telegram isolated live acceptance: **${WORKFLOW_STATUS^^}**. Workflow run: \`${GITHUB_RUN_ID}\`; deployed commit: \`${GITHUB_SHA}\`; Render deploy: \`${DEPLOY_ID:-not-created}\`; KRCM job: \`${TELEGRAM_JOB_ID:-not-created}\`. Target: public Telegram post \`techcrimes/12101\`. Retrieval path has zero retrieval credits and no paid fallback. Only isolated MEDIA BETA was deployed/tested; production and main were not changed."
+          gh pr comment 28 --repo kolemasakar/VoiceBridge --body "A9.9 Telegram isolated live acceptance: **${WORKFLOW_STATUS^^}**. Workflow run: \`${GITHUB_RUN_ID}\`; deployed commit: \`${GITHUB_SHA}\`; Render deploy: \`${DEPLOY_ID:-not-created}\`; KRCM job: \`${TELEGRAM_JOB_ID:-not-created}\`. Target: \`${TARGET_URL}\`. Retrieval path has zero retrieval credits and no paid fallback. Only isolated MEDIA BETA was deployed/tested; production and main were not changed."
