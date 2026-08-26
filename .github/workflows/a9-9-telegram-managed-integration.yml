@@ -36,6 +36,10 @@ jobs:
           set +e
           python scripts/a9_9_telegram_integration_patch.py > /tmp/a9-9-patch.log 2>&1
           code=$?
+          if [[ $code -eq 0 ]]; then
+            python scripts/a9_9_telegram_integration_regression_fix.py >> /tmp/a9-9-patch.log 2>&1
+            code=$?
+          fi
           cat /tmp/a9-9-patch.log
           exit $code
 
@@ -68,6 +72,7 @@ jobs:
             src/cloud/src/managed_media_service.ts \
             src/cloud/src/managed_media_http.ts \
             src/cloud/src/telegram_public_retrieval.ts \
+            src/cloud/tests/managed_media_instagram.test.ts \
             src/cloud/tests/managed_media_telegram.test.ts \
             src/cloud/tests/managed_media_telegram_http.test.ts
           git diff --cached --check
