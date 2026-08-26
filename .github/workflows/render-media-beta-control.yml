@@ -139,15 +139,18 @@ jobs:
             exit 1
           fi
 
-          jq -r '
-            if length == 0 then
-              "Latest deploy: none"
-            else
-              (.[0].deploy // .[0]) as $d
-              | "Latest deploy ID: \($d.id // \"unknown\")\nLatest deploy status: \($d.status // \"unknown\")\nLatest deploy commit: \($d.commit.id // $d.commitId // \"unknown\")"
-            end
-          ' "$response_file"
+          deploy_id="$(jq -r 'if length == 0 then "" else ((.[0].deploy // .[0]).id // "") end' "$response_file")"
+          deploy_status="$(jq -r 'if length == 0 then "none" else ((.[0].deploy // .[0]).status // "unknown") end' "$response_file")"
+          deploy_commit="$(jq -r 'if length == 0 then "unknown" else ((.[0].deploy // .[0]).commit.id // (.[0].deploy // .[0]).commitId // "unknown") end' "$response_file")"
           rm -f "$response_file"
+
+          if [[ -z "$deploy_id" ]]; then
+            echo "Latest deploy: none"
+          else
+            echo "Latest deploy ID: $deploy_id"
+            echo "Latest deploy status: $deploy_status"
+            echo "Latest deploy commit: $deploy_commit"
+          fi
 
       - name: Enforce mutation isolation boundary
         if: steps.operation.outputs.value == 'restart' || steps.operation.outputs.value == 'deploy'
@@ -226,7 +229,7 @@ jobs:
           fi
 
           deploy_id="$(jq -r '(.deploy // .).id // empty' "$response_file")"
-          deploy_status="$(jq -r '(.deploy // .).status // \"queued\"' "$response_file")"
+          deploy_status="$(jq -r '(.deploy // .).status // "queued"' "$response_file")"
           rm -f "$response_file"
 
           echo "Deploy request accepted."
@@ -248,4 +251,4 @@ jobs:
             echo "Health endpoint is not ready yet; this is expected during restart/deploy replacement."
           fi
 
-# A9.9 isolated Telegram runtime inspection trigger: 2026-08-26
+# A9.9 isolated Telegram runtime inspection trigger: 2026-08-26, jq-fixed
