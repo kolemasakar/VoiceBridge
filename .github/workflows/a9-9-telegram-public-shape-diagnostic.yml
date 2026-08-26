@@ -1,0 +1,82 @@
+name: A9.9 Telegram Public Shape Diagnostic
+
+on:
+  push:
+    branches:
+      - agent/krc-media-transcript
+    paths:
+      - .github/workflows/a9-9-telegram-public-shape-diagnostic.yml
+
+permissions:
+  contents: read
+
+jobs:
+  diagnostic:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Inspect safe Telegram embed shape
+        shell: bash
+        run: |
+          set -euo pipefail
+          python - <<'PY'
+          import re
+          import urllib.request
+          from urllib.parse import urlparse
+
+          targets = [
+              "https://t.me/techcrimes/12101",
+              "https://t.me/TelegramTips/310",
+              "https://t.me/TelegramTips/308",
+              "https://t.me/TelegramTips/300",
+          ]
+
+          for source in targets:
+              embed = source + "?embed=1&single=1"
+              req = urllib.request.Request(
+                  embed,
+                  headers={
+                      "Accept": "text/html,application/xhtml+xml",
+                      "User-Agent": "VoiceBridge-KRC-Media-Beta/1.0",
+                  },
+              )
+              try:
+                  with urllib.request.urlopen(req, timeout=20) as response:
+                      html = response.read(2 * 1024 * 1024).decode("utf-8", "replace")
+                      final = response.geturl()
+                      status = response.status
+              except Exception as exc:
+                  print(f"target={source} fetch_error={type(exc).__name__}")
+                  continue
+
+              channel, post_id = source.rstrip("/").split("/")[-2:]
+              expected = f'{channel}/{post_id}'
+              data_posts = re.findall(r'data-post=[\"\']([^\"\']+)[\"\']', html, re.I)
+              video_player = len(re.findall(r'tgme_widget_message_video_player', html, re.I))
+              video_tags = re.findall(r'<video\b([^>]*)>', html, re.I)
+              srcs = []
+              for attrs in video_tags:
+                  match = re.search(r'\bsrc\s*=\s*([\"\'])(.*?)\1', attrs, re.I)
+                  if match:
+                      srcs.append(match.group(2))
+              trusted_mp4 = []
+              for src in srcs:
+                  try:
+                      parsed = urlparse(src.replace('&amp;', '&'))
+                      host = (parsed.hostname or '').lower()
+                      trusted = host == 'cdn.telesco.pe' or host == 'cdn-telegram.org' or host.endswith('.cdn-telegram.org')
+                      if parsed.scheme == 'https' and trusted and parsed.path.lower().endswith('.mp4'):
+                          trusted_mp4.append((host, parsed.path[-24:]))
+                  except Exception:
+                      pass
+              print(
+                  "target=" + source,
+                  "http=" + str(status),
+                  "final_host=" + (urlparse(final).hostname or ""),
+                  "bytes=" + str(len(html.encode('utf-8'))),
+                  "exact_data_post=" + str(expected in data_posts).lower(),
+                  "video_player_class=" + str(video_player),
+                  "video_tags=" + str(len(video_tags)),
+                  "video_srcs=" + str(len(srcs)),
+                  "trusted_mp4=" + str(len(trusted_mp4)),
+              )
+          PY
