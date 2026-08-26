@@ -2,7 +2,7 @@ import { MediaTranscriptError } from "./media_transcript.js";
 
 export const MANAGED_ATTACHMENT_PROBE_MAX_BYTES = 64 * 1024;
 const ATTACHMENT_PROBE_TIMEOUT_MS = 8000;
-const OPENAI_FILE_HOST = "files.oaiusercontent.com";
+const OPENAI_FILE_HOST_SUFFIX = ".oaiusercontent.com";
 
 export type ManagedAttachmentClass = "audio" | "video";
 
@@ -133,12 +133,23 @@ function validateDeclaredFile(ref: OpenAiConversationFileRef): ManagedAttachment
   return fileClass;
 }
 
+function isAllowedOpenAiFileHost(hostname: string): boolean {
+  const host = hostname.toLowerCase();
+  return host.length > OPENAI_FILE_HOST_SUFFIX.length && host.endsWith(OPENAI_FILE_HOST_SUFFIX);
+}
+
+function hasSafeOpaquePath(pathname: string): boolean {
+  return pathname.startsWith("/") && pathname.length > 1 && pathname.length <= 4096;
+}
+
 function rejectedUrlShape(url: URL): string {
   const observedHost = url.hostname.toLowerCase() || "none";
-  const hostOk = observedHost === OPENAI_FILE_HOST;
+  const hostOk = isAllowedOpenAiFileHost(observedHost);
   const pathShape = /^\/file-[A-Za-z0-9_-]+/.test(url.pathname)
     ? "file-id"
-    : "other";
+    : hasSafeOpaquePath(url.pathname)
+      ? "opaque"
+      : "other";
   return `observed_host=${observedHost}; host_ok=${hostOk}; path_shape=${pathShape}`;
 }
 
@@ -157,11 +168,12 @@ function validateDownloadUrl(value: string): URL {
 
   if (
     url.protocol !== "https:" ||
-    url.hostname.toLowerCase() !== OPENAI_FILE_HOST ||
+    !isAllowedOpenAiFileHost(url.hostname) ||
     Boolean(url.username) ||
     Boolean(url.password) ||
     Boolean(url.port) ||
-    !/^\/file-[A-Za-z0-9_-]+/.test(url.pathname)
+    Boolean(url.hash) ||
+    !hasSafeOpaquePath(url.pathname)
   ) {
     throw new MediaTranscriptError(
       "ATTACHMENT_DOWNLOAD_URL_REJECTED",
