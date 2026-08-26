@@ -24,6 +24,7 @@ import {
   isManagedFacebookFreeRetrievalFailure,
   type ManagedFacebookPipeline
 } from "./facebook_managed_pipeline.js";
+import type { ManagedTelegramPipeline } from "./telegram_managed_pipeline.js";
 import {
   INSTAGRAM_REEL_GENERATE_MAX_CREDITS,
   SupadataProvider,
@@ -151,7 +152,11 @@ export interface ManagedMediaJobView {
   source_url: string;
   language_hint: MediaLanguageHint;
   provider: "supadata" | "assemblyai";
-  provider_mode: "native" | "generate" | "facebook_retrieval_stt";
+  provider_mode:
+    | "native"
+    | "generate"
+    | "facebook_retrieval_stt"
+    | "telegram_public_retrieval_stt";
   detected_language: string | null;
   available_languages: string[];
   credits_charged: number;
@@ -164,7 +169,7 @@ export interface ManagedMediaJobView {
   media_duration_seconds?: number | null;
   ai_credit_ceiling?: number | null;
   metadata_credits_charged?: number;
-  retrieval_provider?: "cobalt" | "scrapecreators" | null;
+  retrieval_provider?: "cobalt" | "scrapecreators" | "telegram_public_web" | null;
   free_retrieval_error_code?: string | null;
   free_retrieval_provider?: FacebookMediaRetrievalProvider | null;
   free_retrieval_http_status_class?: FacebookRetrievalHttpStatusClass;
@@ -231,6 +236,7 @@ export interface ManagedMediaServiceOptions {
   store?: ManagedMediaJobStore;
   jobTtlSeconds?: number;
   facebookPipeline?: ManagedFacebookPipeline;
+  telegramPipeline?: ManagedTelegramPipeline;
 }
 
 function cloneRecord(record: ManagedMediaStoredRecord): ManagedMediaStoredRecord {
@@ -340,6 +346,19 @@ export function managedFacebookFallbackRequestKey(
   return createHash("sha256")
     .update(
       `facebook-retrieval-stt|${normalizedUrl}|${languageHint}|${managedMediaAccessDigest(accessCode)}`,
+      "utf8"
+    )
+    .digest("hex");
+}
+
+export function managedTelegramRequestKey(
+  normalizedUrl: string,
+  languageHint: MediaLanguageHint,
+  accessCode: string
+): string {
+  return createHash("sha256")
+    .update(
+      `telegram-public-retrieval-stt|${normalizedUrl}|${languageHint}|${managedMediaAccessDigest(accessCode)}`,
       "utf8"
     )
     .digest("hex");
@@ -481,6 +500,7 @@ export class ManagedMediaService {
   readonly storeKind: "memory" | "postgres";
   private readonly transcriptProvider: ManagedNativeTranscriptProvider | null;
   private readonly facebookPipeline: ManagedFacebookPipeline | null;
+  private readonly telegramPipeline: ManagedTelegramPipeline | null;
   private readonly store: ManagedMediaJobStore;
   private readonly jobTtlSeconds: number;
   private readonly inFlight = new Set<string>();
@@ -495,12 +515,15 @@ export class ManagedMediaService {
     this.transcriptProvider = provider ||
       (supadataApiKey ? new SupadataProvider(supadataApiKey) : null);
     this.facebookPipeline = options.facebookPipeline ?? null;
+    this.telegramPipeline = options.telegramPipeline ?? null;
     this.store = options.store || new ManagedMediaMemoryStore();
     this.jobTtlSeconds = options.jobTtlSeconds ?? 3600;
     this.durableStore = this.store.durable;
     this.storeKind = this.store.kind;
     this.configured = betaGate.configured && Boolean(
-      this.transcriptProvider !== null || this.facebookPipeline?.configured
+      this.transcriptProvider !== null ||
+      this.facebookPipeline?.configured ||
+      this.telegramPipeline?.configured
     );
   }
 
@@ -533,6 +556,18 @@ export class ManagedMediaService {
       throw new MediaTranscriptError(
         "FACEBOOK_MANAGED_PIPELINE_NOT_CONFIGURED",
         "The managed Facebook retrieval and STT fallback is not configured.",
+        503,
+        false
+      );
+    }
+  }
+
+  private authorizeTelegramPipeline(accessCode: string): void {
+    this.authorizeAccess(accessCode);
+    if (!this.telegramPipeline?.configured) {
+      throw new MediaTranscriptError(
+        "TELEGRAM_MANAGED_PIPELINE_NOT_CONFIGURED",
+        "The managed Telegram public retrieval and STT path is not configured.",
         503,
         false
       );
@@ -981,6 +1016,153 @@ export class ManagedMediaService {
     };
   }
 
+
+  async startTelegram(
+    input: ManagedMediaPreflightInput
+  ): Promise<ManagedMediaJobView> {
+    this.authorizeTelegramPipeline(input.beta_access_code);
+    await this.ensureStore();
+    const sourceUrl = normalizeManagedMediaUrl(input.url);
+    if (managedMediaPlatform(sourceUrl) !== "telegram") {
+      throw new MediaTranscriptError(
+        "TELEGRAM_MEDIA_URL_REQUIRED",
+        "The managed Telegram path accepts only public Telegram post URLs.",
+        422,
+        false
+      );
+    }
+    const requestKey = managedTelegramRequestKey(
+      sourceUrl,
+      input.language_hint,
+      input.beta_access_code
+    );
+    const existing = await this.reusableRecord(requestKey);
+    if (existing) return this.publicJob(existing.job, true);
+
+    const now = new Date().toISOString();
+    const job: ManagedMediaJobView = {
+      job_id: `KRCM_${randomUUID()}`,
+      status: "PROCESSING",
+      created_at: now,
+      updated_at: now,
+      source_url: sourceUrl,
+      language_hint: input.language_hint,
+      provider: "assemblyai",
+      provider_mode: "telegram_public_retrieval_stt",
+      detected_language: null,
+      available_languages: [],
+      credits_charged: 0,
+      credits_remaining_estimate: 0,
+      credit_charge_uncertain: false,
+      reused: false,
+      segment_count: 0,
+      transcript_characters: 0,
+      ai_fallback_requires_new_consent: false,
+      media_duration_seconds: null,
+      ai_credit_ceiling: null,
+      metadata_credits_charged: 0,
+      retrieval_provider: "telegram_public_web",
+      retrieval_credits_charged: 0,
+      stt_seconds_charged: 0,
+      provider_data_deleted: null,
+      language_confidence: null,
+      error: null
+    };
+    const record: ManagedMediaStoredRecord = {
+      job,
+      requestKey,
+      accessCodeDigest: managedMediaAccessDigest(input.beta_access_code),
+      segments: [],
+      expiresAt: this.expiryFrom(now, job)
+    };
+    const reservation = await this.store.reserve(record);
+    if (!reservation.created) {
+      const resolved = reservation.record.job.status === "PROCESSING" &&
+        !this.inFlight.has(requestKey)
+        ? await this.interruptedRecord(reservation.record)
+        : reservation.record;
+      return this.publicJob(resolved.job, true);
+    }
+
+    this.inFlight.add(requestKey);
+    try {
+      const asset = await this.telegramPipeline!.retrieve(sourceUrl);
+      const stt = await this.telegramPipeline!.transcribe(
+        asset,
+        input.language_hint,
+        (seconds) => {
+          const quota = this.betaGate.reserveSttSeconds(seconds);
+          if (!quota.allowed) {
+            throw new MediaTranscriptError(
+              "MEDIA_BETA_STT_QUOTA_EXHAUSTED",
+              "The closed MEDIA BETA daily STT quota is exhausted.",
+              429,
+              false
+            );
+          }
+        }
+      );
+      const updatedAt = new Date().toISOString();
+      const completed: ManagedMediaStoredRecord = {
+        ...record,
+        job: {
+          ...job,
+          status: "COMPLETED",
+          updated_at: updatedAt,
+          detected_language: stt.detected_language,
+          available_languages: stt.detected_language ? [stt.detected_language] : [],
+          credits_charged: 0,
+          credits_remaining_estimate: 0,
+          credit_charge_uncertain: false,
+          segment_count: stt.segments.length,
+          transcript_characters: stt.transcript_text.length,
+          media_duration_seconds: stt.duration_seconds,
+          retrieval_provider: "telegram_public_web",
+          retrieval_credits_charged: 0,
+          stt_seconds_charged: Math.ceil(stt.duration_seconds),
+          provider_data_deleted: stt.provider_data_deleted,
+          language_confidence: stt.language_confidence,
+          error: null
+        },
+        segments: stt.segments.map((segment) => ({ ...segment })),
+        expiresAt: this.expiryFrom(updatedAt, job)
+      };
+      completed.expiresAt = this.expiryFrom(updatedAt, completed.job);
+      await this.store.put(completed);
+      return this.publicJob(completed.job, false);
+    } catch (error) {
+      const normalized = error instanceof MediaTranscriptError
+        ? error
+        : new MediaTranscriptError(
+          "TELEGRAM_MANAGED_PIPELINE_FAILED",
+          "Managed Telegram public-media processing failed.",
+          500,
+          false
+        );
+      const updatedAt = new Date().toISOString();
+      const failed: ManagedMediaStoredRecord = {
+        ...record,
+        job: {
+          ...job,
+          status: "FAILED",
+          updated_at: updatedAt,
+          credit_charge_uncertain: false,
+          retrieval_provider: "telegram_public_web",
+          retrieval_credits_charged: 0,
+          error: {
+            code: normalized.code,
+            message: normalized.message,
+            retryable: false
+          }
+        },
+        expiresAt: this.expiryFrom(updatedAt, job)
+      };
+      await this.store.put(failed);
+      return this.publicJob(failed.job, false);
+    } finally {
+      this.inFlight.delete(requestKey);
+    }
+  }
 
   async startFacebookFallback(
     input: ManagedMediaPreflightInput

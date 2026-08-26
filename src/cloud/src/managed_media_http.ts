@@ -11,6 +11,11 @@ import {
   AssemblyAiFacebookMediaStt,
   DefaultManagedFacebookPipeline
 } from "./facebook_managed_pipeline.js";
+import {
+  AssemblyAiTelegramMediaStt,
+  DefaultManagedTelegramPipeline
+} from "./telegram_managed_pipeline.js";
+import { TelegramPublicWebRetriever } from "./telegram_public_retrieval.js";
 import { ManagedMediaPersistentStore } from "./managed_media_persistence.js";
 import {
   ManagedMediaService,
@@ -31,6 +36,7 @@ const PREFLIGHT = `${ROOT}/preflight`;
 const LOOKUP = `${ROOT}/lookup`;
 const TRANSCRIPTIONS = `${ROOT}/transcriptions`;
 const FACEBOOK_FALLBACK = `${ROOT}/facebook-fallback`;
+const TELEGRAM_PUBLIC = `${ROOT}/telegram`;
 const JOB_PATH = /^\/api\/v1\/media\/managed\/transcriptions\/(KRCM_[A-Za-z0-9-]+)$/;
 const SEGMENTS_PATH = /^\/api\/v1\/media\/managed\/transcriptions\/(KRCM_[A-Za-z0-9-]+)\/segments$/;
 const FACEBOOK_RETRIEVAL_PREFLIGHT_PATH = /^\/api\/v1\/media\/managed\/transcriptions\/(KRCM_[A-Za-z0-9-]+)\/facebook-retrieval-preflight$/;
@@ -196,6 +202,10 @@ function defaultManagedService(config: AppConfig): ManagedMediaService {
     paidRetriever,
     new AssemblyAiFacebookMediaStt(config.assemblyAiApiKey)
   );
+  const telegramPipeline = new DefaultManagedTelegramPipeline(
+    new TelegramPublicWebRetriever(),
+    new AssemblyAiTelegramMediaStt(config.assemblyAiApiKey)
+  );
   return new ManagedMediaService(
     new MediaBetaGate(
       config.mediaBetaCodes ?? [],
@@ -206,7 +216,8 @@ function defaultManagedService(config: AppConfig): ManagedMediaService {
     {
       ...(store ? { store } : {}),
       jobTtlSeconds: config.mediaJobTtlSeconds ?? 3600,
-      facebookPipeline
+      facebookPipeline,
+      telegramPipeline
     }
   );
 }
@@ -219,7 +230,7 @@ export function createManagedMediaHttpHandler(
     mode: "zero_client_managed_beta",
     provider: "supadata",
     configured: Boolean(config.mediaActionToken && service.configured),
-    platforms: ["youtube", "instagram", "facebook"],
+    platforms: ["youtube", "instagram", "facebook", "telegram"],
     native_transcript_credits: 1,
     credit_preflight_required: true,
     explicit_user_consent_required: true,
@@ -239,6 +250,11 @@ export function createManagedMediaHttpHandler(
     facebook_automatic_paid_retrieval: false,
     facebook_stt_provider: "assemblyai",
     facebook_stt_configured: Boolean(config.assemblyAiApiKey),
+    telegram_public_retrieval: true,
+    telegram_retrieval_provider: "telegram_public_web",
+    telegram_retrieval_credits: 0,
+    telegram_stt_provider: "assemblyai",
+    telegram_stt_configured: Boolean(config.assemblyAiApiKey),
     ai_requires_separate_preflight: true,
     ai_requires_separate_user_consent: true,
     ai_generate_credits_per_minute: GENERATED_TRANSCRIPT_CREDITS_PER_MINUTE,
@@ -346,6 +362,29 @@ export function createManagedMediaHttpHandler(
         return true;
       }
 
+
+      if (method === "POST" && path === TELEGRAM_PUBLIC) {
+        const rawBody = await readJsonBody(request, config.maxRequestBodyBytes);
+        const body = withServerOwnerAccessCode(rawBody, config.mediaBetaCodes);
+        const input = parseManagedMediaPreflightInput(body);
+        if (!input) {
+          throw new MediaTranscriptError(
+            "INVALID_REQUEST",
+            "The managed Telegram public-media request is not valid.",
+            400,
+            false
+          );
+        }
+        const job = await service.startTelegram(input);
+        sendJson(
+          response,
+          200,
+          { request_id: context.requestId, ...job },
+          context,
+          config.corsAllowedOrigin
+        );
+        return true;
+      }
 
 if (method === "POST" && path === FACEBOOK_FALLBACK) {
   const rawBody = await readJsonBody(request, config.maxRequestBodyBytes);

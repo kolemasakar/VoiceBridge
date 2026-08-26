@@ -86,7 +86,7 @@ test("managed request parser accepts Instagram without changing legacy YouTube p
   assert.equal(input.url, "https://www.instagram.com/reel/DEDbGqpyfkT/");
 });
 
-test("managed capability advertises YouTube, Instagram and Facebook", () => {
+test("managed capability advertises YouTube, Instagram, Facebook and Telegram", () => {
   const config: AppConfig = {
     host: "127.0.0.1",
     port: 0,
@@ -108,6 +108,9 @@ test("managed capability advertises YouTube, Instagram and Facebook", () => {
     provider
   );
   const { capability } = createManagedMediaHttpHandler(config, service);
-  assert.deepEqual(capability.platforms, ["youtube", "instagram", "facebook"]);
+  assert.deepEqual(capability.platforms, ["youtube", "instagram", "facebook", "telegram"]);
+  assert.equal(capability.telegram_public_retrieval, true);
+  assert.equal(capability.telegram_retrieval_provider, "telegram_public_web");
+  assert.equal(capability.telegram_retrieval_credits, 0);
   assert.equal(capability.facebook_ai_fallback, true);
 });

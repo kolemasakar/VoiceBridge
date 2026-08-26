@@ -207,6 +207,28 @@ export class TelegramPublicWebRetriever {
       );
     }
 
+    if (response.url) {
+      try {
+        const finalUrl = new URL(response.url);
+        if (!["t.me", "telegram.me"].includes(finalUrl.hostname.toLowerCase())) {
+          throw new TelegramMediaRetrievalError(
+            "TELEGRAM_MEDIA_UNAVAILABLE",
+            "The Telegram public preview redirected outside the trusted Telegram web surface.",
+            422,
+            false
+          );
+        }
+      } catch (error) {
+        if (error instanceof TelegramMediaRetrievalError) throw error;
+        throw new TelegramMediaRetrievalError(
+          "TELEGRAM_MEDIA_UNAVAILABLE",
+          "The Telegram public preview returned an invalid final URL.",
+          422,
+          false
+        );
+      }
+    }
+
     if (!response.ok) {
       const retryable = response.status === 429 || response.status >= 500;
       throw new TelegramMediaRetrievalError(
