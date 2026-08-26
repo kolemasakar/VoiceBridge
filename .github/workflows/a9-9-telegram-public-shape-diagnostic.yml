@@ -54,14 +54,23 @@ jobs:
               video_player = len(re.findall(r'tgme_widget_message_video_player', html, re.I))
               video_tags = re.findall(r'<video\b([^>]*)>', html, re.I)
               srcs = []
+              src_shapes = []
               for attrs in video_tags:
                   match = re.search(r'\bsrc\s*=\s*([\"\'])(.*?)\1', attrs, re.I)
                   if match:
-                      srcs.append(match.group(2))
+                      src = match.group(2).replace('&amp;', '&')
+                      srcs.append(src)
+                      try:
+                          parsed = urlparse(src)
+                          host = (parsed.hostname or '').lower()
+                          suffix = parsed.path[-40:]
+                          src_shapes.append(f"{parsed.scheme}://{host}/...{suffix}")
+                      except Exception:
+                          src_shapes.append("invalid")
               trusted_mp4 = []
               for src in srcs:
                   try:
-                      parsed = urlparse(src.replace('&amp;', '&'))
+                      parsed = urlparse(src)
                       host = (parsed.hostname or '').lower()
                       trusted = host == 'cdn.telesco.pe' or host == 'cdn-telegram.org' or host.endswith('.cdn-telegram.org')
                       if parsed.scheme == 'https' and trusted and parsed.path.lower().endswith('.mp4'):
@@ -78,5 +87,6 @@ jobs:
                   "video_tags=" + str(len(video_tags)),
                   "video_srcs=" + str(len(srcs)),
                   "trusted_mp4=" + str(len(trusted_mp4)),
+                  "src_shapes=" + repr(src_shapes),
               )
           PY
