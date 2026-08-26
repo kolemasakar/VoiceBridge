@@ -247,3 +247,5 @@ jobs:
           else
             echo "Health endpoint is not ready yet; this is expected during restart/deploy replacement."
           fi
+
+# A9.9 isolated Telegram runtime inspection trigger: 2026-08-26
