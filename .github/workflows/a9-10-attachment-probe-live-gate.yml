@@ -7,6 +7,9 @@ on:
       - agent/krc-media-transcript
     paths:
       - .github/workflows/a9-10-attachment-probe-live-gate.yml
+      - src/cloud/src/managed_attachment_probe.ts
+      - src/cloud/src/managed_attachment_probe_http.ts
+      - src/cloud/tests/managed_attachment_probe.test.ts
 
 permissions:
   contents: read
@@ -50,6 +53,7 @@ jobs:
           npm ci
           npm run check
           grep -Fq 'files.oaiusercontent.com' src/managed_attachment_probe.ts
+          grep -Fq 'observed_host=' src/managed_attachment_probe.ts
           grep -Fq 'redirect: "manual"' src/managed_attachment_probe.ts
           grep -Fq 'MANAGED_ATTACHMENT_PROBE_MAX_BYTES = 64 * 1024' src/managed_attachment_probe.ts
           grep -Fq 'retrieval_credits_charged: 0' src/managed_attachment_probe_http.ts
