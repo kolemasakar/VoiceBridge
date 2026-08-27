@@ -1,0 +1,340 @@
+name: KRC MEDIA Neon Migration Dry Run
+
+on:
+  workflow_dispatch:
+  push:
+    branches:
+      - agent/krc-media-transcript
+    paths:
+      - docs/KRC_MEDIA_NEON_MIGRATION_PLAN.md
+      - scripts/krc-media-neon-fingerprint.sql
+      - .github/workflows/krc-media-neon-migration-dry-run.yml
+
+permissions:
+  contents: read
+
+concurrency:
+  group: krc-media-neon-migration-dry-run
+  cancel-in-progress: false
+
+env:
+  RENDER_API_BASE: https://api.render.com/v1
+  SERVICE_ID: srv-da1kic5bedkc73d6fk60
+  SERVICE_NAME: voicebridge-krc-media-beta-kolemasakar
+  DB_NAME: voicebridge-krc-media-beta-db
+  POSTGRES_IMAGE: postgres:18
+  DRYRUN_DB: krc_neon_dryrun
+  DRYRUN_CONTAINER: krc-neon-dryrun-${{ github.run_id }}
+
+jobs:
+  dry-run:
+    name: Render PostgreSQL to ephemeral PostgreSQL 18
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    env:
+      RENDER_API_KEY: ${{ secrets.RENDER_API_KEY }}
+    steps:
+      - name: Checkout exact branch head
+        uses: actions/checkout@v4
+
+      - name: Verify isolated Render source
+        id: source
+        shell: bash
+        run: |
+          set -euo pipefail
+          test -n "${RENDER_API_KEY:-}" || { echo "RENDER_API_KEY is not configured"; exit 1; }
+          echo "::add-mask::$RENDER_API_KEY"
+
+          tmp="$(mktemp)"
+          code="$(curl -sS -o "$tmp" -w '%{http_code}' \
+            "${RENDER_API_BASE}/services/${SERVICE_ID}" \
+            -H 'Accept: application/json' \
+            -H "Authorization: Bearer ${RENDER_API_KEY}")"
+          [[ "$code" == "200" ]]
+          [[ "$(jq -r '.name // empty' "$tmp")" == "$SERVICE_NAME" ]]
+          owner="$(jq -r '.ownerId // .owner_id // .owner.id // empty' "$tmp")"
+          branch="$(jq -r '.branch // empty' "$tmp")"
+          rm -f "$tmp"
+          test -n "$owner"
+          [[ "$branch" == "agent/krc-media-transcript" ]]
+          echo "owner_id=$owner" >> "$GITHUB_OUTPUT"
+          echo "Isolated Render source verified."
+
+      - name: Resolve existing Render PostgreSQL read-only
+        id: database
+        env:
+          OWNER_ID: ${{ steps.source.outputs.owner_id }}
+        shell: bash
+        run: |
+          set -euo pipefail
+          tmp="$(mktemp)"
+          code="$(curl -sS --get -o "$tmp" -w '%{http_code}' \
+            "${RENDER_API_BASE}/postgres" \
+            --data-urlencode "ownerId=${OWNER_ID}" \
+            --data-urlencode 'limit=100' \
+            -H 'Accept: application/json' \
+            -H "Authorization: Bearer ${RENDER_API_KEY}")"
+          [[ "$code" == "200" ]]
+
+          db_id="$(jq -r --arg n "$DB_NAME" '[.[] | (.postgres // .) | select(.name==$n)] | first | (.id // empty)' "$tmp")"
+          db_status="$(jq -r --arg n "$DB_NAME" '[.[] | (.postgres // .) | select(.name==$n)] | first | (.status // "unknown")' "$tmp")"
+          db_version="$(jq -r --arg n "$DB_NAME" '[.[] | (.postgres // .) | select(.name==$n)] | first | (.version // "unknown")' "$tmp")"
+          rm -f "$tmp"
+
+          test -n "$db_id"
+          echo "db_id=$db_id" >> "$GITHUB_OUTPUT"
+          echo "db_version=$db_version" >> "$GITHUB_OUTPUT"
+          echo "Render source database resolved: status=${db_status} version=${db_version}"
+
+      - name: Obtain source connection without exposing credentials
+        env:
+          DB_ID: ${{ steps.database.outputs.db_id }}
+        shell: bash
+        run: |
+          set -euo pipefail
+          tmp="$(mktemp)"
+          code="$(curl -sS -o "$tmp" -w '%{http_code}' \
+            "${RENDER_API_BASE}/postgres/${DB_ID}/connection-info" \
+            -H 'Accept: application/json' \
+            -H "Authorization: Bearer ${RENDER_API_KEY}")"
+          [[ "$code" == "200" ]]
+          database_url="$(jq -r '.externalConnectionString // .external_connection_string // empty' "$tmp")"
+          rm -f "$tmp"
+          test -n "$database_url"
+          echo "::add-mask::$database_url"
+          umask 077
+          printf '%s' "$database_url" > /tmp/krc-render-db-url
+          echo "Source connection obtained and masked."
+
+      - name: Prepare PostgreSQL 18 tools
+        shell: bash
+        run: |
+          set -euo pipefail
+          docker pull "$POSTGRES_IMAGE" >/dev/null
+          docker run --rm "$POSTGRES_IMAGE" psql --version
+          docker run --rm "$POSTGRES_IMAGE" pg_dump --version
+          docker run --rm "$POSTGRES_IMAGE" pg_restore --version
+
+      - name: Verify source read-only mode and expected table set
+        shell: bash
+        run: |
+          set -euo pipefail
+          database_url="$(cat /tmp/krc-render-db-url)"
+          echo "::add-mask::$database_url"
+
+          mode="$(docker run --rm \
+            -e DATABASE_URL="$database_url" \
+            -e PGCONNECT_TIMEOUT=10 \
+            -e PGSSLMODE=require \
+            -e PGOPTIONS='-c default_transaction_read_only=on' \
+            "$POSTGRES_IMAGE" \
+            sh -lc 'psql -X -A -t -v ON_ERROR_STOP=1 --dbname "$DATABASE_URL" -c "SHOW default_transaction_read_only;"')"
+          [[ "$(printf '%s' "$mode" | tr -d '[:space:]')" == "on" ]]
+
+          tables="$(docker run --rm \
+            -e DATABASE_URL="$database_url" \
+            -e PGCONNECT_TIMEOUT=10 \
+            -e PGSSLMODE=require \
+            -e PGOPTIONS='-c default_transaction_read_only=on' \
+            "$POSTGRES_IMAGE" \
+            sh -lc 'psql -X -A -t -v ON_ERROR_STOP=1 --dbname "$DATABASE_URL" -c "SELECT c.relname FROM pg_class c JOIN pg_namespace n ON n.oid=c.relnamespace WHERE c.relkind='"'"'r'"'"' AND n.nspname='"'"'public'"'"' ORDER BY c.relname;"')"
+          tables="$(printf '%s\n' "$tables" | tr -d '\r')"
+          expected=$'krc_managed_media_jobs\nkrc_media_client_jobs\nkrc_media_stt_charges'
+          [[ "$tables" == "$expected" ]] || {
+            echo "Unexpected source table set. Dry-run stopped."
+            printf '%s\n' "$tables"
+            exit 1
+          }
+          echo "Source read-only and table-set gates PASS."
+
+      - name: Capture sanitized source fingerprint
+        shell: bash
+        run: |
+          set -euo pipefail
+          database_url="$(cat /tmp/krc-render-db-url)"
+          echo "::add-mask::$database_url"
+          docker run --rm -i \
+            -e DATABASE_URL="$database_url" \
+            -e PGCONNECT_TIMEOUT=10 \
+            -e PGSSLMODE=require \
+            -e PGOPTIONS='-c default_transaction_read_only=on' \
+            "$POSTGRES_IMAGE" \
+            sh -lc 'psql -X -v ON_ERROR_STOP=1 --dbname "$DATABASE_URL"' \
+            < scripts/krc-media-neon-fingerprint.sql \
+            > /tmp/krc-source-fingerprint.txt
+          echo "Source logical fingerprint captured."
+
+      - name: Create read-only source dump and schema snapshot
+        id: dump
+        shell: bash
+        run: |
+          set -euo pipefail
+          database_url="$(cat /tmp/krc-render-db-url)"
+          echo "::add-mask::$database_url"
+
+          docker run --rm \
+            -e DATABASE_URL="$database_url" \
+            -e PGCONNECT_TIMEOUT=10 \
+            -e PGSSLMODE=require \
+            -e PGOPTIONS='-c default_transaction_read_only=on' \
+            "$POSTGRES_IMAGE" \
+            sh -lc 'pg_dump "$DATABASE_URL" --format=custom --no-owner --no-acl' \
+            > /tmp/krc-source.dump
+
+          docker run --rm \
+            -e DATABASE_URL="$database_url" \
+            -e PGCONNECT_TIMEOUT=10 \
+            -e PGSSLMODE=require \
+            -e PGOPTIONS='-c default_transaction_read_only=on' \
+            "$POSTGRES_IMAGE" \
+            sh -lc 'pg_dump "$DATABASE_URL" --schema-only --no-owner --no-acl' \
+            > /tmp/krc-source-schema.sql
+
+          dump_sha="$(sha256sum /tmp/krc-source.dump | awk '{print $1}')"
+          dump_bytes="$(wc -c < /tmp/krc-source.dump | tr -d '[:space:]')"
+          echo "dump_sha=$dump_sha" >> "$GITHUB_OUTPUT"
+          echo "dump_bytes=$dump_bytes" >> "$GITHUB_OUTPUT"
+          echo "Source custom dump created: bytes=${dump_bytes} sha256=${dump_sha}"
+
+      - name: Start ephemeral local PostgreSQL 18 target
+        shell: bash
+        run: |
+          set -euo pipefail
+          password="$(openssl rand -hex 24)"
+          echo "::add-mask::$password"
+          umask 077
+          printf '%s' "$password" > /tmp/krc-dryrun-local-password
+
+          docker run -d --name "$DRYRUN_CONTAINER" \
+            -e POSTGRES_PASSWORD="$password" \
+            -e POSTGRES_DB="$DRYRUN_DB" \
+            "$POSTGRES_IMAGE" >/dev/null
+
+          for attempt in $(seq 1 30); do
+            if docker exec -e PGPASSWORD="$password" "$DRYRUN_CONTAINER" \
+              pg_isready -U postgres -d "$DRYRUN_DB" >/dev/null 2>&1; then
+              echo "Ephemeral target ready."
+              exit 0
+            fi
+            sleep 2
+          done
+          echo "Ephemeral target did not become ready."
+          exit 1
+
+      - name: Restore dump into ephemeral target
+        shell: bash
+        run: |
+          set -euo pipefail
+          password="$(cat /tmp/krc-dryrun-local-password)"
+          echo "::add-mask::$password"
+          docker cp /tmp/krc-source.dump "$DRYRUN_CONTAINER:/tmp/krc-source.dump"
+          docker exec -e PGPASSWORD="$password" "$DRYRUN_CONTAINER" \
+            pg_restore -U postgres -d "$DRYRUN_DB" \
+            --no-owner --no-acl --exit-on-error \
+            /tmp/krc-source.dump
+          echo "Ephemeral restore PASS."
+
+      - name: Capture restored schema and fingerprint
+        shell: bash
+        run: |
+          set -euo pipefail
+          password="$(cat /tmp/krc-dryrun-local-password)"
+          echo "::add-mask::$password"
+
+          docker exec -e PGPASSWORD="$password" "$DRYRUN_CONTAINER" \
+            pg_dump -U postgres -d "$DRYRUN_DB" \
+            --schema-only --no-owner --no-acl \
+            > /tmp/krc-target-schema.sql
+
+          docker exec -i -e PGPASSWORD="$password" "$DRYRUN_CONTAINER" \
+            psql -X -U postgres -d "$DRYRUN_DB" -v ON_ERROR_STOP=1 \
+            < scripts/krc-media-neon-fingerprint.sql \
+            > /tmp/krc-target-fingerprint.txt
+          echo "Restored target snapshots captured."
+
+      - name: Compare schema and logical data
+        id: verify
+        shell: bash
+        run: |
+          set -euo pipefail
+
+          normalize_schema() {
+            sed -E \
+              -e '/^\\restrict /d' \
+              -e '/^\\unrestrict /d' \
+              -e '/^-- Dumped from database version /d' \
+              -e '/^-- Dumped by pg_dump version /d' \
+              "$1"
+          }
+
+          normalize_schema /tmp/krc-source-schema.sql > /tmp/krc-source-schema.normalized.sql
+          normalize_schema /tmp/krc-target-schema.sql > /tmp/krc-target-schema.normalized.sql
+
+          source_schema_sha="$(sha256sum /tmp/krc-source-schema.normalized.sql | awk '{print $1}')"
+          target_schema_sha="$(sha256sum /tmp/krc-target-schema.normalized.sql | awk '{print $1}')"
+          source_fp_sha="$(sha256sum /tmp/krc-source-fingerprint.txt | awk '{print $1}')"
+          target_fp_sha="$(sha256sum /tmp/krc-target-fingerprint.txt | awk '{print $1}')"
+
+          [[ "$source_schema_sha" == "$target_schema_sha" ]] || {
+            echo "Schema fingerprint mismatch."
+            exit 1
+          }
+          diff -u /tmp/krc-source-fingerprint.txt /tmp/krc-target-fingerprint.txt
+          [[ "$source_fp_sha" == "$target_fp_sha" ]]
+
+          managed_count="$(awk -F'|' '$1=="managed_count" {print $2}' /tmp/krc-source-fingerprint.txt)"
+          client_count="$(awk -F'|' '$1=="client_count" {print $2}' /tmp/krc-source-fingerprint.txt)"
+          stt_count="$(awk -F'|' '$1=="stt_charge_count" {print $2}' /tmp/krc-source-fingerprint.txt)"
+
+          echo "source_schema_sha=$source_schema_sha" >> "$GITHUB_OUTPUT"
+          echo "target_schema_sha=$target_schema_sha" >> "$GITHUB_OUTPUT"
+          echo "source_fp_sha=$source_fp_sha" >> "$GITHUB_OUTPUT"
+          echo "target_fp_sha=$target_fp_sha" >> "$GITHUB_OUTPUT"
+          echo "managed_count=$managed_count" >> "$GITHUB_OUTPUT"
+          echo "client_count=$client_count" >> "$GITHUB_OUTPUT"
+          echo "stt_count=$stt_count" >> "$GITHUB_OUTPUT"
+          echo "Schema and logical data comparison PASS."
+
+      - name: Publish sanitized dry-run summary
+        if: always()
+        shell: bash
+        run: |
+          {
+            echo "# KRC MEDIA Neon migration dry-run"
+            echo
+            echo "- Source service: \`${SERVICE_NAME}\`"
+            echo "- Source database: \`${DB_NAME}\`"
+            echo "- Source reported PostgreSQL version: \`${{ steps.database.outputs.db_version || 'unavailable' }}\`"
+            echo "- Target: ephemeral local \`${POSTGRES_IMAGE}\` container only"
+            echo "- Neon resource created: \`false\`"
+            echo "- Render environment changed: \`false\`"
+            echo "- Render deploy requested: \`false\`"
+            echo "- Raw dump uploaded: \`false\`"
+            echo "- Dump bytes: \`${{ steps.dump.outputs.dump_bytes || 'unavailable' }}\`"
+            echo "- Dump SHA256: \`${{ steps.dump.outputs.dump_sha || 'unavailable' }}\`"
+            echo "- Source normalized schema SHA256: \`${{ steps.verify.outputs.source_schema_sha || 'unavailable' }}\`"
+            echo "- Restored normalized schema SHA256: \`${{ steps.verify.outputs.target_schema_sha || 'unavailable' }}\`"
+            echo "- Source logical fingerprint SHA256: \`${{ steps.verify.outputs.source_fp_sha || 'unavailable' }}\`"
+            echo "- Restored logical fingerprint SHA256: \`${{ steps.verify.outputs.target_fp_sha || 'unavailable' }}\`"
+            echo "- krc_managed_media_jobs rows: \`${{ steps.verify.outputs.managed_count || 'unavailable' }}\`"
+            echo "- krc_media_client_jobs rows: \`${{ steps.verify.outputs.client_count || 'unavailable' }}\`"
+            echo "- krc_media_stt_charges rows: \`${{ steps.verify.outputs.stt_count || 'unavailable' }}\`"
+            echo
+            echo "This dry-run validates PostgreSQL dump/restore behavior only. It does not validate a Neon target."
+          } >> "$GITHUB_STEP_SUMMARY"
+
+      - name: Remove all temporary migration material
+        if: always()
+        shell: bash
+        run: |
+          docker rm -f "$DRYRUN_CONTAINER" >/dev/null 2>&1 || true
+          rm -f \
+            /tmp/krc-render-db-url \
+            /tmp/krc-dryrun-local-password \
+            /tmp/krc-source.dump \
+            /tmp/krc-source-schema.sql \
+            /tmp/krc-target-schema.sql \
+            /tmp/krc-source-schema.normalized.sql \
+            /tmp/krc-target-schema.normalized.sql \
+            /tmp/krc-source-fingerprint.txt \
+            /tmp/krc-target-fingerprint.txt
