@@ -8,7 +8,6 @@ on:
       - src/cloud/src/internal_db_export_http.ts
       - src/cloud/src/managed_server.ts
       - scripts/krc-media-neon-fingerprint.sql
-      - .github/workflows/krc-media-neon-internal-dry-run-live.yml
 
 permissions:
   contents: read
@@ -73,7 +72,6 @@ jobs:
           deploy_id="$(jq -r '(.deploy // .).id // empty' "$tmp")"
           rm -f "$tmp"
           test -n "$deploy_id"
-
           for i in $(seq 1 120); do
             tmp="$(mktemp)"
             code="$(curl -sS -o "$tmp" -w '%{http_code}' \
@@ -122,7 +120,7 @@ jobs:
           done
           echo "Runtime tokens loaded and masked."
 
-      - name: Run dry-run or verify endpoint cleanup
+      - name: Export source or verify endpoint cleanup
         id: probe
         shell: bash
         run: |
@@ -142,6 +140,7 @@ jobs:
               -H 'Accept: text/plain' \
               -H "Authorization: Bearer ${media_token}")"
             [[ "$fp_code" == "200" ]]
+            grep -q '^schema_fingerprint|' /tmp/krc-source-fingerprint.txt
             grep -q '^managed_count|' /tmp/krc-source-fingerprint.txt
             grep -q '^client_count|' /tmp/krc-source-fingerprint.txt
             grep -q '^stt_charge_count|' /tmp/krc-source-fingerprint.txt
@@ -152,14 +151,11 @@ jobs:
               -H "Authorization: Bearer ${media_token}")"
             [[ "$dump_code" == "200" ]]
             test -s /tmp/krc-source.dump
-
             docker pull "$POSTGRES_IMAGE" >/dev/null
             docker run --rm -i "$POSTGRES_IMAGE" pg_restore -l < /tmp/krc-source.dump >/dev/null
 
-            dump_sha="$(sha256sum /tmp/krc-source.dump | awk '{print $1}')"
-            dump_bytes="$(wc -c < /tmp/krc-source.dump | tr -d '[:space:]')"
-            echo "dump_sha=$dump_sha" >> "$GITHUB_OUTPUT"
-            echo "dump_bytes=$dump_bytes" >> "$GITHUB_OUTPUT"
+            echo "dump_sha=$(sha256sum /tmp/krc-source.dump | awk '{print $1}')" >> "$GITHUB_OUTPUT"
+            echo "dump_bytes=$(wc -c < /tmp/krc-source.dump | tr -d '[:space:]')" >> "$GITHUB_OUTPUT"
             echo "mode=dry_run" >> "$GITHUB_OUTPUT"
             echo "Owner-only source export transport PASS."
           else
@@ -194,14 +190,11 @@ jobs:
           set -euo pipefail
           password="$(openssl rand -hex 24)"
           echo "::add-mask::$password"
-          umask 077
           printf '%s' "$password" > /tmp/krc-local-password
-
           docker run -d --name "$DRYRUN_CONTAINER" \
             -e POSTGRES_PASSWORD="$password" \
             -e POSTGRES_DB="$DRYRUN_DB" \
             "$POSTGRES_IMAGE" >/dev/null
-
           for attempt in $(seq 1 30); do
             if docker exec -e PGPASSWORD="$password" "$DRYRUN_CONTAINER" \
               pg_isready -U postgres -d "$DRYRUN_DB" >/dev/null 2>&1; then
@@ -210,7 +203,6 @@ jobs:
             [[ "$attempt" != "30" ]] || { echo "Ephemeral PostgreSQL did not become ready."; exit 1; }
             sleep 2
           done
-
           docker cp /tmp/krc-source.dump "$DRYRUN_CONTAINER:/tmp/krc-source.dump"
           docker exec -e PGPASSWORD="$password" "$DRYRUN_CONTAINER" \
             pg_restore -U postgres -d "$DRYRUN_DB" \
@@ -218,7 +210,7 @@ jobs:
             /tmp/krc-source.dump
           echo "Ephemeral PostgreSQL restore PASS."
 
-      - name: Compare source and restored logical fingerprints
+      - name: Compare source and restored structural/data fingerprints
         id: verify
         if: steps.probe.outputs.mode == 'dry_run'
         shell: bash
@@ -226,7 +218,6 @@ jobs:
           set -euo pipefail
           password="$(cat /tmp/krc-local-password)"
           echo "::add-mask::$password"
-
           docker exec -i -e PGPASSWORD="$password" "$DRYRUN_CONTAINER" \
             psql -X -A -t -F '|' -U postgres -d "$DRYRUN_DB" -v ON_ERROR_STOP=1 \
             < scripts/krc-media-neon-fingerprint.sql \
@@ -237,54 +228,17 @@ jobs:
           target_fp_sha="$(sha256sum /tmp/krc-target-fingerprint.txt | awk '{print $1}')"
           [[ "$source_fp_sha" == "$target_fp_sha" ]]
 
-          managed_count="$(awk -F'|' '$1=="managed_count" {print $2}' /tmp/krc-source-fingerprint.txt)"
-          client_count="$(awk -F'|' '$1=="client_count" {print $2}' /tmp/krc-source-fingerprint.txt)"
-          stt_count="$(awk -F'|' '$1=="stt_charge_count" {print $2}' /tmp/krc-source-fingerprint.txt)"
+          source_schema="$(awk -F'|' '$1=="schema_fingerprint" {print $2}' /tmp/krc-source-fingerprint.txt)"
+          target_schema="$(awk -F'|' '$1=="schema_fingerprint" {print $2}' /tmp/krc-target-fingerprint.txt)"
+          [[ -n "$source_schema" && "$source_schema" == "$target_schema" ]]
+
           echo "source_fp_sha=$source_fp_sha" >> "$GITHUB_OUTPUT"
           echo "target_fp_sha=$target_fp_sha" >> "$GITHUB_OUTPUT"
-          echo "managed_count=$managed_count" >> "$GITHUB_OUTPUT"
-          echo "client_count=$client_count" >> "$GITHUB_OUTPUT"
-          echo "stt_count=$stt_count" >> "$GITHUB_OUTPUT"
-          echo "Logical fingerprint comparison PASS."
-
-      - name: Compare archive schema and restored schema
-        id: schema
-        if: steps.probe.outputs.mode == 'dry_run'
-        shell: bash
-        run: |
-          set -euo pipefail
-          password="$(cat /tmp/krc-local-password)"
-          echo "::add-mask::$password"
-
-          docker run --rm -v /tmp:/work "$POSTGRES_IMAGE" \
-            pg_restore --schema-only --no-owner --no-acl \
-            -f /work/krc-source-schema.sql /work/krc-source.dump
-
-          docker exec -e PGPASSWORD="$password" "$DRYRUN_CONTAINER" \
-            pg_dump -U postgres -d "$DRYRUN_DB" \
-            --schema-only --no-owner --no-acl \
-            > /tmp/krc-target-schema.sql
-
-          normalize_schema() {
-            sed -E \
-              -e '/^\\restrict /d' \
-              -e '/^\\unrestrict /d' \
-              -e '/^-- Dumped from database version /d' \
-              -e '/^-- Dumped by pg_dump version /d' \
-              "$1"
-          }
-          normalize_schema /tmp/krc-source-schema.sql > /tmp/krc-source-schema.normalized.sql
-          normalize_schema /tmp/krc-target-schema.sql > /tmp/krc-target-schema.normalized.sql
-
-          source_schema_sha="$(sha256sum /tmp/krc-source-schema.normalized.sql | awk '{print $1}')"
-          target_schema_sha="$(sha256sum /tmp/krc-target-schema.normalized.sql | awk '{print $1}')"
-          [[ "$source_schema_sha" == "$target_schema_sha" ]] || {
-            echo "Normalized schema fingerprint mismatch."
-            exit 1
-          }
-          echo "source_schema_sha=$source_schema_sha" >> "$GITHUB_OUTPUT"
-          echo "target_schema_sha=$target_schema_sha" >> "$GITHUB_OUTPUT"
-          echo "Normalized schema comparison PASS."
+          echo "schema_fp=$source_schema" >> "$GITHUB_OUTPUT"
+          echo "managed_count=$(awk -F'|' '$1=="managed_count" {print $2}' /tmp/krc-source-fingerprint.txt)" >> "$GITHUB_OUTPUT"
+          echo "client_count=$(awk -F'|' '$1=="client_count" {print $2}' /tmp/krc-source-fingerprint.txt)" >> "$GITHUB_OUTPUT"
+          echo "stt_count=$(awk -F'|' '$1=="stt_charge_count" {print $2}' /tmp/krc-source-fingerprint.txt)" >> "$GITHUB_OUTPUT"
+          echo "Structural and logical fingerprint comparison PASS."
 
       - name: Publish sanitized lifecycle summary
         if: always()
@@ -303,10 +257,9 @@ jobs:
             if [[ "${{ steps.probe.outputs.mode }}" == "dry_run" ]]; then
               echo "- Dump bytes: \`${{ steps.probe.outputs.dump_bytes }}\`"
               echo "- Dump SHA256: \`${{ steps.probe.outputs.dump_sha }}\`"
-              echo "- Source logical fingerprint SHA256: \`${{ steps.verify.outputs.source_fp_sha }}\`"
-              echo "- Restored logical fingerprint SHA256: \`${{ steps.verify.outputs.target_fp_sha }}\`"
-              echo "- Source normalized schema SHA256: \`${{ steps.schema.outputs.source_schema_sha }}\`"
-              echo "- Restored normalized schema SHA256: \`${{ steps.schema.outputs.target_schema_sha }}\`"
+              echo "- Structural fingerprint: \`${{ steps.verify.outputs.schema_fp }}\`"
+              echo "- Source combined fingerprint SHA256: \`${{ steps.verify.outputs.source_fp_sha }}\`"
+              echo "- Restored combined fingerprint SHA256: \`${{ steps.verify.outputs.target_fp_sha }}\`"
               echo "- krc_managed_media_jobs rows: \`${{ steps.verify.outputs.managed_count }}\`"
               echo "- krc_media_client_jobs rows: \`${{ steps.verify.outputs.client_count }}\`"
               echo "- krc_media_stt_charges rows: \`${{ steps.verify.outputs.stt_count }}\`"
@@ -318,17 +271,13 @@ jobs:
         shell: bash
         run: |
           docker rm -f "$DRYRUN_CONTAINER" >/dev/null 2>&1 || true
-          rm -f \
+          sudo rm -f \
             /tmp/krc-media-action-token \
             /tmp/krc-test-access-token \
             /tmp/krc-local-password \
             /tmp/krc-source.dump \
             /tmp/krc-source-fingerprint.txt \
             /tmp/krc-target-fingerprint.txt \
-            /tmp/krc-source-schema.sql \
-            /tmp/krc-target-schema.sql \
-            /tmp/krc-source-schema.normalized.sql \
-            /tmp/krc-target-schema.normalized.sql \
             /tmp/unauth.json \
             /tmp/removed-media.json \
             /tmp/removed-legacy.json \
