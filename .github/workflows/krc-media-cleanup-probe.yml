@@ -1,0 +1,83 @@
+name: KRC MEDIA Cleanup Probe
+
+on:
+  push:
+    branches:
+      - agent/krc-media-transcript
+    paths:
+      - .github/workflows/krc-media-cleanup-probe.yml
+
+permissions:
+  contents: read
+
+env:
+  RENDER_API_BASE: https://api.render.com/v1
+  SERVICE_ID: srv-da1kic5bedkc73d6fk60
+  SERVICE_NAME: voicebridge-krc-media-beta-kolemasakar
+  BETA_BASE_URL: https://voicebridge-krc-media-beta-kolemasakar.onrender.com
+  AUDIT_PATH: /api/v1/media/internal-db-audit
+
+jobs:
+  probe:
+    name: Probe sanitized cleanup status
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    env:
+      RENDER_API_KEY: ${{ secrets.RENDER_API_KEY }}
+    steps:
+      - name: Probe runtime without mutation
+        shell: bash
+        run: |
+          set -euo pipefail
+          test -n "${RENDER_API_KEY:-}"
+          echo "::add-mask::$RENDER_API_KEY"
+
+          tmp="$(mktemp)"
+          code="$(curl -sS -o "$tmp" -w '%{http_code}' \
+            "${RENDER_API_BASE}/services/${SERVICE_ID}" \
+            -H 'Accept: application/json' \
+            -H "Authorization: Bearer ${RENDER_API_KEY}")"
+          [[ "$code" == "200" ]]
+          [[ "$(jq -r '.name // empty' "$tmp")" == "$SERVICE_NAME" ]]
+          rm -f "$tmp"
+
+          tmp="$(mktemp)"
+          code="$(curl -sS -o "$tmp" -w '%{http_code}' \
+            "${RENDER_API_BASE}/services/${SERVICE_ID}/env-vars/KRC_MEDIA_ACTION_TOKEN" \
+            -H 'Accept: application/json' \
+            -H "Authorization: Bearer ${RENDER_API_KEY}")"
+          [[ "$code" == "200" ]]
+          token="$(jq -r '(.envVar.value // .value // empty)' "$tmp")"
+          rm -f "$tmp"
+          test -n "$token"
+          echo "::add-mask::$token"
+
+          audit_code="$(curl -sS --max-time 60 -o /tmp/audit-response.json -w '%{http_code}' \
+            "${BETA_BASE_URL}${AUDIT_PATH}" \
+            -H "Authorization: Bearer ${token}")"
+          audit_error="$(jq -r '.error.code // "none"' /tmp/audit-response.json 2>/dev/null || echo non_json)"
+          echo "audit_endpoint_status=${audit_code}"
+          echo "audit_endpoint_error_code=${audit_error}"
+
+          capability_code="$(curl -sS --max-time 60 -o /tmp/capability.json -w '%{http_code}' \
+            "${BETA_BASE_URL}/api/v1/media/managed" \
+            -H 'Accept: application/json' \
+            -H "Authorization: Bearer ${token}")"
+          mode="$(jq -r '.mode // "missing"' /tmp/capability.json 2>/dev/null || echo non_json)"
+          configured="$(jq -r '.configured // "missing"' /tmp/capability.json 2>/dev/null || echo non_json)"
+          durable_store="$(jq -r '.durable_store // "missing"' /tmp/capability.json 2>/dev/null || echo non_json)"
+          echo "capability_status=${capability_code}"
+          echo "capability_mode=${mode}"
+          echo "capability_configured=${configured}"
+          echo "capability_durable_store=${durable_store}"
+
+          [[ "$audit_code" == "404" ]]
+          [[ "$capability_code" == "200" ]]
+          [[ "$mode" == "zero_client_managed_beta" ]]
+          [[ "$configured" == "true" ]]
+          echo "Cleanup runtime verification PASS."
+
+      - name: Remove local responses
+        if: always()
+        shell: bash
+        run: rm -f /tmp/audit-response.json /tmp/capability.json
