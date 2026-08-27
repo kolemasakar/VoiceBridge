@@ -1,0 +1,80 @@
+name: KRC MEDIA Neon Export Sanitized Probe
+
+on:
+  push:
+    branches:
+      - agent/krc-media-transcript
+    paths:
+      - .github/workflows/krc-media-neon-export-sanitized-probe.yml
+
+permissions:
+  contents: read
+
+env:
+  RENDER_API_BASE: https://api.render.com/v1
+  SERVICE_ID: srv-da1kic5bedkc73d6fk60
+  BETA_BASE_URL: https://voicebridge-krc-media-beta-kolemasakar.onrender.com
+  EXPORT_PATH: /api/v1/media/internal-db-export
+
+jobs:
+  probe:
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    env:
+      RENDER_API_KEY: ${{ secrets.RENDER_API_KEY }}
+    steps:
+      - name: Probe sanitized export transport
+        shell: bash
+        run: |
+          set -euo pipefail
+          echo "::add-mask::$RENDER_API_KEY"
+          tmp="$(mktemp)"
+          code="$(curl -sS -o "$tmp" -w '%{http_code}' \
+            "${RENDER_API_BASE}/services/${SERVICE_ID}/env-vars/KRC_MEDIA_ACTION_TOKEN" \
+            -H 'Accept: application/json' \
+            -H "Authorization: Bearer ${RENDER_API_KEY}")"
+          [[ "$code" == "200" ]]
+          token="$(jq -r '(.envVar.value // .value // empty)' "$tmp")"
+          rm -f "$tmp"
+          test -n "$token"
+          echo "::add-mask::$token"
+
+          unauth="$(curl -sS --max-time 60 -o /tmp/unauth.json -w '%{http_code}' \
+            "${BETA_BASE_URL}${EXPORT_PATH}/fingerprint")"
+          unauth_error="$(jq -r '.error.code // "none"' /tmp/unauth.json 2>/dev/null || echo non_json)"
+          echo "unauth_fingerprint_status=${unauth}"
+          echo "unauth_fingerprint_error=${unauth_error}"
+
+          fp="$(curl -sS --max-time 90 -o /tmp/fingerprint.out -w '%{http_code}' \
+            "${BETA_BASE_URL}${EXPORT_PATH}/fingerprint" \
+            -H "Authorization: Bearer ${token}")"
+          fp_error="$(jq -r '.error.code // "none"' /tmp/fingerprint.out 2>/dev/null || echo non_json)"
+          fp_bytes="$(wc -c < /tmp/fingerprint.out | tr -d '[:space:]')"
+          echo "auth_fingerprint_status=${fp}"
+          echo "auth_fingerprint_error=${fp_error}"
+          echo "auth_fingerprint_bytes=${fp_bytes}"
+          if [[ "$fp" == "200" ]]; then
+            echo "fingerprint_has_managed_count=$(grep -q '^managed_count|' /tmp/fingerprint.out && echo true || echo false)"
+            echo "fingerprint_has_client_count=$(grep -q '^client_count|' /tmp/fingerprint.out && echo true || echo false)"
+            echo "fingerprint_has_stt_count=$(grep -q '^stt_charge_count|' /tmp/fingerprint.out && echo true || echo false)"
+          fi
+
+          dump="$(curl -sS --max-time 120 -D /tmp/dump.headers -o /tmp/dump.out -w '%{http_code}' \
+            "${BETA_BASE_URL}${EXPORT_PATH}" \
+            -H "Authorization: Bearer ${token}")"
+          dump_type="$(awk 'BEGIN{IGNORECASE=1} /^content-type:/ {gsub(/\r/, ""); print $2}' /tmp/dump.headers | tail -n1)"
+          dump_bytes="$(wc -c < /tmp/dump.out | tr -d '[:space:]')"
+          dump_error="$(jq -r '.error.code // "none"' /tmp/dump.out 2>/dev/null || echo non_json)"
+          echo "auth_dump_status=${dump}"
+          echo "auth_dump_content_type=${dump_type:-missing}"
+          echo "auth_dump_bytes=${dump_bytes}"
+          echo "auth_dump_error=${dump_error}"
+
+          [[ "$unauth" == "401" ]]
+          [[ "$fp" == "200" ]]
+          [[ "$dump" == "200" ]]
+
+      - name: Remove temporary responses
+        if: always()
+        shell: bash
+        run: rm -f /tmp/unauth.json /tmp/fingerprint.out /tmp/dump.headers /tmp/dump.out
