@@ -1,0 +1,77 @@
+name: KRC MEDIA Internal DB Audit Capture
+
+on:
+  push:
+    branches:
+      - agent/krc-media-transcript
+    paths:
+      - .github/workflows/krc-media-internal-db-audit-capture.yml
+
+permissions:
+  contents: read
+
+env:
+  RENDER_API_BASE: https://api.render.com/v1
+  SERVICE_ID: srv-da1kic5bedkc73d6fk60
+  SERVICE_NAME: voicebridge-krc-media-beta-kolemasakar
+  BETA_BASE_URL: https://voicebridge-krc-media-beta-kolemasakar.onrender.com
+  AUDIT_PATH: /api/v1/media/internal-db-audit
+
+jobs:
+  capture:
+    name: Capture sanitized schema and aggregate baseline
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    env:
+      RENDER_API_KEY: ${{ secrets.RENDER_API_KEY }}
+    steps:
+      - name: Verify isolated service and load masked owner token
+        shell: bash
+        run: |
+          set -euo pipefail
+          test -n "${RENDER_API_KEY:-}"
+          echo "::add-mask::$RENDER_API_KEY"
+          tmp="$(mktemp)"
+          code="$(curl -sS -o "$tmp" -w '%{http_code}' \
+            "${RENDER_API_BASE}/services/${SERVICE_ID}" \
+            -H 'Accept: application/json' \
+            -H "Authorization: Bearer ${RENDER_API_KEY}")"
+          [[ "$code" == "200" ]]
+          [[ "$(jq -r '.name // empty' "$tmp")" == "$SERVICE_NAME" ]]
+          rm -f "$tmp"
+
+          tmp="$(mktemp)"
+          code="$(curl -sS -o "$tmp" -w '%{http_code}' \
+            "${RENDER_API_BASE}/services/${SERVICE_ID}/env-vars/KRC_MEDIA_ACTION_TOKEN" \
+            -H 'Accept: application/json' \
+            -H "Authorization: Bearer ${RENDER_API_KEY}")"
+          [[ "$code" == "200" ]]
+          token="$(jq -r '(.envVar.value // .value // empty)' "$tmp")"
+          rm -f "$tmp"
+          test -n "$token"
+          echo "::add-mask::$token"
+          umask 077
+          printf '%s' "$token" > /tmp/krc-media-action-token
+
+      - name: Capture read-only baseline
+        shell: bash
+        run: |
+          set -euo pipefail
+          token="$(cat /tmp/krc-media-action-token)"
+          echo "::add-mask::$token"
+          code="$(curl -sS --max-time 90 -o /tmp/audit.json -w '%{http_code}' \
+            "${BETA_BASE_URL}${AUDIT_PATH}" \
+            -H 'Accept: application/json' \
+            -H "Authorization: Bearer ${token}")"
+          [[ "$code" == "200" ]]
+          jq -e '.read_only == true and .database.transaction_read_only == "on" and .database.default_transaction_read_only == "on"' /tmp/audit.json >/dev/null
+          echo 'KRC_INTERNAL_DB_AUDIT_JSON_BEGIN'
+          jq -c '{database,tables,columns,constraints,indexes,sequences,extensions,row_counts,managed_status_distribution,managed_timestamp_range,client_status_distribution,client_timestamp_range,stt_charge_range}' /tmp/audit.json
+          echo 'KRC_INTERNAL_DB_AUDIT_JSON_END'
+          echo "Schema SHA256: $(jq -c '{tables,columns,constraints,indexes,sequences,extensions}' /tmp/audit.json | sha256sum | awk '{print $1}')"
+
+      - name: Remove temporary local material
+        if: always()
+        shell: bash
+        run: |
+          rm -f /tmp/krc-media-action-token /tmp/audit.json
