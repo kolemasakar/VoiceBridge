@@ -124,22 +124,38 @@ jobs:
 
           ok=0
           for attempt in 1 2 3 4 5; do
-            rm -f /tmp/krc-source-preflight.txt
-            if docker run --rm \
+            rm -f /tmp/krc-source-preflight.txt /tmp/krc-source-preflight.err
+            if docker run --rm -i \
               -e DATABASE_URL="$database_url" \
               -e PGCONNECT_TIMEOUT=15 \
               -e PGSSLMODE=require \
               -e PGOPTIONS='-c default_transaction_read_only=on' \
               "$POSTGRES_IMAGE" \
-              sh -lc 'psql -X -A -t -F "|" -v ON_ERROR_STOP=1 --dbname "$DATABASE_URL" -c "SELECT '\''read_only'\'', current_setting('\''default_transaction_read_only'\''); SELECT '\''table'\'', c.relname FROM pg_class c JOIN pg_namespace n ON n.oid=c.relnamespace WHERE c.relkind='\''r'\'' AND n.nspname='\''public'\'' ORDER BY c.relname;"' \
-              > /tmp/krc-source-preflight.txt 2>/tmp/krc-source-preflight.err; then
+              sh -lc 'psql -X -A -t -F "|" -v ON_ERROR_STOP=1 --dbname "$DATABASE_URL"' \
+              > /tmp/krc-source-preflight.txt 2>/tmp/krc-source-preflight.err <<'SQL'
+          SELECT 'read_only', current_setting('default_transaction_read_only');
+          SELECT 'table', c.relname
+          FROM pg_class c
+          JOIN pg_namespace n ON n.oid=c.relnamespace
+          WHERE c.relkind='r' AND n.nspname='public'
+          ORDER BY c.relname;
+          SQL
+            then
               ok=1
               break
             fi
-            echo "Source preflight transport attempt ${attempt}/5 failed; retrying."
+            echo "Source preflight attempt ${attempt}/5 failed; retrying."
             sleep 5
           done
-          [[ "$ok" == "1" ]] || { echo "Source preflight failed after retries."; exit 1; }
+          if [[ "$ok" != "1" ]]; then
+            echo "Source preflight failed after retries. Sanitized diagnostic:"
+            sed -E \
+              -e 's#postgres(ql)?://[^[:space:]]+#<masked-postgres-url>#g' \
+              -e 's#password=[^[:space:]]+#password=<masked>#gi' \
+              -e 's#user=[^[:space:]]+#user=<masked>#gi' \
+              /tmp/krc-source-preflight.err | tail -n 5 || true
+            exit 1
+          fi
 
           [[ "$(awk -F'|' '$1=="read_only" {print $2}' /tmp/krc-source-preflight.txt | tr -d '[:space:]')" == "on" ]]
           tables="$(awk -F'|' '$1=="table" {print $2}' /tmp/krc-source-preflight.txt | tr -d '\r')"
@@ -159,7 +175,7 @@ jobs:
           echo "::add-mask::$database_url"
           ok=0
           for attempt in 1 2 3 4 5; do
-            rm -f /tmp/krc-source-fingerprint.txt
+            rm -f /tmp/krc-source-fingerprint.txt /tmp/krc-source-fingerprint.err
             if docker run --rm -i \
               -e DATABASE_URL="$database_url" \
               -e PGCONNECT_TIMEOUT=15 \
