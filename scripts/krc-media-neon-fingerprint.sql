@@ -1,8 +1,3 @@
-\set ON_ERROR_STOP on
-\pset tuples_only on
-\pset format unaligned
-\pset fieldsep '|'
-
 SELECT 'table_count', count(*)
 FROM pg_class c
 JOIN pg_namespace n ON n.oid = c.relnamespace

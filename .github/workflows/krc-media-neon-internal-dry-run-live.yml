@@ -1,0 +1,335 @@
+name: KRC MEDIA Neon Internal Dry Run Live
+
+on:
+  push:
+    branches:
+      - agent/krc-media-transcript
+    paths:
+      - src/cloud/src/internal_db_export_http.ts
+      - src/cloud/src/managed_server.ts
+      - scripts/krc-media-neon-fingerprint.sql
+      - .github/workflows/krc-media-neon-internal-dry-run-live.yml
+
+permissions:
+  contents: read
+
+concurrency:
+  group: krc-media-neon-internal-dry-run-live
+  cancel-in-progress: false
+
+env:
+  RENDER_API_BASE: https://api.render.com/v1
+  SERVICE_ID: srv-da1kic5bedkc73d6fk60
+  SERVICE_NAME: voicebridge-krc-media-beta-kolemasakar
+  REQUIRED_BRANCH: agent/krc-media-transcript
+  BETA_BASE_URL: https://voicebridge-krc-media-beta-kolemasakar.onrender.com
+  EXPORT_PATH: /api/v1/media/internal-db-export
+  POSTGRES_IMAGE: postgres:18
+  DRYRUN_DB: krc_neon_dryrun
+  DRYRUN_CONTAINER: krc-neon-internal-${{ github.run_id }}
+
+jobs:
+  dry-run:
+    name: Owner-only internal PostgreSQL dry run
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    env:
+      RENDER_API_KEY: ${{ secrets.RENDER_API_KEY }}
+    steps:
+      - name: Checkout exact head
+        uses: actions/checkout@v4
+
+      - name: Verify isolated Render target
+        shell: bash
+        run: |
+          set -euo pipefail
+          test -n "${RENDER_API_KEY:-}" || { echo "RENDER_API_KEY is not configured"; exit 1; }
+          echo "::add-mask::$RENDER_API_KEY"
+          tmp="$(mktemp)"
+          code="$(curl -sS -o "$tmp" -w '%{http_code}' \
+            "${RENDER_API_BASE}/services/${SERVICE_ID}" \
+            -H 'Accept: application/json' \
+            -H "Authorization: Bearer ${RENDER_API_KEY}")"
+          [[ "$code" == "200" ]]
+          [[ "$(jq -r '.name // empty' "$tmp")" == "$SERVICE_NAME" ]]
+          [[ "$(jq -r '.branch // empty' "$tmp")" == "$REQUIRED_BRANCH" ]]
+          rm -f "$tmp"
+          echo "Isolated Render target verified."
+
+      - name: Deploy exact feature-branch commit
+        id: deploy
+        shell: bash
+        run: |
+          set -euo pipefail
+          payload="$(jq -nc --arg commitId "$GITHUB_SHA" '{commitId:$commitId,clearCache:"do_not_clear"}')"
+          tmp="$(mktemp)"
+          code="$(curl -sS -o "$tmp" -w '%{http_code}' -X POST \
+            "${RENDER_API_BASE}/services/${SERVICE_ID}/deploys" \
+            -H 'Accept: application/json' \
+            -H 'Content-Type: application/json' \
+            -H "Authorization: Bearer ${RENDER_API_KEY}" \
+            --data "$payload")"
+          [[ "$code" == "201" || "$code" == "202" ]]
+          deploy_id="$(jq -r '(.deploy // .).id // empty' "$tmp")"
+          rm -f "$tmp"
+          test -n "$deploy_id"
+
+          for i in $(seq 1 120); do
+            tmp="$(mktemp)"
+            code="$(curl -sS -o "$tmp" -w '%{http_code}' \
+              "${RENDER_API_BASE}/services/${SERVICE_ID}/deploys/${deploy_id}" \
+              -H 'Accept: application/json' \
+              -H "Authorization: Bearer ${RENDER_API_KEY}")"
+            [[ "$code" == "200" ]]
+            status="$(jq -r '(.deploy // .).status // "unknown"' "$tmp")"
+            commit="$(jq -r '(.deploy // .).commit.id // (.deploy // .).commitId // "unknown"' "$tmp")"
+            rm -f "$tmp"
+            if [[ "$status" == "live" ]]; then
+              [[ "$commit" == "$GITHUB_SHA" ]]
+              echo "live_sha=$commit" >> "$GITHUB_OUTPUT"
+              echo "Exact feature-branch commit is live on isolated service."
+              exit 0
+            fi
+            case "$status" in
+              build_failed|update_failed|canceled|deactivated) exit 1 ;;
+            esac
+            sleep 5
+          done
+          echo "Timed out waiting for isolated deploy."
+          exit 1
+
+      - name: Load masked runtime tokens
+        shell: bash
+        run: |
+          set -euo pipefail
+          for name in KRC_MEDIA_ACTION_TOKEN TEST_ACCESS_TOKEN; do
+            tmp="$(mktemp)"
+            code="$(curl -sS -o "$tmp" -w '%{http_code}' \
+              "${RENDER_API_BASE}/services/${SERVICE_ID}/env-vars/${name}" \
+              -H 'Accept: application/json' \
+              -H "Authorization: Bearer ${RENDER_API_KEY}")"
+            [[ "$code" == "200" ]]
+            value="$(jq -r '(.envVar.value // .value // empty)' "$tmp")"
+            rm -f "$tmp"
+            test -n "$value"
+            echo "::add-mask::$value"
+            umask 077
+            if [[ "$name" == "KRC_MEDIA_ACTION_TOKEN" ]]; then
+              printf '%s' "$value" > /tmp/krc-media-action-token
+            else
+              printf '%s' "$value" > /tmp/krc-test-access-token
+            fi
+          done
+          echo "Runtime tokens loaded and masked."
+
+      - name: Run dry-run or verify endpoint cleanup
+        id: probe
+        shell: bash
+        run: |
+          set -euo pipefail
+          media_token="$(cat /tmp/krc-media-action-token)"
+          test_token="$(cat /tmp/krc-test-access-token)"
+          echo "::add-mask::$media_token"
+          echo "::add-mask::$test_token"
+
+          if [[ -f src/cloud/src/internal_db_export_http.ts ]]; then
+            unauth="$(curl -sS --max-time 60 -o /tmp/unauth.json -w '%{http_code}' \
+              "${BETA_BASE_URL}${EXPORT_PATH}/fingerprint")"
+            [[ "$unauth" == "401" ]]
+
+            fp_code="$(curl -sS --max-time 90 -o /tmp/krc-source-fingerprint.txt -w '%{http_code}' \
+              "${BETA_BASE_URL}${EXPORT_PATH}/fingerprint" \
+              -H 'Accept: text/plain' \
+              -H "Authorization: Bearer ${media_token}")"
+            [[ "$fp_code" == "200" ]]
+            grep -q '^managed_count|' /tmp/krc-source-fingerprint.txt
+            grep -q '^client_count|' /tmp/krc-source-fingerprint.txt
+            grep -q '^stt_charge_count|' /tmp/krc-source-fingerprint.txt
+
+            dump_code="$(curl -sS --max-time 120 -o /tmp/krc-source.dump -w '%{http_code}' \
+              "${BETA_BASE_URL}${EXPORT_PATH}" \
+              -H 'Accept: application/octet-stream' \
+              -H "Authorization: Bearer ${media_token}")"
+            [[ "$dump_code" == "200" ]]
+            test -s /tmp/krc-source.dump
+
+            docker pull "$POSTGRES_IMAGE" >/dev/null
+            docker run --rm -i "$POSTGRES_IMAGE" pg_restore -l < /tmp/krc-source.dump >/dev/null
+
+            dump_sha="$(sha256sum /tmp/krc-source.dump | awk '{print $1}')"
+            dump_bytes="$(wc -c < /tmp/krc-source.dump | tr -d '[:space:]')"
+            echo "dump_sha=$dump_sha" >> "$GITHUB_OUTPUT"
+            echo "dump_bytes=$dump_bytes" >> "$GITHUB_OUTPUT"
+            echo "mode=dry_run" >> "$GITHUB_OUTPUT"
+            echo "Owner-only source export transport PASS."
+          else
+            media_code="$(curl -sS --max-time 60 -o /tmp/removed-media.json -w '%{http_code}' \
+              "${BETA_BASE_URL}${EXPORT_PATH}" \
+              -H "Authorization: Bearer ${media_token}")"
+            media_error="$(jq -r '.error.code // "none"' /tmp/removed-media.json 2>/dev/null || echo non_json)"
+            [[ "$media_code" == "401" ]]
+            [[ "$media_error" == "AUTHENTICATION_FAILED" ]]
+
+            legacy_code="$(curl -sS --max-time 60 -o /tmp/removed-legacy.json -w '%{http_code}' \
+              "${BETA_BASE_URL}${EXPORT_PATH}" \
+              -H "Authorization: Bearer ${test_token}")"
+            legacy_error="$(jq -r '.error.code // "none"' /tmp/removed-legacy.json 2>/dev/null || echo non_json)"
+            [[ "$legacy_code" == "404" ]]
+            [[ "$legacy_error" == "NOT_FOUND" ]]
+
+            capability_code="$(curl -sS --max-time 60 -o /tmp/capability.json -w '%{http_code}' \
+              "${BETA_BASE_URL}/api/v1/media/managed" \
+              -H 'Accept: application/json' \
+              -H "Authorization: Bearer ${media_token}")"
+            [[ "$capability_code" == "200" ]]
+            jq -e '.mode == "zero_client_managed_beta" and .configured == true and .durable_store == "postgres"' /tmp/capability.json >/dev/null
+            echo "mode=cleanup" >> "$GITHUB_OUTPUT"
+            echo "Temporary internal export endpoint cleanup PASS."
+          fi
+
+      - name: Restore source archive into ephemeral PostgreSQL 18
+        if: steps.probe.outputs.mode == 'dry_run'
+        shell: bash
+        run: |
+          set -euo pipefail
+          password="$(openssl rand -hex 24)"
+          echo "::add-mask::$password"
+          umask 077
+          printf '%s' "$password" > /tmp/krc-local-password
+
+          docker run -d --name "$DRYRUN_CONTAINER" \
+            -e POSTGRES_PASSWORD="$password" \
+            -e POSTGRES_DB="$DRYRUN_DB" \
+            "$POSTGRES_IMAGE" >/dev/null
+
+          for attempt in $(seq 1 30); do
+            if docker exec -e PGPASSWORD="$password" "$DRYRUN_CONTAINER" \
+              pg_isready -U postgres -d "$DRYRUN_DB" >/dev/null 2>&1; then
+              break
+            fi
+            [[ "$attempt" != "30" ]] || { echo "Ephemeral PostgreSQL did not become ready."; exit 1; }
+            sleep 2
+          done
+
+          docker cp /tmp/krc-source.dump "$DRYRUN_CONTAINER:/tmp/krc-source.dump"
+          docker exec -e PGPASSWORD="$password" "$DRYRUN_CONTAINER" \
+            pg_restore -U postgres -d "$DRYRUN_DB" \
+            --no-owner --no-acl --exit-on-error \
+            /tmp/krc-source.dump
+          echo "Ephemeral PostgreSQL restore PASS."
+
+      - name: Compare source and restored logical fingerprints
+        id: verify
+        if: steps.probe.outputs.mode == 'dry_run'
+        shell: bash
+        run: |
+          set -euo pipefail
+          password="$(cat /tmp/krc-local-password)"
+          echo "::add-mask::$password"
+
+          docker exec -i -e PGPASSWORD="$password" "$DRYRUN_CONTAINER" \
+            psql -X -A -t -F '|' -U postgres -d "$DRYRUN_DB" -v ON_ERROR_STOP=1 \
+            < scripts/krc-media-neon-fingerprint.sql \
+            > /tmp/krc-target-fingerprint.txt
+
+          diff -u /tmp/krc-source-fingerprint.txt /tmp/krc-target-fingerprint.txt
+          source_fp_sha="$(sha256sum /tmp/krc-source-fingerprint.txt | awk '{print $1}')"
+          target_fp_sha="$(sha256sum /tmp/krc-target-fingerprint.txt | awk '{print $1}')"
+          [[ "$source_fp_sha" == "$target_fp_sha" ]]
+
+          managed_count="$(awk -F'|' '$1=="managed_count" {print $2}' /tmp/krc-source-fingerprint.txt)"
+          client_count="$(awk -F'|' '$1=="client_count" {print $2}' /tmp/krc-source-fingerprint.txt)"
+          stt_count="$(awk -F'|' '$1=="stt_charge_count" {print $2}' /tmp/krc-source-fingerprint.txt)"
+          echo "source_fp_sha=$source_fp_sha" >> "$GITHUB_OUTPUT"
+          echo "target_fp_sha=$target_fp_sha" >> "$GITHUB_OUTPUT"
+          echo "managed_count=$managed_count" >> "$GITHUB_OUTPUT"
+          echo "client_count=$client_count" >> "$GITHUB_OUTPUT"
+          echo "stt_count=$stt_count" >> "$GITHUB_OUTPUT"
+          echo "Logical fingerprint comparison PASS."
+
+      - name: Compare archive schema and restored schema
+        id: schema
+        if: steps.probe.outputs.mode == 'dry_run'
+        shell: bash
+        run: |
+          set -euo pipefail
+          password="$(cat /tmp/krc-local-password)"
+          echo "::add-mask::$password"
+
+          docker run --rm -v /tmp:/work "$POSTGRES_IMAGE" \
+            pg_restore --schema-only --no-owner --no-acl \
+            -f /work/krc-source-schema.sql /work/krc-source.dump
+
+          docker exec -e PGPASSWORD="$password" "$DRYRUN_CONTAINER" \
+            pg_dump -U postgres -d "$DRYRUN_DB" \
+            --schema-only --no-owner --no-acl \
+            > /tmp/krc-target-schema.sql
+
+          normalize_schema() {
+            sed -E \
+              -e '/^\\restrict /d' \
+              -e '/^\\unrestrict /d' \
+              -e '/^-- Dumped from database version /d' \
+              -e '/^-- Dumped by pg_dump version /d' \
+              "$1"
+          }
+          normalize_schema /tmp/krc-source-schema.sql > /tmp/krc-source-schema.normalized.sql
+          normalize_schema /tmp/krc-target-schema.sql > /tmp/krc-target-schema.normalized.sql
+
+          source_schema_sha="$(sha256sum /tmp/krc-source-schema.normalized.sql | awk '{print $1}')"
+          target_schema_sha="$(sha256sum /tmp/krc-target-schema.normalized.sql | awk '{print $1}')"
+          [[ "$source_schema_sha" == "$target_schema_sha" ]] || {
+            echo "Normalized schema fingerprint mismatch."
+            exit 1
+          }
+          echo "source_schema_sha=$source_schema_sha" >> "$GITHUB_OUTPUT"
+          echo "target_schema_sha=$target_schema_sha" >> "$GITHUB_OUTPUT"
+          echo "Normalized schema comparison PASS."
+
+      - name: Publish sanitized lifecycle summary
+        if: always()
+        shell: bash
+        run: |
+          {
+            echo "# KRC MEDIA Neon internal dry-run lifecycle"
+            echo
+            echo "- Isolated service: \`${SERVICE_NAME}\`"
+            echo "- Exact live SHA: \`${{ steps.deploy.outputs.live_sha || 'unavailable' }}\`"
+            echo "- Mode: \`${{ steps.probe.outputs.mode || 'failed' }}\`"
+            echo "- Neon resource created: \`false\`"
+            echo "- Render environment changed: \`false\`"
+            echo "- Source database writes requested: \`false\`"
+            echo "- Raw dump uploaded as artifact: \`false\`"
+            if [[ "${{ steps.probe.outputs.mode }}" == "dry_run" ]]; then
+              echo "- Dump bytes: \`${{ steps.probe.outputs.dump_bytes }}\`"
+              echo "- Dump SHA256: \`${{ steps.probe.outputs.dump_sha }}\`"
+              echo "- Source logical fingerprint SHA256: \`${{ steps.verify.outputs.source_fp_sha }}\`"
+              echo "- Restored logical fingerprint SHA256: \`${{ steps.verify.outputs.target_fp_sha }}\`"
+              echo "- Source normalized schema SHA256: \`${{ steps.schema.outputs.source_schema_sha }}\`"
+              echo "- Restored normalized schema SHA256: \`${{ steps.schema.outputs.target_schema_sha }}\`"
+              echo "- krc_managed_media_jobs rows: \`${{ steps.verify.outputs.managed_count }}\`"
+              echo "- krc_media_client_jobs rows: \`${{ steps.verify.outputs.client_count }}\`"
+              echo "- krc_media_stt_charges rows: \`${{ steps.verify.outputs.stt_count }}\`"
+            fi
+          } >> "$GITHUB_STEP_SUMMARY"
+
+      - name: Remove all temporary local material
+        if: always()
+        shell: bash
+        run: |
+          docker rm -f "$DRYRUN_CONTAINER" >/dev/null 2>&1 || true
+          rm -f \
+            /tmp/krc-media-action-token \
+            /tmp/krc-test-access-token \
+            /tmp/krc-local-password \
+            /tmp/krc-source.dump \
+            /tmp/krc-source-fingerprint.txt \
+            /tmp/krc-target-fingerprint.txt \
+            /tmp/krc-source-schema.sql \
+            /tmp/krc-target-schema.sql \
+            /tmp/krc-source-schema.normalized.sql \
+            /tmp/krc-target-schema.normalized.sql \
+            /tmp/unauth.json \
+            /tmp/removed-media.json \
+            /tmp/removed-legacy.json \
+            /tmp/capability.json
