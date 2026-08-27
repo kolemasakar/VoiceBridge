@@ -8,6 +8,7 @@ const FINGERPRINT = `${ROOT}/fingerprint`;
 const COMMAND_TIMEOUT_MS = 120000;
 const MAX_EXPORT_BYTES = 64 * 1024 * 1024;
 const MAX_FINGERPRINT_BYTES = 1024 * 1024;
+const MAX_STDERR_BYTES = 32 * 1024;
 
 const FINGERPRINT_SQL = `
 SELECT 'table_count', count(*)
@@ -71,6 +72,14 @@ SELECT 'stt_charge_fingerprint',
 FROM public.krc_media_stt_charges;
 `;
 
+const SAFE_EXPORT_ERRORS = new Set([
+  "INTERNAL_DB_EXPORT_TIMEOUT",
+  "INTERNAL_DB_EXPORT_TOO_LARGE",
+  "INTERNAL_DB_EXPORT_UNAVAILABLE",
+  "INTERNAL_DB_EXPORT_TOOL_VERSION_MISMATCH",
+  "INTERNAL_DB_EXPORT_FAILED"
+]);
+
 function sendJson(
   response: ServerResponse,
   statusCode: number,
@@ -82,6 +91,16 @@ function sendJson(
   response.end(JSON.stringify(body));
 }
 
+function commandFailureCode(command: string, stderr: string): string {
+  if (
+    command === "pg_dump" &&
+    /server version|pg_dump version|server version mismatch/i.test(stderr)
+  ) {
+    return "INTERNAL_DB_EXPORT_TOOL_VERSION_MISMATCH";
+  }
+  return "INTERNAL_DB_EXPORT_FAILED";
+}
+
 function runReadOnlyCommand(
   databaseUrl: string,
   command: string,
@@ -90,17 +109,18 @@ function runReadOnlyCommand(
   maximumBytes: number
 ): Promise<Buffer> {
   return new Promise((resolve, reject) => {
-    const child = spawn(command, args, {
+    const child = spawn(command, [...args, "--dbname", databaseUrl], {
       stdio: ["pipe", "pipe", "pipe"],
       env: {
         ...process.env,
-        PGDATABASE: databaseUrl,
         PGCONNECT_TIMEOUT: "10",
         PGOPTIONS: "-c default_transaction_read_only=on"
       }
     });
     const chunks: Buffer[] = [];
+    const stderrChunks: Buffer[] = [];
     let bytes = 0;
+    let stderrBytes = 0;
     let settled = false;
     const timer = setTimeout(() => {
       if (settled) return;
@@ -121,7 +141,13 @@ function runReadOnlyCommand(
       }
       chunks.push(chunk);
     });
-    child.stderr.on("data", () => {});
+    child.stderr.on("data", (chunk: Buffer) => {
+      if (stderrBytes >= MAX_STDERR_BYTES) return;
+      const remaining = MAX_STDERR_BYTES - stderrBytes;
+      const bounded = chunk.length <= remaining ? chunk : chunk.subarray(0, remaining);
+      stderrBytes += bounded.length;
+      stderrChunks.push(bounded);
+    });
     child.on("error", () => {
       if (settled) return;
       settled = true;
@@ -133,7 +159,8 @@ function runReadOnlyCommand(
       settled = true;
       clearTimeout(timer);
       if (code !== 0) {
-        reject(new Error("INTERNAL_DB_EXPORT_FAILED"));
+        const stderr = Buffer.concat(stderrChunks).toString("utf8");
+        reject(new Error(commandFailureCode(command, stderr)));
         return;
       }
       resolve(Buffer.concat(chunks));
@@ -202,8 +229,12 @@ export function createInternalDbExportHttpHandler(config: AppConfig) {
       response.setHeader("content-length", String(archive.length));
       response.end(archive);
       return true;
-    } catch {
-      sendJson(response, 503, { error: { code: "INTERNAL_DB_EXPORT_FAILED" } });
+    } catch (error) {
+      const code =
+        error instanceof Error && SAFE_EXPORT_ERRORS.has(error.message)
+          ? error.message
+          : "INTERNAL_DB_EXPORT_FAILED";
+      sendJson(response, 503, { error: { code } });
       return true;
     }
   };
