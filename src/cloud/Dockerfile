@@ -32,8 +32,16 @@ ENV PATH="/opt/ytdlp/bin:${PATH}"
 WORKDIR /app
 
 RUN apt-get update \
+  && apt-get install -y --no-install-recommends ca-certificates curl \
+  && mkdir -p /usr/share/postgresql-common/pgdg \
+  && curl --fail --silent --show-error --location \
+    https://www.postgresql.org/media/keys/ACCC4CF8.asc \
+    -o /usr/share/postgresql-common/pgdg/apt.postgresql.org.asc \
+  && echo "deb [signed-by=/usr/share/postgresql-common/pgdg/apt.postgresql.org.asc] https://apt.postgresql.org/pub/repos/apt bookworm-pgdg main" \
+    > /etc/apt/sources.list.d/pgdg.list \
+  && apt-get update \
   && apt-get install -y --no-install-recommends \
-    ca-certificates python3 python3-venv ffmpeg postgresql-client \
+    python3 python3-venv ffmpeg postgresql-client-18 \
     libcairo2 libpango-1.0-0 libjpeg62-turbo libgif7 librsvg2-2 \
   && rm -rf /var/lib/apt/lists/* \
   && python3 -m venv /opt/ytdlp \

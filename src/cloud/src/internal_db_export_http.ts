@@ -9,6 +9,7 @@ const COMMAND_TIMEOUT_MS = 120000;
 const MAX_EXPORT_BYTES = 64 * 1024 * 1024;
 const MAX_FINGERPRINT_BYTES = 1024 * 1024;
 const MAX_STDERR_BYTES = 32 * 1024;
+// The temporary dry-run image supplies PostgreSQL client 18 to match the source major.
 
 const FINGERPRINT_SQL = `
 SELECT 'table_count', count(*)
