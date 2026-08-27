@@ -20,6 +20,7 @@ env:
   SERVICE_NAME: voicebridge-krc-media-beta-kolemasakar
   DB_NAME: voicebridge-krc-media-beta-db
   RENDER_API_BASE: https://api.render.com/v1
+  POSTGRES_IMAGE: postgres:18
 
 jobs:
   audit:
@@ -28,9 +29,6 @@ jobs:
     timeout-minutes: 10
     env:
       RENDER_API_KEY: ${{ secrets.RENDER_API_KEY }}
-      PGCONNECT_TIMEOUT: "10"
-      PGSSLMODE: require
-      PGOPTIONS: "-c default_transaction_read_only=on"
     steps:
       - name: Verify required secret and isolated service
         id: service
@@ -120,34 +118,34 @@ jobs:
           printf '%s' "$database_url" > /tmp/krc-render-db-url
           echo "External database connection obtained and masked."
 
-      - name: Install PostgreSQL 18 client
+      - name: Prepare official PostgreSQL 18 client
         shell: bash
         run: |
           set -euo pipefail
-          sudo apt-get update -qq
-          if apt-cache show postgresql-client-18 >/dev/null 2>&1; then
-            sudo apt-get install -y -qq postgresql-client-18 >/dev/null
-            export PATH="/usr/lib/postgresql/18/bin:$PATH"
-          else
-            echo "PostgreSQL 18 client package is unavailable on this runner."
-            exit 1
-          fi
-          psql --version
-          pg_dump --version
+          docker pull "$POSTGRES_IMAGE" >/dev/null
+          docker run --rm "$POSTGRES_IMAGE" psql --version
+          docker run --rm "$POSTGRES_IMAGE" pg_dump --version
 
       - name: Verify read-only external connectivity with retries
         shell: bash
         run: |
           set -euo pipefail
-          export PATH="/usr/lib/postgresql/18/bin:$PATH"
           database_url="$(cat /tmp/krc-render-db-url)"
           echo "::add-mask::$database_url"
 
           ok=0
           for attempt in 1 2 3; do
             echo "Read-only PostgreSQL connectivity attempt ${attempt}/3"
-            if mode="$(psql -X -A -t -v ON_ERROR_STOP=1 --dbname "$database_url" -c "SHOW default_transaction_read_only;" 2>/tmp/krc-psql-connect-error)"; then
-              [[ "${mode//$'\n'/}" == "on" ]] || { echo "Read-only session guard is not active."; exit 1; }
+            if mode="$(docker run --rm \
+              -e DATABASE_URL="$database_url" \
+              -e PGCONNECT_TIMEOUT=10 \
+              -e PGSSLMODE=require \
+              -e PGOPTIONS='-c default_transaction_read_only=on' \
+              "$POSTGRES_IMAGE" \
+              sh -lc 'psql -X -A -t -v ON_ERROR_STOP=1 --dbname "$DATABASE_URL" -c "SHOW default_transaction_read_only;"' \
+              2>/tmp/krc-psql-connect-error)"; then
+              mode="$(printf '%s' "$mode" | tr -d '[:space:]')"
+              [[ "$mode" == "on" ]] || { echo "Read-only session guard is not active."; exit 1; }
               ok=1
               break
             fi
@@ -165,11 +163,16 @@ jobs:
         shell: bash
         run: |
           set -euo pipefail
-          export PATH="/usr/lib/postgresql/18/bin:$PATH"
           database_url="$(cat /tmp/krc-render-db-url)"
           echo "::add-mask::$database_url"
 
-          psql -X -v ON_ERROR_STOP=1 --dbname "$database_url" <<'SQL' | tee /tmp/krc-postgres-audit.txt
+          docker run --rm -i \
+            -e DATABASE_URL="$database_url" \
+            -e PGCONNECT_TIMEOUT=10 \
+            -e PGSSLMODE=require \
+            -e PGOPTIONS='-c default_transaction_read_only=on' \
+            "$POSTGRES_IMAGE" \
+            sh -lc 'psql -X -v ON_ERROR_STOP=1 --dbname "$DATABASE_URL"' <<'SQL' | tee /tmp/krc-postgres-audit.txt
           \pset pager off
           \pset null '<NULL>'
           BEGIN TRANSACTION READ ONLY;
@@ -285,14 +288,18 @@ jobs:
         shell: bash
         run: |
           set -euo pipefail
-          export PATH="/usr/lib/postgresql/18/bin:$PATH"
           database_url="$(cat /tmp/krc-render-db-url)"
           echo "::add-mask::$database_url"
-          pg_dump "$database_url" \
-            --schema-only \
-            --no-owner \
-            --no-acl \
-            --file=/tmp/krc-render-schema.sql
+
+          docker run --rm \
+            -e DATABASE_URL="$database_url" \
+            -e PGCONNECT_TIMEOUT=10 \
+            -e PGSSLMODE=require \
+            -e PGOPTIONS='-c default_transaction_read_only=on' \
+            "$POSTGRES_IMAGE" \
+            sh -lc 'pg_dump "$DATABASE_URL" --schema-only --no-owner --no-acl' \
+            > /tmp/krc-render-schema.sql
+
           echo "Schema-only dump SHA256: $(sha256sum /tmp/krc-render-schema.sql | awk '{print $1}')"
           echo "Schema-only dump bytes: $(wc -c < /tmp/krc-render-schema.sql)"
 
@@ -305,6 +312,7 @@ jobs:
             echo
             echo "- Target service: \`${SERVICE_NAME}\`"
             echo "- Target database: \`${DB_NAME}\`"
+            echo "- PostgreSQL client: official \`${POSTGRES_IMAGE}\` container."
             echo "- Workflow is read-only: Render API GET requests only; PostgreSQL sessions enforce \`default_transaction_read_only=on\`."
             echo "- No Render environment variable was changed."
             echo "- No deploy was requested."
