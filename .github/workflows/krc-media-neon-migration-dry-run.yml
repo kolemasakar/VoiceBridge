@@ -122,23 +122,27 @@ jobs:
           database_url="$(cat /tmp/krc-render-db-url)"
           echo "::add-mask::$database_url"
 
-          mode="$(docker run --rm \
-            -e DATABASE_URL="$database_url" \
-            -e PGCONNECT_TIMEOUT=10 \
-            -e PGSSLMODE=require \
-            -e PGOPTIONS='-c default_transaction_read_only=on' \
-            "$POSTGRES_IMAGE" \
-            sh -lc 'psql -X -A -t -v ON_ERROR_STOP=1 --dbname "$DATABASE_URL" -c "SHOW default_transaction_read_only;"')"
-          [[ "$(printf '%s' "$mode" | tr -d '[:space:]')" == "on" ]]
+          ok=0
+          for attempt in 1 2 3 4 5; do
+            rm -f /tmp/krc-source-preflight.txt
+            if docker run --rm \
+              -e DATABASE_URL="$database_url" \
+              -e PGCONNECT_TIMEOUT=15 \
+              -e PGSSLMODE=require \
+              -e PGOPTIONS='-c default_transaction_read_only=on' \
+              "$POSTGRES_IMAGE" \
+              sh -lc 'psql -X -A -t -F "|" -v ON_ERROR_STOP=1 --dbname "$DATABASE_URL" -c "SELECT '\''read_only'\'', current_setting('\''default_transaction_read_only'\''); SELECT '\''table'\'', c.relname FROM pg_class c JOIN pg_namespace n ON n.oid=c.relnamespace WHERE c.relkind='\''r'\'' AND n.nspname='\''public'\'' ORDER BY c.relname;"' \
+              > /tmp/krc-source-preflight.txt 2>/tmp/krc-source-preflight.err; then
+              ok=1
+              break
+            fi
+            echo "Source preflight transport attempt ${attempt}/5 failed; retrying."
+            sleep 5
+          done
+          [[ "$ok" == "1" ]] || { echo "Source preflight failed after retries."; exit 1; }
 
-          tables="$(docker run --rm \
-            -e DATABASE_URL="$database_url" \
-            -e PGCONNECT_TIMEOUT=10 \
-            -e PGSSLMODE=require \
-            -e PGOPTIONS='-c default_transaction_read_only=on' \
-            "$POSTGRES_IMAGE" \
-            sh -lc 'psql -X -A -t -v ON_ERROR_STOP=1 --dbname "$DATABASE_URL" -c "SELECT c.relname FROM pg_class c JOIN pg_namespace n ON n.oid=c.relnamespace WHERE c.relkind='"'"'r'"'"' AND n.nspname='"'"'public'"'"' ORDER BY c.relname;"')"
-          tables="$(printf '%s\n' "$tables" | tr -d '\r')"
+          [[ "$(awk -F'|' '$1=="read_only" {print $2}' /tmp/krc-source-preflight.txt | tr -d '[:space:]')" == "on" ]]
+          tables="$(awk -F'|' '$1=="table" {print $2}' /tmp/krc-source-preflight.txt | tr -d '\r')"
           expected=$'krc_managed_media_jobs\nkrc_media_client_jobs\nkrc_media_stt_charges'
           [[ "$tables" == "$expected" ]] || {
             echo "Unexpected source table set. Dry-run stopped."
@@ -153,15 +157,25 @@ jobs:
           set -euo pipefail
           database_url="$(cat /tmp/krc-render-db-url)"
           echo "::add-mask::$database_url"
-          docker run --rm -i \
-            -e DATABASE_URL="$database_url" \
-            -e PGCONNECT_TIMEOUT=10 \
-            -e PGSSLMODE=require \
-            -e PGOPTIONS='-c default_transaction_read_only=on' \
-            "$POSTGRES_IMAGE" \
-            sh -lc 'psql -X -v ON_ERROR_STOP=1 --dbname "$DATABASE_URL"' \
-            < scripts/krc-media-neon-fingerprint.sql \
-            > /tmp/krc-source-fingerprint.txt
+          ok=0
+          for attempt in 1 2 3 4 5; do
+            rm -f /tmp/krc-source-fingerprint.txt
+            if docker run --rm -i \
+              -e DATABASE_URL="$database_url" \
+              -e PGCONNECT_TIMEOUT=15 \
+              -e PGSSLMODE=require \
+              -e PGOPTIONS='-c default_transaction_read_only=on' \
+              "$POSTGRES_IMAGE" \
+              sh -lc 'psql -X -v ON_ERROR_STOP=1 --dbname "$DATABASE_URL"' \
+              < scripts/krc-media-neon-fingerprint.sql \
+              > /tmp/krc-source-fingerprint.txt 2>/tmp/krc-source-fingerprint.err; then
+              ok=1
+              break
+            fi
+            echo "Source fingerprint transport attempt ${attempt}/5 failed; retrying."
+            sleep 5
+          done
+          [[ "$ok" == "1" ]] || { echo "Source fingerprint failed after retries."; exit 1; }
           echo "Source logical fingerprint captured."
 
       - name: Create read-only source dump and schema snapshot
@@ -172,23 +186,43 @@ jobs:
           database_url="$(cat /tmp/krc-render-db-url)"
           echo "::add-mask::$database_url"
 
-          docker run --rm \
-            -e DATABASE_URL="$database_url" \
-            -e PGCONNECT_TIMEOUT=10 \
-            -e PGSSLMODE=require \
-            -e PGOPTIONS='-c default_transaction_read_only=on' \
-            "$POSTGRES_IMAGE" \
-            sh -lc 'pg_dump "$DATABASE_URL" --format=custom --no-owner --no-acl' \
-            > /tmp/krc-source.dump
+          ok=0
+          for attempt in 1 2 3 4 5; do
+            rm -f /tmp/krc-source.dump
+            if docker run --rm \
+              -e DATABASE_URL="$database_url" \
+              -e PGCONNECT_TIMEOUT=15 \
+              -e PGSSLMODE=require \
+              -e PGOPTIONS='-c default_transaction_read_only=on' \
+              "$POSTGRES_IMAGE" \
+              sh -lc 'pg_dump "$DATABASE_URL" --format=custom --no-owner --no-acl' \
+              > /tmp/krc-source.dump 2>/tmp/krc-source-dump.err; then
+              ok=1
+              break
+            fi
+            echo "Source custom dump transport attempt ${attempt}/5 failed; retrying."
+            sleep 5
+          done
+          [[ "$ok" == "1" ]] || { echo "Source custom dump failed after retries."; exit 1; }
 
-          docker run --rm \
-            -e DATABASE_URL="$database_url" \
-            -e PGCONNECT_TIMEOUT=10 \
-            -e PGSSLMODE=require \
-            -e PGOPTIONS='-c default_transaction_read_only=on' \
-            "$POSTGRES_IMAGE" \
-            sh -lc 'pg_dump "$DATABASE_URL" --schema-only --no-owner --no-acl' \
-            > /tmp/krc-source-schema.sql
+          ok=0
+          for attempt in 1 2 3 4 5; do
+            rm -f /tmp/krc-source-schema.sql
+            if docker run --rm \
+              -e DATABASE_URL="$database_url" \
+              -e PGCONNECT_TIMEOUT=15 \
+              -e PGSSLMODE=require \
+              -e PGOPTIONS='-c default_transaction_read_only=on' \
+              "$POSTGRES_IMAGE" \
+              sh -lc 'pg_dump "$DATABASE_URL" --schema-only --no-owner --no-acl' \
+              > /tmp/krc-source-schema.sql 2>/tmp/krc-source-schema.err; then
+              ok=1
+              break
+            fi
+            echo "Source schema dump transport attempt ${attempt}/5 failed; retrying."
+            sleep 5
+          done
+          [[ "$ok" == "1" ]] || { echo "Source schema dump failed after retries."; exit 1; }
 
           dump_sha="$(sha256sum /tmp/krc-source.dump | awk '{print $1}')"
           dump_bytes="$(wc -c < /tmp/krc-source.dump | tr -d '[:space:]')"
@@ -337,4 +371,9 @@ jobs:
             /tmp/krc-source-schema.normalized.sql \
             /tmp/krc-target-schema.normalized.sql \
             /tmp/krc-source-fingerprint.txt \
-            /tmp/krc-target-fingerprint.txt
+            /tmp/krc-target-fingerprint.txt \
+            /tmp/krc-source-preflight.txt \
+            /tmp/krc-source-preflight.err \
+            /tmp/krc-source-fingerprint.err \
+            /tmp/krc-source-dump.err \
+            /tmp/krc-source-schema.err
