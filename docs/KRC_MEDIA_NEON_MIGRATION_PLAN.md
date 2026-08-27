@@ -1,6 +1,6 @@
 # KRC MEDIA Neon Migration Plan
 
-Status: PREPARED_NOT_EXECUTED
+Status: DRY_RUN_PASS_AWAITING_NEON_PROVISIONING
 Date: 2026-08-27
 Repository: kolemasakar/VoiceBridge
 Branch: agent/krc-media-transcript
@@ -8,38 +8,38 @@ Release state: RELEASE_HOLD_OWNER_TESTING
 
 ## 1. Objective
 
-Move the isolated KRC MEDIA BETA durable PostgreSQL store from the existing Render PostgreSQL database to Neon without changing the application data model or MEDIA BETA behavior.
+Move the isolated KRC MEDIA BETA durable PostgreSQL store from the current Render Free PostgreSQL database to Neon Free PostgreSQL without changing the application data model or MEDIA BETA behavior.
 
-This document prepares the migration only. It does not authorize Neon provisioning, a database write, a Render environment change, a production promotion, or a PR merge.
+This document records the completed pre-provisioning audit and PostgreSQL 18 dry run. It does not authorize Neon provisioning, a Render environment change, a database cutover, a PR merge, source database deletion, or public promotion.
 
-## 2. Current verified source baseline
+## 2. Verified source baseline
 
 Source service:
 - Render service: voicebridge-krc-media-beta-kolemasakar
+- Source database: voicebridge-krc-media-beta-db
+- Persistence variable: KRC_MEDIA_DATABASE_URL
 - Durable store type: postgres
-- PostgreSQL major version observed during the 2026-08-27 audit: 18
-- Database size observed: 8,394,431 bytes (about 8.0 MiB)
+- PostgreSQL version observed during the 2026-08-27 audit: 18.4
+- Database size observed: 8,394,431 bytes, about 8.0 MiB
 - User tables: 3
-- krc_managed_media_jobs: 1 row
-- krc_media_client_jobs: 0 rows
-- krc_media_stt_charges: 0 rows
+- public.krc_managed_media_jobs: 1 row
+- public.krc_media_client_jobs: 0 rows
+- public.krc_media_stt_charges: 0 rows
 - Managed job status distribution: COMPLETED = 1
 - Total recorded STT charge seconds: 0
-- Custom internal-audit schema fingerprint captured on 2026-08-27:
-  d2f2c3a3635809d91f3aff8cc0e95c88a47cc603e5f2ddd0e8c94e13895d208f
+- Extensions observed: plpgsql 1.0
+- Sequences observed: none
 
-The source database remains authoritative until an explicitly approved cutover is completed and verified.
+The source Render database remains authoritative until a separately approved cutover is completed and verified.
 
-## 3. Database surface that must remain compatible
-
-The current runtime uses standard PostgreSQL through psql. No Render-specific SQL is required by the persistence layer.
+## 3. Required PostgreSQL surface
 
 Required relations:
 - public.krc_managed_media_jobs
 - public.krc_media_client_jobs
 - public.krc_media_stt_charges
 
-Required data types and features include:
+Required PostgreSQL features include:
 - text
 - jsonb
 - timestamptz
@@ -49,164 +49,208 @@ Required data types and features include:
 - unique constraints
 - check constraints
 - btree indexes
-- built-in plpgsql extension state as emitted by pg_dump
+- PostgreSQL extension metadata required by the dump
 
-Target compatibility gate:
-- Prefer the same PostgreSQL major version as the source.
-- If Neon cannot provide the same major version at execution time, stop and perform a dedicated compatibility test before migration approval.
-- Do not assume cross-major compatibility merely because pg_restore succeeds.
+The current persistence layer uses standard PostgreSQL and psql. No Render-specific SQL was identified in the persistence implementation.
+
+Target compatibility rule:
+- Prefer PostgreSQL 18 for the Neon target.
+- If PostgreSQL 18 is unavailable at provisioning time, stop and perform a dedicated cross-major compatibility validation before migration.
 
 ## 4. Migration strategy
 
-For the current database size, use PostgreSQL logical dump and restore rather than replication.
+Use PostgreSQL logical dump and restore rather than replication.
 
-Canonical path:
+Canonical migration path:
 
-Render PostgreSQL -> pg_dump custom archive -> Neon PostgreSQL -> pg_restore -> structural and logical verification -> Render KRC_MEDIA_DATABASE_URL cutover
+Render PostgreSQL -> read-only pg_dump custom archive -> Neon PostgreSQL -> pg_restore -> structural/data verification -> controlled KRC_MEDIA_DATABASE_URL cutover
 
 Reasons:
-- The database is small.
-- The schema is simple and PostgreSQL-native.
-- The owner-only beta permits a controlled write-freeze window.
-- Logical dump/restore is easy to verify and easy to roll back from because the source database can remain intact.
+- The source database is very small.
+- The schema is PostgreSQL-native and simple.
+- Owner-only beta operation permits a controlled short write-freeze window.
+- The existing Render database can remain intact as the rollback source.
 
-## 5. Prepared dry-run
+## 5. Completed pre-Neon dry run
 
-The repository contains a GitHub Actions dry-run that does not use Neon.
+Direct GitHub-hosted runner connections to the Render external PostgreSQL endpoint repeatedly failed with SSL connection closure. Therefore the final dry run did not depend on the unreliable external PostgreSQL path.
+
+A temporary owner-authenticated internal export handler was deployed only to the isolated KRC MEDIA BETA Render service. It used the service's already working KRC_MEDIA_DATABASE_URL connection and enforced source-side read-only PostgreSQL sessions.
+
+Source safeguards:
+- KRC_MEDIA_ACTION_TOKEN authentication was required.
+- PGOPTIONS enforced default_transaction_read_only=on.
+- The source database was never used as a restore target.
+- No INSERT, UPDATE, DELETE, DDL, or migration write was requested against the source.
+- No Render environment variable was changed.
+- No Neon resource was created.
+- The raw dump was transferred only to an ephemeral GitHub runner and was not uploaded as an artifact.
+- Temporary local dump and token material was removed at workflow completion.
 
 Dry-run target:
-- An ephemeral local PostgreSQL 18 Docker container inside the GitHub Actions runner.
+- Ephemeral PostgreSQL 18 Docker container inside GitHub Actions.
 
-Dry-run operations:
-1. Identify the existing isolated Render service and PostgreSQL database through Render API GET requests only.
-2. Obtain the existing source external connection string without printing it.
-3. Enforce default_transaction_read_only=on for every source PostgreSQL session.
-4. Verify that the expected three source tables are present.
-5. Capture a sanitized source logical fingerprint.
-6. Create a custom pg_dump archive from the source.
-7. Restore that archive into an ephemeral local PostgreSQL 18 database.
-8. Compare normalized schema-only dump hashes.
-9. Compare sanitized logical data fingerprints and exact row counts.
-10. Delete the local dump, fingerprints, connection material, and local PostgreSQL container.
+Dry-run verification:
+- Source export: PASS
+- PostgreSQL 18 pg_restore: PASS
+- Catalog structural fingerprint equality: PASS
+- Logical durable-data fingerprint equality: PASS
+- Exact row counts: PASS
+- Local temporary material cleanup: PASS
 
-Raw row payloads and the raw database dump are never uploaded as GitHub artifacts.
+Authoritative dry-run execution:
+- Commit: 159bff89988f464a989d426f60628a2fa92ba41e
+- Workflow: KRC MEDIA Neon Internal Dry Run Live
+- Run ID: 33045161728
+- Result: SUCCESS
+- Dump bytes: 8701
+- Dump SHA256: 9b10f07898e9dcba8e9f55f8ede999181839ea7ea763608b486ff782fbcc0a8e
+- Catalog structural fingerprint: 3ec31bd757e74b958c1a5a0226fab9bb
+- Source combined fingerprint SHA256: dd6cfd92a6a667c6b8632ed3b2723179e56038599ace0dd3a1088bbb3931cbd5
+- Restored combined fingerprint SHA256: dd6cfd92a6a667c6b8632ed3b2723179e56038599ace0dd3a1088bbb3931cbd5
+- Restored krc_managed_media_jobs rows: 1
+- Restored krc_media_client_jobs rows: 0
+- Restored krc_media_stt_charges rows: 0
 
-## 6. Dry-run acceptance gates
+The catalog structural fingerprint covers user relations, columns and PostgreSQL types, defaults, nullability, identity/generated metadata, constraints, indexes, and extensions. This replaces the earlier text-serialization hash approach, which was rejected because semantically equivalent schema dumps can serialize differently.
 
-The dry-run is PASS only when all of the following hold:
-- Source PostgreSQL connectivity succeeds with default_transaction_read_only=on.
-- The expected table set is present.
-- pg_dump completes without source writes.
-- pg_restore into a clean PostgreSQL 18 database completes.
-- Normalized source schema SHA256 equals normalized restored schema SHA256.
-- Source logical fingerprint SHA256 equals restored logical fingerprint SHA256.
-- Per-table exact row counts match.
-- No Neon endpoint, Neon API token, or Neon database URL is required.
-- No Render environment variable is changed.
-- No Render deploy is requested.
+The reusable verification query is preserved in:
+- scripts/krc-media-neon-fingerprint.sql
 
-A dry-run PASS demonstrates dump/restore compatibility with PostgreSQL 18. It does not by itself prove a future Neon cutover because target configuration, network access, target PostgreSQL version, and credentials are not part of this dry-run.
+## 6. Dry-run runtime cleanup
 
-## 7. Future provisioning gate - not authorized by this plan
+The temporary internal export handler and temporary PostgreSQL 18 runtime packaging were removed after the successful dry run.
 
-Before actual provisioning:
-- Confirm Neon organization/project ownership.
-- Confirm region selection.
-- Confirm target PostgreSQL major version.
-- Confirm storage and compute plan.
-- Confirm backup/retention requirements.
-- Confirm connection pooling policy.
-- Confirm whether the runtime should use a pooled or direct connection string. The current psql-per-operation implementation should default to a direct PostgreSQL connection unless a dedicated pooling compatibility check is completed.
-- Confirm SSL requirements.
-- Define the exact secret name that will replace the current KRC_MEDIA_DATABASE_URL value on Render.
+Cleanup execution:
+- Commit: 92fd4190573c14f7239a0e57a30e34529725a03b
+- Workflow run ID: 33045297107
+- Result: SUCCESS
 
-No provisioning should occur without explicit owner approval.
+Cleanup verification confirmed:
+- The internal export route no longer exists.
+- The removed route reaches the normal legacy routing layer and returns NOT_FOUND with the legacy test token.
+- Managed MEDIA capability remains available.
+- mode = zero_client_managed_beta
+- configured = true
+- durable_store = postgres
+- No Render environment variable changed.
+- No source database write was requested.
+- No Neon resource was created.
+
+Exact-head validation after runtime cleanup completed successfully for:
+- Validate
+- A9.7-F Cobalt Package Validate
+- A9.10 Attachment Probe Validate
+
+Temporary dry-run workflows are removed after this record is committed. The historical read-only pre-Neon audit workflow is retained.
+
+## 7. Provisioning gate
+
+The next phase is NEON_PROVISIONING and requires separate owner approval and a Neon account/project owned by the user.
+
+Before provisioning:
+- Create or confirm the Neon account under the intended owner identity.
+- Confirm Neon Free remains the selected plan.
+- Confirm a region suitable for the Frankfurt-hosted Render service.
+- Prefer PostgreSQL 18.
+- Confirm available storage comfortably exceeds the current approximately 8 MiB source database.
+- Use a direct PostgreSQL connection string for initial migration and compatibility testing unless a separate pooling validation is completed.
+- Keep all Neon connection strings and credentials only in secret/environment configuration.
+- Do not put Neon credentials in GitHub source files, logs, documentation, chat, or Actions artifacts.
+
+No production KRC_MEDIA_DATABASE_URL change is part of provisioning itself.
 
 ## 8. Pre-cutover checklist
 
-Before the final source dump:
+Before the final source snapshot:
 - Keep RELEASE_HOLD_OWNER_TESTING active.
 - Do not merge PR #28 into main.
-- Do not promote the isolated beta service to production.
-- Stop owner test activity that can create new media jobs.
-- Confirm there are no active non-terminal jobs.
-- Re-run the read-only pre-Neon audit.
-- Re-run the migration dry-run against the current source database.
-- Record source database size, row counts, schema hash, and logical fingerprints.
-- Verify the Neon target is empty or is a newly created migration target.
-- Verify target major version and SSL connectivity.
+- Do not promote the isolated beta service.
+- Pause owner activity that can create new media jobs.
+- Confirm no active non-terminal jobs remain.
+- Re-run the read-only source audit.
+- Record the final source database size and row counts.
+- Generate a final source structural/data fingerprint.
+- Create the final read-only custom pg_dump archive.
+- Verify the Neon target is empty or dedicated to this migration.
+- Verify target PostgreSQL major version and TLS connectivity.
 
-If any baseline changes unexpectedly, stop and investigate before cutover.
+If any unexpected source baseline change is observed, stop and investigate before cutover.
 
-## 9. Planned cutover procedure - requires separate approval
+## 9. Planned Neon restore and validation
+
+After Neon provisioning is separately approved:
+1. Create the Neon Free PostgreSQL target without changing Render.
+2. Verify target PostgreSQL version and direct TLS connectivity.
+3. Restore the approved custom archive with --no-owner, --no-acl, and --exit-on-error.
+4. Run scripts/krc-media-neon-fingerprint.sql against source and target.
+5. Require exact catalog structural fingerprint equality.
+6. Require exact durable-data fingerprint equality.
+7. Require exact row-count equality for all three persistence tables.
+8. Check timestamps, job statuses, idempotency keys, payload/segment persistence, constraints, and indexes.
+9. Keep the Render database unchanged and authoritative until cutover approval.
+
+## 10. Planned cutover - separate approval required
 
 1. Declare an owner-only migration window.
 2. Stop new MEDIA BETA job starts.
-3. Wait for any active job to reach a terminal state or explicitly cancel the migration.
-4. Capture the final source fingerprint and schema hash.
-5. Create a final custom pg_dump archive with --no-owner and --no-acl.
-6. Restore into the approved Neon target with --no-owner, --no-acl, and --exit-on-error.
-7. Generate target schema hash and logical fingerprints.
-8. Require exact match with the final source snapshot.
-9. Preserve the current Render KRC_MEDIA_DATABASE_URL value securely for rollback; never print it.
-10. Replace only KRC_MEDIA_DATABASE_URL on the isolated Render service with the approved Neon connection string.
-11. Restart/redeploy only the isolated feature-branch service if required for the environment change to take effect.
-12. Verify getManagedMediaCapability returns:
-    - mode = zero_client_managed_beta
-    - configured = true
-    - durable_store = postgres
-    - restart_resilient_jobs = true
-13. Verify an existing durable job lookup still works when a non-expired row is available.
-14. Resume owner-only testing.
-15. Keep the old Render PostgreSQL database intact during the rollback observation window.
+3. Wait for active jobs to reach terminal states.
+4. Capture the final source snapshot and fingerprint.
+5. Restore/refresh the Neon target from the final snapshot.
+6. Require exact source/target structural and logical match.
+7. Preserve the previous Render KRC_MEDIA_DATABASE_URL securely for rollback without printing it.
+8. Change only KRC_MEDIA_DATABASE_URL on the isolated KRC MEDIA BETA Render service.
+9. Restart/redeploy only that isolated service if required.
+10. Verify managed capability and durable store health.
+11. Verify existing durable state can still be read.
+12. Execute a controlled live media job and confirm create, process, status read, segment read, and post-restart durability.
+13. Verify idempotency after restart/redeploy.
+14. Keep the old Render PostgreSQL database intact during the rollback observation window.
 
-## 10. Rollback triggers
+## 11. Rollback triggers
 
 Rollback immediately if any of these occur after cutover:
-- Managed capability is not configured.
-- durable_store is not postgres.
-- Persistence initialization fails.
-- Existing durable job lookup fails unexpectedly.
-- New durable writes fail.
-- Schema or logical fingerprints differ from the approved final source snapshot.
-- Connection instability is materially worse than the source baseline.
-- Any unexpected provider behavior appears that is plausibly caused by persistence failure.
+- managed capability is not configured;
+- durable_store is not postgres;
+- persistence initialization fails;
+- existing durable state cannot be read as expected;
+- new durable writes fail;
+- source and target verification unexpectedly diverges;
+- restart/redeploy durability fails;
+- idempotency behavior changes;
+- database connectivity is materially unstable.
 
-## 11. Rollback procedure
+## 12. Rollback procedure
 
 1. Stop new owner test activity.
-2. Restore the previous Render KRC_MEDIA_DATABASE_URL value from the protected rollback copy.
-3. Restart/redeploy only the isolated beta service if required.
-4. Verify capability and durable store health against the original Render PostgreSQL database.
-5. Keep Neon intact for diagnosis; do not delete either database until the incident is understood.
-6. Record whether any writes occurred on Neon after cutover. If writes occurred, do not attempt an automatic reverse merge. Reconcile explicitly.
+2. Restore the previous protected Render KRC_MEDIA_DATABASE_URL value.
+3. Restart/redeploy only the isolated KRC MEDIA BETA service if needed.
+4. Verify capability and durable state against the original Render PostgreSQL database.
+5. Keep Neon intact for diagnosis.
+6. If writes occurred on Neon after cutover, do not automatically merge them back. Reconcile explicitly.
 
-## 12. Post-cutover observation window
-
-Minimum acceptance before considering source retirement:
-- Multiple successful service restarts with durable state preserved.
-- Owner regression coverage for YouTube, Instagram, Facebook free retrieval, Telegram public retrieval, and one local attachment path where applicable.
-- No unexpected persistence errors.
-- No divergence in job status behavior.
-- No change to the no-automatic-paid-Facebook-fallback contract.
-
-Source deletion is a separate irreversible operation and requires explicit approval.
-
-## 13. Security rules
+## 13. Security and release boundaries
 
 - Never print Render or Neon database URLs.
-- Never upload a raw pg_dump archive as an Actions artifact.
+- Never commit database credentials.
+- Never upload the raw pg_dump archive as an Actions artifact.
 - Never upload transcript payloads or segments as migration diagnostics.
-- GitHub logs may contain only sanitized hashes, row counts, schema metadata, and non-secret status values.
-- Use temporary runner files with restrictive permissions for connection material.
-- Remove temporary connection strings and dump files in an always-run cleanup step.
+- Logs may contain only sanitized hashes, row counts, schema metadata, and non-secret status values.
+- Do not delete the Render source database until migration validation and rollback observation are complete and a separate irreversible-operation approval is given.
+- Do not activate paid services without explicit approval.
+- Do not change MEDIA BETA retrieval behavior as part of this database migration.
 
 ## 14. Current gate
 
-NEON_MIGRATION_PLAN: PREPARED
-NEON_DRY_RUN: PENDING_EXECUTION
-NEON_PROVISIONING: NOT_AUTHORIZED
-RENDER_ENV_CHANGE: NOT_AUTHORIZED
-DATABASE_CUTOVER: NOT_AUTHORIZED
+NEON_MIGRATION_PLAN: PASS
+POSTGRESQL_18_DRY_RUN: PASS
+STRUCTURAL_SCHEMA_MATCH: PASS
+LOGICAL_DATA_MATCH: PASS
+TEMP_EXPORT_RUNTIME_REMOVED: VERIFIED
+NEON_PROVISIONING: NOT_STARTED
+RENDER_ENV_CHANGE: NONE
+DATABASE_CUTOVER: NOT_STARTED
 SOURCE_DATABASE_DELETION: NOT_AUTHORIZED
 RELEASE_HOLD_OWNER_TESTING: PRESERVED
+
+Next authorized decision point: create/confirm the owner Neon account and begin NEON_PROVISIONING. Stop before creating a Neon project unless the owner explicitly approves that phase.
