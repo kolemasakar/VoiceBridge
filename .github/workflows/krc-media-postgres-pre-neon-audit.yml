@@ -1,0 +1,279 @@
+name: KRC MEDIA Postgres Pre-Neon Audit
+
+on:
+  workflow_dispatch:
+  push:
+    branches:
+      - agent/krc-media-transcript
+    paths:
+      - .github/workflows/krc-media-postgres-pre-neon-audit.yml
+
+permissions:
+  contents: read
+
+concurrency:
+  group: krc-media-postgres-pre-neon-audit
+  cancel-in-progress: false
+
+env:
+  SERVICE_ID: srv-da1kic5bedkc73d6fk60
+  SERVICE_NAME: voicebridge-krc-media-beta-kolemasakar
+  DB_NAME: voicebridge-krc-media-beta-db
+  RENDER_API_BASE: https://api.render.com/v1
+
+jobs:
+  audit:
+    name: Read-only Render Postgres audit
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    env:
+      RENDER_API_KEY: ${{ secrets.RENDER_API_KEY }}
+      PGCONNECT_TIMEOUT: "10"
+      PGSSLMODE: require
+    steps:
+      - name: Verify required secret and isolated service
+        id: service
+        shell: bash
+        run: |
+          set -euo pipefail
+          test -n "${RENDER_API_KEY:-}" || { echo "RENDER_API_KEY is not configured"; exit 1; }
+
+          tmp="$(mktemp)"
+          code="$(curl -sS -o "$tmp" -w '%{http_code}' \
+            "${RENDER_API_BASE}/services/${SERVICE_ID}" \
+            -H 'Accept: application/json' \
+            -H "Authorization: Bearer ${RENDER_API_KEY}")"
+          [[ "$code" == "200" ]] || { echo "Render service lookup failed: HTTP ${code}"; rm -f "$tmp"; exit 1; }
+
+          owner="$(jq -r '.ownerId // .owner_id // .owner.id // empty' "$tmp")"
+          name="$(jq -r '.name // empty' "$tmp")"
+          rm -f "$tmp"
+
+          [[ "$name" == "$SERVICE_NAME" ]] || { echo "Isolation guard failed: unexpected service"; exit 1; }
+          test -n "$owner" || { echo "Render owner id is unavailable"; exit 1; }
+          echo "owner_id=$owner" >> "$GITHUB_OUTPUT"
+          echo "Verified isolated service: ${SERVICE_NAME}"
+
+      - name: Resolve existing Render Postgres read-only
+        id: database
+        env:
+          OWNER_ID: ${{ steps.service.outputs.owner_id }}
+        shell: bash
+        run: |
+          set -euo pipefail
+          tmp="$(mktemp)"
+          code="$(curl -sS --get -o "$tmp" -w '%{http_code}' \
+            "${RENDER_API_BASE}/postgres" \
+            --data-urlencode "ownerId=${OWNER_ID}" \
+            --data-urlencode 'limit=100' \
+            -H 'Accept: application/json' \
+            -H "Authorization: Bearer ${RENDER_API_KEY}")"
+          [[ "$code" == "200" ]] || { echo "Render Postgres list failed: HTTP ${code}"; rm -f "$tmp"; exit 1; }
+
+          db_id="$(jq -r --arg n "$DB_NAME" '[.[] | (.postgres // .) | select(.name==$n)] | first | (.id // empty)' "$tmp")"
+          db_status="$(jq -r --arg n "$DB_NAME" '[.[] | (.postgres // .) | select(.name==$n)] | first | (.status // "unknown")' "$tmp")"
+          db_plan="$(jq -r --arg n "$DB_NAME" '[.[] | (.postgres // .) | select(.name==$n)] | first | (.plan // "unknown")' "$tmp")"
+          db_region="$(jq -r --arg n "$DB_NAME" '[.[] | (.postgres // .) | select(.name==$n)] | first | (.region // "unknown")' "$tmp")"
+          db_version="$(jq -r --arg n "$DB_NAME" '[.[] | (.postgres // .) | select(.name==$n)] | first | (.version // "unknown")' "$tmp")"
+          rm -f "$tmp"
+
+          test -n "$db_id" || { echo "Expected Render Postgres not found: ${DB_NAME}"; exit 1; }
+          echo "db_id=$db_id" >> "$GITHUB_OUTPUT"
+          echo "Render DB: name=${DB_NAME} status=${db_status} plan=${db_plan} region=${db_region} version=${db_version}"
+
+      - name: Obtain external connection without exposing credentials
+        env:
+          DB_ID: ${{ steps.database.outputs.db_id }}
+        shell: bash
+        run: |
+          set -euo pipefail
+          tmp="$(mktemp)"
+          code="$(curl -sS -o "$tmp" -w '%{http_code}' \
+            "${RENDER_API_BASE}/postgres/${DB_ID}/connection-info" \
+            -H 'Accept: application/json' \
+            -H "Authorization: Bearer ${RENDER_API_KEY}")"
+          [[ "$code" == "200" ]] || { echo "Render connection-info lookup failed: HTTP ${code}"; rm -f "$tmp"; exit 1; }
+
+          database_url="$(jq -r '.externalConnectionString // .external_connection_string // empty' "$tmp")"
+          rm -f "$tmp"
+          test -n "$database_url" || { echo "External Render Postgres connection string is unavailable"; exit 1; }
+
+          echo "::add-mask::$database_url"
+          umask 077
+          printf '%s' "$database_url" > /tmp/krc-render-db-url
+          echo "External database connection obtained and masked."
+
+      - name: Install PostgreSQL client
+        shell: bash
+        run: |
+          set -euo pipefail
+          sudo apt-get update -qq
+          sudo apt-get install -y -qq postgresql-client >/dev/null
+          psql --version
+
+      - name: Execute read-only database audit
+        shell: bash
+        run: |
+          set -euo pipefail
+          database_url="$(cat /tmp/krc-render-db-url)"
+          echo "::add-mask::$database_url"
+
+          psql -X -v ON_ERROR_STOP=1 --dbname "$database_url" <<'SQL' | tee /tmp/krc-postgres-audit.txt
+          \pset pager off
+          \pset null '<NULL>'
+          BEGIN TRANSACTION READ ONLY;
+
+          \echo '=== DATABASE IDENTITY ==='
+          SELECT version();
+          SELECT current_database() AS database_name,
+                 current_user AS database_user,
+                 current_setting('server_version') AS server_version,
+                 current_setting('transaction_read_only') AS transaction_read_only;
+          SELECT pg_database_size(current_database()) AS database_size_bytes,
+                 pg_size_pretty(pg_database_size(current_database())) AS database_size_pretty;
+
+          \echo '=== USER TABLES AND RELATION SIZES ==='
+          SELECT n.nspname AS schema_name,
+                 c.relname AS table_name,
+                 pg_relation_size(c.oid) AS table_bytes,
+                 pg_indexes_size(c.oid) AS index_bytes,
+                 pg_total_relation_size(c.oid) AS total_bytes
+          FROM pg_class c
+          JOIN pg_namespace n ON n.oid = c.relnamespace
+          WHERE c.relkind = 'r'
+            AND n.nspname NOT IN ('pg_catalog', 'information_schema')
+          ORDER BY n.nspname, c.relname;
+
+          \echo '=== COLUMNS ==='
+          SELECT table_schema, table_name, ordinal_position, column_name,
+                 data_type, udt_name, is_nullable, column_default,
+                 is_identity, identity_generation
+          FROM information_schema.columns
+          WHERE table_schema NOT IN ('pg_catalog', 'information_schema')
+          ORDER BY table_schema, table_name, ordinal_position;
+
+          \echo '=== CONSTRAINTS ==='
+          SELECT n.nspname AS schema_name,
+                 c.relname AS table_name,
+                 con.conname AS constraint_name,
+                 con.contype AS constraint_type,
+                 pg_get_constraintdef(con.oid, true) AS definition
+          FROM pg_constraint con
+          JOIN pg_class c ON c.oid = con.conrelid
+          JOIN pg_namespace n ON n.oid = c.relnamespace
+          WHERE n.nspname NOT IN ('pg_catalog', 'information_schema')
+          ORDER BY n.nspname, c.relname, con.conname;
+
+          \echo '=== INDEXES ==='
+          SELECT schemaname, tablename, indexname, indexdef
+          FROM pg_indexes
+          WHERE schemaname NOT IN ('pg_catalog', 'information_schema')
+          ORDER BY schemaname, tablename, indexname;
+
+          \echo '=== SEQUENCES ==='
+          SELECT sequence_schema, sequence_name, data_type, start_value,
+                 minimum_value, maximum_value, increment
+          FROM information_schema.sequences
+          WHERE sequence_schema NOT IN ('pg_catalog', 'information_schema')
+          ORDER BY sequence_schema, sequence_name;
+
+          \echo '=== EXTENSIONS ==='
+          SELECT extname, extversion
+          FROM pg_extension
+          ORDER BY extname;
+
+          \echo '=== EXACT ROW COUNTS ==='
+          SELECT 'krc_managed_media_jobs' AS table_name, count(*) AS row_count
+          FROM public.krc_managed_media_jobs
+          UNION ALL
+          SELECT 'krc_media_client_jobs', count(*)
+          FROM public.krc_media_client_jobs
+          UNION ALL
+          SELECT 'krc_media_stt_charges', count(*)
+          FROM public.krc_media_stt_charges
+          ORDER BY table_name;
+
+          \echo '=== MANAGED JOB STATUS DISTRIBUTION ==='
+          SELECT status, count(*) AS row_count
+          FROM public.krc_managed_media_jobs
+          GROUP BY status
+          ORDER BY status;
+
+          \echo '=== MANAGED JOB TIMESTAMP RANGE ==='
+          SELECT min(updated_at) AS oldest_updated_at,
+                 max(updated_at) AS newest_updated_at,
+                 min(expires_at) AS earliest_expires_at,
+                 max(expires_at) AS latest_expires_at
+          FROM public.krc_managed_media_jobs;
+
+          \echo '=== CLIENT JOB STATUS DISTRIBUTION ==='
+          SELECT status, count(*) AS row_count
+          FROM public.krc_media_client_jobs
+          GROUP BY status
+          ORDER BY status;
+
+          \echo '=== CLIENT JOB TIMESTAMP RANGE ==='
+          SELECT min(updated_at) AS oldest_updated_at,
+                 max(updated_at) AS newest_updated_at,
+                 min(expires_at) AS earliest_expires_at,
+                 max(expires_at) AS latest_expires_at
+          FROM public.krc_media_client_jobs;
+
+          \echo '=== STT CHARGE RANGE ==='
+          SELECT count(*) AS row_count,
+                 min(day_utc) AS oldest_day,
+                 max(day_utc) AS newest_day,
+                 COALESCE(sum(seconds), 0) AS total_seconds
+          FROM public.krc_media_stt_charges;
+
+          COMMIT;
+          SQL
+
+          grep -q "transaction_read_only.*on" /tmp/krc-postgres-audit.txt || {
+            echo "Read-only transaction guard was not confirmed."
+            exit 1
+          }
+
+      - name: Generate schema-only dump for migration comparison
+        shell: bash
+        run: |
+          set -euo pipefail
+          database_url="$(cat /tmp/krc-render-db-url)"
+          echo "::add-mask::$database_url"
+          pg_dump "$database_url" \
+            --schema-only \
+            --no-owner \
+            --no-acl \
+            --file=/tmp/krc-render-schema.sql
+          echo "Schema-only dump SHA256: $(sha256sum /tmp/krc-render-schema.sql | awk '{print $1}')"
+          echo "Schema-only dump bytes: $(wc -c < /tmp/krc-render-schema.sql)"
+
+      - name: Publish sanitized audit summary
+        if: always()
+        shell: bash
+        run: |
+          {
+            echo "# KRC MEDIA Render PostgreSQL pre-Neon audit"
+            echo
+            echo "- Target service: \`${SERVICE_NAME}\`"
+            echo "- Target database: \`${DB_NAME}\`"
+            echo "- Workflow is read-only: Render API GET requests only; PostgreSQL audit runs inside \`BEGIN TRANSACTION READ ONLY\`."
+            echo "- No Render environment variable was changed."
+            echo "- No deploy was requested."
+            echo "- No Neon resource was created."
+            echo "- No connection string or provider credential was written to workflow output."
+            echo
+            if [[ -f /tmp/krc-postgres-audit.txt ]]; then
+              echo '```text'
+              cat /tmp/krc-postgres-audit.txt
+              echo '```'
+            else
+              echo "Database audit output was not produced. Review the failed step."
+            fi
+          } >> "$GITHUB_STEP_SUMMARY"
+
+      - name: Remove temporary connection material
+        if: always()
+        shell: bash
+        run: |
+          rm -f /tmp/krc-render-db-url /tmp/krc-render-schema.sql /tmp/krc-postgres-audit.txt
