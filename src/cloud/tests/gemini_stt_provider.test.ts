@@ -48,6 +48,14 @@ function rmsPcm16(audio: Buffer, skipSamples = 0): number {
   return count > 0 ? Math.sqrt(sumSquares / count) : 0;
 }
 
+function requireRecord(
+  value: Record<string, unknown> | null,
+  message: string
+): Record<string, unknown> {
+  assert.ok(value, message);
+  return value;
+}
+
 test("Gemini STT model defaults to the approved explicit model", () => {
   assert.equal(resolveGeminiSttModel(undefined), DEFAULT_GEMINI_STT_MODEL);
   assert.equal(configuredGeminiSttModel({}), DEFAULT_GEMINI_STT_MODEL);
@@ -168,10 +176,15 @@ test("Gemini Live setup and FIR resampling preserve the STT contract", async () 
 
     const requested = new URL(requestUrl, "ws://127.0.0.1");
     assert.equal(requested.searchParams.get("key"), "gemini-test-key");
-    assert.ok(setup);
-    assert.equal(setup.model, `models/${DEFAULT_GEMINI_STT_MODEL}`);
-    assert.deepEqual(setup.generationConfig, { responseModalities: ["TEXT"] });
-    assert.deepEqual(setup.inputAudioTranscription, {
+    const receivedSetup = requireRecord(setup, "Gemini setup was not captured.");
+    assert.equal(
+      receivedSetup.model,
+      `models/${DEFAULT_GEMINI_STT_MODEL}`
+    );
+    assert.deepEqual(receivedSetup.generationConfig, {
+      responseModalities: ["TEXT"]
+    });
+    assert.deepEqual(receivedSetup.inputAudioTranscription, {
       languageCodes: ["en-US"],
       mode: "VERBATIM"
     });

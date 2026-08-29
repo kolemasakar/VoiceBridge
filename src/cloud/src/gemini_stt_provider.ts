@@ -140,7 +140,7 @@ class Pcm48kTo16kFirDecimator {
   private readonly history = new Float64Array(FIR_COEFFICIENTS.length);
   private historyCursor = 0;
   private phase = 0;
-  private byteRemainder = Buffer.alloc(0);
+  private byteRemainder: Buffer = Buffer.alloc(0);
 
   process(frame: Buffer): Buffer {
     const source = this.byteRemainder.byteLength > 0
