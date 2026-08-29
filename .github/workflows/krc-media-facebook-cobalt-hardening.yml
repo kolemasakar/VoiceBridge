@@ -26,119 +26,119 @@ jobs:
           set -euo pipefail
           git merge-base --is-ancestor 21127f86ae35625421d0257c59c689407ccdb2ab HEAD
 
-      - name: Apply active Facebook route hardening
+      - name: Harden active Facebook HTTP boundary and capability
         shell: bash
         run: |
           set -euo pipefail
           python3 - <<'PY'
           from pathlib import Path
+          p = Path("src/cloud/src/managed_media_http.ts")
+          s = p.read_text()
+          old = 'import { MediaBetaGate } from "./media_beta.js";\n'
+          new = old + 'import { managedMediaPlatform } from "./managed_media_url.js";\n'
+          assert s.count(old) == 1
+          s = s.replace(old, new, 1)
+          for old, new in [
+              ('    facebook_ai_fallback: true,\n', '    facebook_ai_fallback: false,\n'),
+              ('    facebook_ai_requires_duration_metadata: true,\n', '    facebook_ai_requires_duration_metadata: false,\n'),
+              ('    facebook_ai_metadata_credits: 1,\n', '    facebook_ai_metadata_credits: 0,\n'),
+          ]:
+              assert s.count(old) == 1
+              s = s.replace(old, new, 1)
+          old = '        const quote = await service.preflight(input);\n'
+          guard = '        if (managedMediaPlatform(input.url) === "facebook") {\n          throw new MediaTranscriptError(\n            "FACEBOOK_FREE_RETRIEVAL_REQUIRED",\n            "Active Facebook intake uses the free Cobalt route; generic Supadata native preflight is disabled.",\n            400,\n            false\n          );\n        }\n'
+          assert s.count(old) == 1
+          s = s.replace(old, guard + old, 1)
+          old = '        const job = await service.startNative(input);\n'
+          guard = '        if (managedMediaPlatform(input.url) === "facebook") {\n          throw new MediaTranscriptError(\n            "FACEBOOK_FREE_RETRIEVAL_REQUIRED",\n            "Active Facebook intake uses the free Cobalt route; generic Supadata native processing is disabled.",\n            409,\n            false\n          );\n        }\n'
+          assert s.count(old) == 1
+          s = s.replace(old, guard + old, 1)
+          p.write_text(s)
 
-          http = Path('src/cloud/src/managed_media_http.ts')
-          text = http.read_text()
+          p = Path("src/cloud/tests/managed_media_instagram.test.ts")
+          s = p.read_text()
+          old = '  assert.equal(capability.facebook_ai_fallback, true);\n'
+          new = '  assert.equal(capability.facebook_ai_fallback, false);\n  assert.equal(capability.facebook_ai_requires_duration_metadata, false);\n  assert.equal(capability.facebook_ai_metadata_credits, 0);\n'
+          assert s.count(old) == 1
+          p.write_text(s.replace(old, new, 1))
+          PY
 
-          anchor = 'import { MediaBetaGate } from "./media_beta.js";\n'
-          replacement = anchor + 'import { managedMediaPlatform } from "./managed_media_url.js";\n'
-          assert text.count(anchor) == 1
-          text = text.replace(anchor, replacement, 1)
+      - name: Add active Facebook route regression
+        shell: bash
+        run: |
+          set -euo pipefail
+          cat > src/cloud/tests/active_facebook_route_policy.test.ts <<'EOF'
+          import assert from "node:assert/strict";
+          import { createServer, type Server } from "node:http";
+          import type { AddressInfo } from "node:net";
+          import { test } from "node:test";
+          import type { AppConfig } from "../src/config.js";
+          import { createManagedMediaHttpHandler } from "../src/managed_media_http.js";
+          import type { ManagedMediaService } from "../src/managed_media_service.js";
 
-          replacements = {
-              '    facebook_ai_fallback: true,\n': '    facebook_ai_fallback: false,\n',
-              '    facebook_ai_requires_duration_metadata: true,\n': '    facebook_ai_requires_duration_metadata: false,\n',
-              '    facebook_ai_metadata_credits: 1,\n': '    facebook_ai_metadata_credits: 0,\n',
+          const ACTION_TOKEN = "managed-action-token-1234567890";
+          const ACCESS_CODE = "abcdefghijkl";
+          const FACEBOOK_URL = "https://www.facebook.com/reel/1114235920664408/";
+
+          const CONFIG: AppConfig = {
+            host: "127.0.0.1",
+            port: 0,
+            testAccessToken: "voicebridge-test-token-123456789",
+            mediaActionToken: ACTION_TOKEN,
+            mediaBetaCodes: [ACCESS_CODE],
+            mediaDailySttSeconds: 7200,
+            assemblyAiApiKey: null,
+            supadataApiKey: null,
+            geminiApiKey: null,
+            geminiTranslationModel: "gemini-3.1-flash-lite",
+            corsAllowedOrigin: "*",
+            maxRequestBodyBytes: 32768,
+            rateLimitRequestsPerMinute: 1000
+          };
+
+          async function listen(server: Server): Promise<string> {
+            await new Promise<void>((resolve, reject) => {
+              server.once("error", reject);
+              server.listen(0, "127.0.0.1", () => {
+                server.off("error", reject);
+                resolve();
+              });
+            });
+            const address = server.address() as AddressInfo;
+            return `http://127.0.0.1:${address.port}`;
           }
-          for old, new in replacements.items():
-              assert text.count(old) == 1, old
-              text = text.replace(old, new, 1)
 
-          preflight_anchor = '''        if (!input) {
-          throw new MediaTranscriptError(
-            "INVALID_REQUEST",
-            "The managed media preflight request is not valid.",
-            400,
-            false
-          );
-        }
-        const quote = await service.preflight(input);
-          '''
-          preflight_new = '''        if (!input) {
-          throw new MediaTranscriptError(
-            "INVALID_REQUEST",
-            "The managed media preflight request is not valid.",
-            400,
-            false
-          );
-        }
-        if (managedMediaPlatform(input.url) === "facebook") {
-          throw new MediaTranscriptError(
-            "FACEBOOK_FREE_RETRIEVAL_REQUIRED",
-            "Active Facebook intake uses the free Cobalt route; generic Supadata native preflight is disabled.",
-            400,
-            false
-          );
-        }
-        const quote = await service.preflight(input);
-          '''
-          assert text.count(preflight_anchor) == 1
-          text = text.replace(preflight_anchor, preflight_new, 1)
+          async function close(server: Server): Promise<void> {
+            server.closeAllConnections();
+            await new Promise<void>((resolve, reject) => {
+              server.close((error) => error ? reject(error) : resolve());
+            });
+          }
 
-          start_anchor = '''        if (!input) {
-          throw new MediaTranscriptError(
-            "MEDIA_CREDIT_CONSENT_REQUIRED",
-            "Explicit one-credit user consent is required before native transcript processing.",
-            409,
-            false
-          );
-        }
-        const job = await service.startNative(input);
-          '''
-          start_new = '''        if (!input) {
-          throw new MediaTranscriptError(
-            "MEDIA_CREDIT_CONSENT_REQUIRED",
-            "Explicit one-credit user consent is required before native transcript processing.",
-            409,
-            false
-          );
-        }
-        if (managedMediaPlatform(input.url) === "facebook") {
-          throw new MediaTranscriptError(
-            "FACEBOOK_FREE_RETRIEVAL_REQUIRED",
-            "Active Facebook intake uses the free Cobalt route; generic Supadata native processing is disabled.",
-            409,
-            false
-          );
-        }
-        const job = await service.startNative(input);
-          '''
-          assert text.count(start_anchor) == 1
-          text = text.replace(start_anchor, start_new, 1)
-          http.write_text(text)
+          function headers(): Record<string, string> {
+            return {
+              authorization: `Bearer ${ACTION_TOKEN}`,
+              "content-type": "application/json",
+              connection: "close"
+            };
+          }
 
-          test_path = Path('src/cloud/tests/managed_media_http.test.ts')
-          tests = test_path.read_text()
-          class_anchor = '''class FakeManagedProvider implements ManagedNativeTranscriptProvider {
-  transcriptCalls = 0;
-
-  async quoteNative() {
-          '''
-          class_new = '''class FakeManagedProvider implements ManagedNativeTranscriptProvider {
-  quoteCalls = 0;
-  transcriptCalls = 0;
-
-  async quoteNative() {
-    this.quoteCalls += 1;
-          '''
-          assert tests.count(class_anchor) == 1
-          tests = tests.replace(class_anchor, class_new, 1)
-
-          new_test = r'''
-
-          test("active HTTP boundary rejects Facebook on generic Supadata native routes", async () => {
-            const provider = new FakeManagedProvider();
-            const service = new ManagedMediaService(
-              new MediaBetaGate([ACCESS_CODE]),
-              null,
-              provider
-            );
+          test("active Facebook intake cannot enter generic Supadata native routes", async () => {
+            let preflightCalls = 0;
+            let nativeCalls = 0;
+            const service = {
+              configured: true,
+              storeKind: "postgres",
+              durableStore: true,
+              async preflight() {
+                preflightCalls += 1;
+                throw new Error("generic Facebook preflight must remain unreachable");
+              },
+              async startNative() {
+                nativeCalls += 1;
+                throw new Error("generic Facebook native start must remain unreachable");
+              }
+            } as unknown as ManagedMediaService;
             const handler = createManagedMediaHttpHandler(CONFIG, service);
             const server = createServer(async (request, response) => {
               if (await handler.handle(request, response)) return;
@@ -147,11 +147,10 @@ jobs:
             });
             const baseUrl = await listen(server);
             try {
-              const facebookUrl = "https://www.facebook.com/reel/1114235920664408/";
               const preflight = await fetch(`${baseUrl}/api/v1/media/managed/preflight`, {
                 method: "POST",
-                headers: actionHeaders(),
-                body: JSON.stringify({ url: facebookUrl, language_hint: "auto" })
+                headers: headers(),
+                body: JSON.stringify({ url: FACEBOOK_URL, language_hint: "auto" })
               });
               assert.equal(preflight.status, 400);
               const preflightBody = await preflight.json() as { error?: { code?: string } };
@@ -159,9 +158,9 @@ jobs:
 
               const start = await fetch(`${baseUrl}/api/v1/media/managed/transcriptions`, {
                 method: "POST",
-                headers: actionHeaders(),
+                headers: headers(),
                 body: JSON.stringify({
-                  url: facebookUrl,
+                  url: FACEBOOK_URL,
                   language_hint: "auto",
                   credit_consent: { provider: "supadata", mode: "native", max_credits: 1 }
                 })
@@ -169,31 +168,27 @@ jobs:
               assert.equal(start.status, 409);
               const startBody = await start.json() as { error?: { code?: string } };
               assert.equal(startBody.error?.code, "FACEBOOK_FREE_RETRIEVAL_REQUIRED");
-              assert.equal(provider.quoteCalls, 0);
-              assert.equal(provider.transcriptCalls, 0);
+              assert.equal(preflightCalls, 0);
+              assert.equal(nativeCalls, 0);
             } finally {
               await close(server);
             }
           });
-          '''
-          new_test = '\n'.join(
-              line[10:] if line.startswith('          ') else line
-              for line in new_test.splitlines()
-          )
-          assert 'active HTTP boundary rejects Facebook on generic Supadata native routes' not in tests
-          test_path.write_text(tests.rstrip() + new_test + '\n')
 
-          instagram = Path('src/cloud/tests/managed_media_instagram.test.ts')
-          itext = instagram.read_text()
-          old = '  assert.equal(capability.facebook_ai_fallback, true);\n'
-          new = '''  assert.equal(capability.facebook_ai_fallback, false);
-  assert.equal(capability.facebook_ai_requires_duration_metadata, false);
-  assert.equal(capability.facebook_ai_metadata_credits, 0);
-          '''
-          new = '\n'.join(line[10:] if line.startswith('          ') else line for line in new.splitlines()) + '\n'
-          assert itext.count(old) == 1
-          instagram.write_text(itext.replace(old, new, 1))
-          PY
+          test("managed capability does not advertise Facebook AI generation as active", () => {
+            const service = {
+              configured: true,
+              storeKind: "postgres",
+              durableStore: true
+            } as unknown as ManagedMediaService;
+            const { capability } = createManagedMediaHttpHandler(CONFIG, service);
+            assert.equal(capability.facebook_ai_fallback, false);
+            assert.equal(capability.facebook_ai_requires_duration_metadata, false);
+            assert.equal(capability.facebook_ai_metadata_credits, 0);
+            assert.equal(capability.facebook_retrieval_stt_fallback, true);
+            assert.equal(capability.facebook_automatic_paid_retrieval, false);
+          });
+          EOF
 
       - name: Validate full cloud suite
         working-directory: src/cloud
