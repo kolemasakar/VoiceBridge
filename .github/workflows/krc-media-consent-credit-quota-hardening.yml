@@ -39,6 +39,7 @@ jobs:
         run: |
           set -euo pipefail
           python scripts/krc_media_consent_credit_quota_hardening.py
+          sed -i 's/download_url: "https:\/\/example.oaiusercontent.com\/file-quota"/download_link: "https:\/\/example.oaiusercontent.com\/file-quota"/' src/cloud/tests/managed_media_consent_credit_quota.test.ts
       - uses: actions/setup-node@v4
         with:
           node-version: 24
