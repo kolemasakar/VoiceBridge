@@ -1,6 +1,6 @@
 # VoiceBridge Phase 2 M3 Generic Active-Tab UI Path
 
-Status: IMPLEMENTED - AUTOMATED VALIDATION PENDING - LIVE REGRESSION PENDING
+Status: IMPLEMENTED - AUTOMATED VALIDATION PASSED - LIVE REGRESSION PENDING
 
 Date: 2026-08-29
 
@@ -114,7 +114,31 @@ P2-M3 tests cover:
 
 Existing Stop, provider metadata, playback, cloud, and documentation regression suites remain required.
 
-## 8. Explicitly Unchanged
+## 8. Automated Validation Evidence
+
+Pull request:
+
+`#38 - Implement Phase 2 M3 generic active-tab browser path`
+
+Validated head before this evidence-only documentation commit:
+
+`32a2b891b8de85bbca16cf63f4836b55ccc550e2`
+
+Validate run:
+
+`33271090615 - SUCCESS`
+
+Jobs:
+
+- `browser-extension` - SUCCESS;
+- `repository-docs` - SUCCESS;
+- `cloud` - SUCCESS.
+
+Browser validation included JavaScript syntax checks, all browser contract tests, manifest validation, and successful packaging/upload of `VoiceBridge_Extension_0.7.0`.
+
+Because this evidence update changes the PR head, the final PR head MUST also pass Validate before merge.
+
+## 9. Explicitly Unchanged
 
 P2-M3 does NOT:
 
@@ -132,7 +156,7 @@ P2-M3 does NOT:
 - add automatic paid fallback;
 - modify KRC Media.
 
-## 9. Automated Acceptance Gate
+## 10. Automated Acceptance Gate
 
 Before merge:
 
@@ -147,7 +171,7 @@ After merge:
 
 - `main` Validate must pass before live acceptance begins.
 
-## 10. Controlled Live Acceptance Gate
+## 11. Controlled Live Acceptance Gate
 
 P2-M3 MUST NOT be marked complete from CI alone.
 
@@ -166,7 +190,7 @@ Use the exact post-merge `VoiceBridge_Extension_0.7.0` artifact and verify at mi
 
 Any functional failure keeps P2-M3 in `LIVE_REGRESSION_PENDING` and blocks P2-M4.
 
-## 11. Next Gate
+## 12. Next Gate
 
 Only after controlled live acceptance passes may P2-M3 become `COMPLETE` and P2-M4 begin:
 
