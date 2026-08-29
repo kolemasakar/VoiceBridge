@@ -1,8 +1,8 @@
 {
   "manifest_version": 3,
   "name": "VoiceBridge",
-  "description": "Real-time cloud speech translation for audio playing in the active browser tab, with Ukrainian speech playback and automatic ducking.",
-  "version": "0.7.0",
+  "description": "Real-time cloud speech translation for audio playing in the active browser tab, with translated speech playback and automatic ducking.",
+  "version": "0.8.0",
   "minimum_chrome_version": "116",
   "permissions": [
     "activeTab",
