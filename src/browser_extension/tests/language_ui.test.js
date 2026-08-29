@@ -4,7 +4,8 @@ const {
   normalizeCapabilities,
   chooseSelection,
   targetOptions,
-  isValidatedPair
+  isValidatedPair,
+  captureAllowsStart
 } = require("../language_ui.js");
 
 function registry() {
@@ -62,6 +63,16 @@ test("saved valid pair is retained and stale pair falls back only in UI selectio
     source_language: "en",
     target_language: "uk"
   });
+});
+
+test("language readiness never re-enables Start during an active or stopping capture", () => {
+  assert.equal(captureAllowsStart(null), false);
+  assert.equal(captureAllowsStart("ACTIVE"), false);
+  assert.equal(captureAllowsStart("PAUSED"), false);
+  assert.equal(captureAllowsStart("STOPPING"), false);
+  assert.equal(captureAllowsStart("DRAINING"), false);
+  assert.equal(captureAllowsStart("IDLE"), true);
+  assert.equal(captureAllowsStart("ERROR"), true);
 });
 
 test("invalid capability payload fails closed", () => {
