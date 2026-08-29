@@ -1,6 +1,6 @@
 # VoiceBridge Phase 2 M2 Universal Browser Session Contract
 
-Status: IMPLEMENTED - AUTOMATED VALIDATION PENDING
+Status: IMPLEMENTED - AUTOMATED VALIDATION PASSED - MERGE PENDING
 
 Date: 2026-08-29
 
@@ -131,7 +131,31 @@ Added `src/cloud/tests/session_contract.test.ts` covering:
 
 Existing cloud and browser suites remain required regression gates.
 
-## 8. Explicitly Unchanged
+## 8. Automated Validation Evidence
+
+Pull request:
+
+`#37 - Implement Phase 2 M2 universal browser session contract`
+
+Validated head before this evidence-only documentation commit:
+
+`8361f5776d6ea33f5a94010baabcbce803c5cb39`
+
+Validate run:
+
+`33270619793 - SUCCESS`
+
+Jobs:
+
+- `browser-extension` - SUCCESS;
+- `repository-docs` - SUCCESS;
+- `cloud` - SUCCESS.
+
+The cloud job built and ran the complete cloud test suite including `session_contract.test.ts`.
+
+Because this milestone record update changes the PR head, the final PR head MUST also pass Validate before merge.
+
+## 9. Explicitly Unchanged
 
 P2-M2 does NOT:
 
@@ -149,18 +173,20 @@ P2-M2 does NOT:
 
 Generic active-tab UI behavior remains P2-M3 scope.
 
-## 9. Acceptance
+## 10. Acceptance
 
-P2-M2 may be marked complete only when CI confirms:
+P2-M2 may be marked complete only when:
 
 - both runtime modes validate correctly;
 - the old Phase 1 request remains accepted;
 - invalid universal source descriptors fail during session creation;
 - session create/read state exposes normalized source metadata;
 - provider preferences do not become operational accidentally;
-- existing cloud and browser regression suites stay green.
+- existing cloud and browser regression suites stay green;
+- final PR head CI is green;
+- post-merge `main` CI is green.
 
-## 10. Next Gate
+## 11. Next Gate
 
 After P2-M2 is merged with green post-merge CI, begin:
 
