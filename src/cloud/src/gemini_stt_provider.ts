@@ -390,11 +390,7 @@ export class GeminiSttProvider implements SttProvider {
         }));
       });
 
-      socket.on("message", (data, isBinary) => {
-        if (isBinary) {
-          return;
-        }
-
+      socket.on("message", (data) => {
         let message: GeminiLiveMessage;
         try {
           message = JSON.parse(rawDataText(data)) as GeminiLiveMessage;
