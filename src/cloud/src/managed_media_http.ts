@@ -346,6 +346,14 @@ export function createManagedMediaHttpHandler(
             false
           );
         }
+        if (managedMediaPlatform(input.url) === "telegram") {
+          throw new MediaTranscriptError(
+            "TELEGRAM_PUBLIC_RETRIEVAL_REQUIRED",
+            "Active Telegram intake uses the public Telegram retrieval route; generic Supadata native preflight is disabled.",
+            400,
+            false
+          );
+        }
         const quote = await service.preflight(input);
         sendJson(
           response,
@@ -475,6 +483,14 @@ if (method === "POST" && path === FACEBOOK_FALLBACK) {
           throw new MediaTranscriptError(
             "FACEBOOK_FREE_RETRIEVAL_REQUIRED",
             "Active Facebook intake uses the free Cobalt route; generic Supadata native processing is disabled.",
+            409,
+            false
+          );
+        }
+        if (managedMediaPlatform(input.url) === "telegram") {
+          throw new MediaTranscriptError(
+            "TELEGRAM_PUBLIC_RETRIEVAL_REQUIRED",
+            "Active Telegram intake uses the public Telegram retrieval route; generic Supadata native processing is disabled.",
             409,
             false
           );
