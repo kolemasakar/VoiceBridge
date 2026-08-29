@@ -3,6 +3,10 @@ import type { AddressInfo } from "node:net";
 import { authenticate } from "./auth.js";
 import type { AppConfig } from "./config.js";
 import { createRequestContext, type RequestContext } from "./identifiers.js";
+import {
+  publicLanguageCapabilities,
+  resolveLanguagePair
+} from "./language_capabilities.js";
 import { FixedWindowRateLimiter } from "./rate_limit.js";
 import {
   InvalidSessionStateError,
@@ -161,10 +165,13 @@ function parseCreateSessionInput(value: unknown): CreateSessionInput | null {
   const source = input.source === undefined || input.source === null
     ? null
     : parseSessionSource(input.source);
+  const languagePair = resolveLanguagePair(
+    input.source_language,
+    input.target_language
+  );
 
   if (
-    input.source_language !== "en" ||
-    input.target_language !== "uk" ||
+    !languagePair ||
     (runtimeMode !== "YOUTUBE_MVP" &&
       runtimeMode !== "UNIVERSAL_BROWSER_AUDIO") ||
     input.input_type !== "BROWSER_AUDIO" ||
@@ -188,8 +195,8 @@ function parseCreateSessionInput(value: unknown): CreateSessionInput | null {
   }
 
   return {
-    source_language: "en",
-    target_language: "uk",
+    source_language: languagePair.source_language,
+    target_language: languagePair.target_language,
     runtime_mode: runtimeMode,
     input_type: "BROWSER_AUDIO",
     output_type: "BROWSER_PLAYBACK",
@@ -295,6 +302,7 @@ export function createVoiceBridgeServer(
           service: SERVICE_NAME,
           version: SERVICE_VERSION,
           capabilities: {
+            languages: publicLanguageCapabilities(),
             stt: {
               provider: sttProvider.name,
               configured: sttProvider.configured,

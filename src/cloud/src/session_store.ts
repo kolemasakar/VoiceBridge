@@ -28,8 +28,8 @@ export interface VoicePreferences {
 }
 
 export interface CreateSessionInput {
-  source_language: "en";
-  target_language: "uk";
+  source_language: string;
+  target_language: string;
   runtime_mode: RuntimeMode;
   input_type: "BROWSER_AUDIO";
   output_type: "BROWSER_PLAYBACK";
@@ -41,8 +41,8 @@ export interface CreateSessionInput {
 export interface Session {
   session_id: string;
   state: SessionState;
-  source_language: "en";
-  target_language: "uk";
+  source_language: string;
+  target_language: string;
   runtime_mode: RuntimeMode;
   input_type: "BROWSER_AUDIO";
   output_type: "BROWSER_PLAYBACK";
