@@ -28,17 +28,20 @@ function mockChrome(tab, streamId = "stream-123") {
   };
 }
 
-test("Phase 1 compatibility gate accepts an active YouTube tab", async () => {
+test("generic source adapter accepts an audible active YouTube tab", async () => {
   const chrome = mockChrome({
     id: 42,
     url: "https://www.youtube.com/watch?v=voicebridge",
-    title: "VoiceBridge test"
+    title: "VoiceBridge test",
+    audible: true
   });
   const adapter = createChromiumTabSourceAdapter(chrome.api);
 
   const capability = await adapter.canCapture();
   assert.deepEqual(capability, {
     supported: true,
+    reason: null,
+    message: null,
     source_kind: "BROWSER_TAB",
     source_adapter: "chromium_tab",
     capture_scope: "CURRENT_TAB"
@@ -56,25 +59,64 @@ test("Phase 1 compatibility gate accepts an active YouTube tab", async () => {
   });
 });
 
-test("Phase 1 compatibility gate preserves the existing non-YouTube error", async () => {
+test("generic source adapter accepts an audible non-YouTube web tab", async () => {
   const chrome = mockChrome({
     id: 7,
-    url: "https://example.com/video",
-    title: "Other source"
+    url: "https://example.com/podcast",
+    title: "Other audio source",
+    audible: true
   });
   const adapter = createChromiumTabSourceAdapter(chrome.api);
 
+  const capability = await adapter.canCapture();
+  assert.equal(capability.supported, true);
+  const prepared = await adapter.prepare();
+  assert.equal(prepared.tab_id, 7);
+  assert.equal(prepared.display_label, "Other audio source");
+});
+
+test("generic source adapter rejects restricted browser pages with actionable error", async () => {
+  const chrome = mockChrome({
+    id: 8,
+    url: "chrome://settings/",
+    title: "Settings",
+    audible: true
+  });
+  const adapter = createChromiumTabSourceAdapter(chrome.api);
+
+  const capability = await adapter.canCapture();
+  assert.equal(capability.supported, false);
+  assert.equal(capability.reason, "UNSUPPORTED_TAB");
   await assert.rejects(
     adapter.prepare(),
-    /Open a YouTube tab before starting capture\./
+    /Open an HTTP or HTTPS page with audio\./
+  );
+});
+
+test("generic source adapter rejects silent web tabs with actionable error", async () => {
+  const chrome = mockChrome({
+    id: 9,
+    url: "https://example.com/silent",
+    title: "Silent source",
+    audible: false
+  });
+  const adapter = createChromiumTabSourceAdapter(chrome.api);
+
+  const capability = await adapter.canCapture();
+  assert.equal(capability.supported, false);
+  assert.equal(capability.reason, "TAB_NOT_AUDIBLE");
+  await assert.rejects(
+    adapter.prepare(),
+    /Start audio in the current tab before starting capture\./
   );
 });
 
 test("source adapter acquires the tab stream through tabCapture", async () => {
   const chrome = mockChrome({
     id: 88,
-    url: "https://www.youtube.com/watch?v=source",
-    title: "Source"
+    url: "https://example.com/source",
+    title: "Source",
+    audible: true
   }, "voicebridge-stream");
   const adapter = createChromiumTabSourceAdapter(chrome.api);
   const prepared = await adapter.prepare();

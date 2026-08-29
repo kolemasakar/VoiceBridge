@@ -4,13 +4,29 @@ const CLOUD_REQUEST_TIMEOUT_MS = 70000;
 let creatingOffscreen = null;
 let stoppingCloudSession = null;
 
-function sessionRequestBody() {
+function normalizeSessionSource(value) {
+  if (value == null) return null;
+  if (
+    value.source_kind !== "BROWSER_TAB" ||
+    value.source_adapter !== "chromium_tab"
+  ) {
+    throw new Error("The browser source metadata is not valid.");
+  }
+  return {
+    kind: "BROWSER_TAB",
+    adapter: "chromium_tab"
+  };
+}
+
+function sessionRequestBody(sourceMetadata = null) {
+  const source = normalizeSessionSource(sourceMetadata);
   return {
     source_language: "en",
     target_language: "uk",
-    runtime_mode: "YOUTUBE_MVP",
+    runtime_mode: source ? "UNIVERSAL_BROWSER_AUDIO" : "YOUTUBE_MVP",
     input_type: "BROWSER_AUDIO",
     output_type: "BROWSER_PLAYBACK",
+    ...(source ? { source } : {}),
     provider_preferences: {
       recognition: null,
       translation: null,
@@ -106,10 +122,10 @@ async function getCloudState() {
   };
 }
 
-async function createCloudSession() {
+async function createCloudSession(sourceMetadata = null) {
   return cloudRequest("/api/v1/sessions", {
     method: "POST",
-    body: JSON.stringify(sessionRequestBody())
+    body: JSON.stringify(sessionRequestBody(sourceMetadata))
   });
 }
 
@@ -151,7 +167,7 @@ async function testCloudConnection() {
   }
 }
 
-async function startCloudSession() {
+async function startCloudSession(sourceMetadata = null) {
   const current = await getCloudState();
   if (current.status === "ACTIVE" && current.session_id) return current;
   await setCloudState({
@@ -161,7 +177,7 @@ async function startCloudSession() {
   });
   let created = null;
   try {
-    created = await createCloudSession();
+    created = await createCloudSession(sourceMetadata);
     await setCloudState({
       status: "STARTING",
       session_id: created.session_id,
@@ -265,7 +281,7 @@ async function ensureOffscreenDocument() {
     creatingOffscreen = chrome.offscreen.createDocument({
       url: OFFSCREEN_PATH,
       reasons: ["USER_MEDIA", "AUDIO_PLAYBACK"],
-      justification: "Capture and play audio from the active YouTube tab."
+      justification: "Capture and play audio from the active browser tab."
     });
   }
   try {
@@ -328,7 +344,10 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
   } else if (message.type === "TEST_CLOUD_CONNECTION") {
     operation = testCloudConnection().then((state) => ({ ok: true, state }));
   } else if (message.type === "START_CLOUD_SESSION") {
-    operation = startCloudSession().then((state) => ({ ok: true, state }));
+    operation = startCloudSession(message.data).then((state) => ({
+      ok: true,
+      state
+    }));
   } else if (message.type === "STOP_CLOUD_SESSION") {
     operation = stopCloudSession().then((state) => ({ ok: true, state }));
   } else if (message.type === "GET_STREAM_TICKET") {

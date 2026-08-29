@@ -1,6 +1,6 @@
 # VoiceBridge Phase 2 M2 Universal Browser Session Contract
 
-Status: IMPLEMENTED - AUTOMATED VALIDATION PASSED - MERGE PENDING
+Status: COMPLETE - AUTOMATED VALIDATION PASSED
 
 Date: 2026-08-29
 
@@ -131,13 +131,13 @@ Added `src/cloud/tests/session_contract.test.ts` covering:
 
 Existing cloud and browser suites remain required regression gates.
 
-## 8. Automated Validation Evidence
+## 8. Validation Evidence
 
 Pull request:
 
 `#37 - Implement Phase 2 M2 universal browser session contract`
 
-Validated head before this evidence-only documentation commit:
+First validated PR head:
 
 `8361f5776d6ea33f5a94010baabcbce803c5cb39`
 
@@ -145,19 +145,31 @@ Validate run:
 
 `33270619793 - SUCCESS`
 
-Jobs:
+Final PR head:
 
-- `browser-extension` - SUCCESS;
-- `repository-docs` - SUCCESS;
-- `cloud` - SUCCESS.
+`04ecaab450297450813689a6b3ddf6dd6e258137`
 
-The cloud job built and ran the complete cloud test suite including `session_contract.test.ts`.
+Final PR Validate run:
 
-Because this milestone record update changes the PR head, the final PR head MUST also pass Validate before merge.
+`33270703312 - SUCCESS`
+
+Merge commit:
+
+`cd95680b533e1543494a0b5da167723d3de7d923`
+
+Post-merge `main` Validate run:
+
+`33270768941 - SUCCESS`
+
+All required jobs passed on the final PR head and post-merge main:
+
+- `browser-extension`;
+- `repository-docs`;
+- `cloud`.
 
 ## 9. Explicitly Unchanged
 
-P2-M2 does NOT:
+P2-M2 did NOT:
 
 - remove the YouTube compatibility gate from the browser source adapter;
 - switch the browser popup to `UNIVERSAL_BROWSER_AUDIO`;
@@ -171,25 +183,18 @@ P2-M2 does NOT:
 - introduce content persistence;
 - modify KRC Media.
 
-Generic active-tab UI behavior remains P2-M3 scope.
+## 10. Acceptance Result
 
-## 10. Acceptance
+All P2-M2 acceptance gates passed.
 
-P2-M2 may be marked complete only when:
+Final milestone state:
 
-- both runtime modes validate correctly;
-- the old Phase 1 request remains accepted;
-- invalid universal source descriptors fail during session creation;
-- session create/read state exposes normalized source metadata;
-- provider preferences do not become operational accidentally;
-- existing cloud and browser regression suites stay green;
-- final PR head CI is green;
-- post-merge `main` CI is green.
+`P2-M2 COMPLETE`
 
 ## 11. Next Gate
 
-After P2-M2 is merged with green post-merge CI, begin:
+Authorized next milestone:
 
 `P2-M3 - Generic Active-Tab UI Path`
 
-P2-M3 will be the first milestone allowed to remove the YouTube-specific browser gate for the new universal runtime path.
+P2-M3 is the first milestone allowed to remove the YouTube-specific browser gate for the new universal runtime path.

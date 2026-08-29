@@ -60,7 +60,7 @@ const elements = {
 };
 
 const DEFAULT_CLOUD_API_URL = "https://voicebridge-cloud-us.onrender.com";
-const phase1SourceAdapter =
+const browserTabSourceAdapter =
   VoiceBridgeSourceAdapters.createChromiumTabSourceAdapter(chrome);
 let stopInProgress = false;
 
@@ -266,14 +266,17 @@ async function startCapture() {
   elements.error.textContent = "";
   elements.start.disabled = true;
   try {
-    await prepareOffscreen();
     await saveCloudSettings(false);
-    const preparedSource = await phase1SourceAdapter.prepare();
-    const cloudResponse = await serviceWorkerMessage("START_CLOUD_SESSION");
+    const preparedSource = await browserTabSourceAdapter.prepare();
+    await prepareOffscreen();
+    const cloudResponse = await serviceWorkerMessage("START_CLOUD_SESSION", {
+      source_kind: preparedSource.source_kind,
+      source_adapter: preparedSource.source_adapter
+    });
     renderCloudState(cloudResponse.state);
     const streamResponse = await serviceWorkerMessage("GET_STREAM_TICKET");
     try {
-      const captureHandle = await phase1SourceAdapter.start(preparedSource);
+      const captureHandle = await browserTabSourceAdapter.start(preparedSource);
       const config = {
         original_pause_volume: Number(elements.originalVolume.value) / 100,
         original_duck_volume: 0.15,
