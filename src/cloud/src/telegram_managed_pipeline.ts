@@ -43,7 +43,7 @@ export interface ManagedTelegramPipeline {
   transcribe(
     asset: TelegramPublicMediaAsset,
     languageHint: MediaLanguageHint,
-    reserveSttSeconds: (seconds: number) => void
+    reserveSttSeconds: (seconds: number) => void | Promise<void>
   ): Promise<ManagedTelegramSttResult>;
 }
 
@@ -173,7 +173,7 @@ export class AssemblyAiTelegramMediaStt {
   async transcribe(
     asset: TelegramPublicMediaAsset,
     languageHint: MediaLanguageHint,
-    reserveSttSeconds: (seconds: number) => void
+    reserveSttSeconds: (seconds: number) => void | Promise<void>
   ): Promise<ManagedTelegramSttResult> {
     if (!this.apiKey) {
       throw new MediaTranscriptError(
@@ -193,7 +193,7 @@ export class AssemblyAiTelegramMediaStt {
       );
     }
 
-    reserveSttSeconds(duration);
+    await reserveSttSeconds(duration);
     const transcriber = new AssemblyAiTelegramUrlTranscriber(this.apiKey);
     let transcriptId: string | null = null;
     let providerDataDeleted = false;
@@ -253,7 +253,7 @@ export class DefaultManagedTelegramPipeline implements ManagedTelegramPipeline {
   async transcribe(
     asset: TelegramPublicMediaAsset,
     languageHint: MediaLanguageHint,
-    reserveSttSeconds: (seconds: number) => void
+    reserveSttSeconds: (seconds: number) => void | Promise<void>
   ): Promise<ManagedTelegramSttResult> {
     return this.stt.transcribe(asset, languageHint, reserveSttSeconds);
   }

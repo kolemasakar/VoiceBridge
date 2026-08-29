@@ -209,6 +209,12 @@ export interface ManagedMediaStoreReservation {
   record: ManagedMediaStoredRecord;
 }
 
+export interface ManagedMediaSttReservation {
+  allowed: boolean;
+  used_seconds: number;
+  remaining_seconds: number;
+}
+
 export interface ManagedMediaJobStore {
   readonly durable: boolean;
   readonly kind: "memory" | "postgres";
@@ -218,6 +224,12 @@ export interface ManagedMediaJobStore {
   reserve(record: ManagedMediaStoredRecord): Promise<ManagedMediaStoreReservation>;
   put(record: ManagedMediaStoredRecord): Promise<void>;
   get(jobId: string): Promise<ManagedMediaStoredRecord | null>;
+  reserveSttSeconds?(
+    jobId: string,
+    dayUtc: string,
+    requestedSeconds: number,
+    dailyLimitSeconds: number
+  ): Promise<ManagedMediaSttReservation>;
 }
 
 export interface ManagedMediaPage {
@@ -793,6 +805,59 @@ export class ManagedMediaService {
     }
   }
 
+  private async reserveSttQuota(
+    jobId: string,
+    requestedSeconds: number
+  ): Promise<void> {
+    if (!Number.isFinite(requestedSeconds) || requestedSeconds <= 0) {
+      throw new MediaTranscriptError(
+        "MEDIA_STT_DURATION_INVALID",
+        "The media duration is invalid for STT quota reservation.",
+        422,
+        false
+      );
+    }
+    const now = new Date();
+    const usage = this.betaGate.usage(now);
+    if (this.store.reserveSttSeconds) {
+      let reservation: ManagedMediaSttReservation;
+      try {
+        reservation = await this.store.reserveSttSeconds(
+          jobId,
+          usage.day_utc,
+          requestedSeconds,
+          usage.daily_limit_seconds
+        );
+      } catch {
+        throw new MediaTranscriptError(
+          "MANAGED_DURABLE_STORE_UNAVAILABLE",
+          "The managed media durable quota ledger is temporarily unavailable.",
+          503,
+          true
+        );
+      }
+      if (!reservation.allowed) {
+        throw new MediaTranscriptError(
+          "MEDIA_BETA_STT_QUOTA_EXHAUSTED",
+          "The closed MEDIA BETA daily STT quota is exhausted.",
+          429,
+          false
+        );
+      }
+      this.betaGate.restoreUsage(usage.day_utc, reservation.used_seconds);
+      return;
+    }
+    const reservation = this.betaGate.reserveSttSeconds(requestedSeconds, now);
+    if (!reservation.allowed) {
+      throw new MediaTranscriptError(
+        "MEDIA_BETA_STT_QUOTA_EXHAUSTED",
+        "The closed MEDIA BETA daily STT quota is exhausted.",
+        429,
+        false
+      );
+    }
+  }
+
   async preflight(
     input: ManagedMediaPreflightInput
   ): Promise<ManagedMediaCreditPreflight> {
@@ -887,6 +952,18 @@ export class ManagedMediaService {
     input: ManagedMediaFacebookMetadataInput
   ): Promise<ManagedMediaJobView> {
     const record = await this.authorizedRecord(jobId, input.beta_access_code);
+    if (
+      input.credit_consent?.provider !== "supadata" ||
+      input.credit_consent?.mode !== "metadata" ||
+      input.credit_consent?.max_credits !== 1
+    ) {
+      throw new MediaTranscriptError(
+        "MEDIA_METADATA_CREDIT_CONSENT_REQUIRED",
+        "Exact one-credit Supadata metadata consent is required before duration lookup.",
+        409,
+        false
+      );
+    }
     this.authorizeFacebookMetadataProvider();
     if ((record.job.media_duration_seconds ?? null) !== null) {
       return this.publicJob(record.job, true);
@@ -1142,17 +1219,7 @@ export class ManagedMediaService {
       const stt = await this.attachmentPipeline!.transcribe(
         file,
         input.language_hint,
-        (seconds) => {
-          const quota = this.betaGate.reserveSttSeconds(seconds);
-          if (!quota.allowed) {
-            throw new MediaTranscriptError(
-              "MEDIA_BETA_STT_QUOTA_EXHAUSTED",
-              "The closed MEDIA BETA daily STT quota is exhausted.",
-              429,
-              false
-            );
-          }
-        }
+        (seconds) => this.reserveSttQuota(job.job_id, seconds)
       );
       const updatedAt = new Date().toISOString();
       const completed: ManagedMediaStoredRecord = {
@@ -1287,17 +1354,7 @@ export class ManagedMediaService {
       const stt = await this.telegramPipeline!.transcribe(
         asset,
         input.language_hint,
-        (seconds) => {
-          const quota = this.betaGate.reserveSttSeconds(seconds);
-          if (!quota.allowed) {
-            throw new MediaTranscriptError(
-              "MEDIA_BETA_STT_QUOTA_EXHAUSTED",
-              "The closed MEDIA BETA daily STT quota is exhausted.",
-              429,
-              false
-            );
-          }
-        }
+        (seconds) => this.reserveSttQuota(job.job_id, seconds)
       );
       const updatedAt = new Date().toISOString();
       const completed: ManagedMediaStoredRecord = {
@@ -1520,6 +1577,14 @@ export class ManagedMediaService {
   ): Promise<ManagedMediaJobView> {
     const record = await this.authorizedRecord(jobId, input.beta_access_code);
     this.authorizeFacebookPipeline(input.beta_access_code);
+    if (!parseFacebookRetrievalCreditConsent(input.credit_consent)) {
+      throw new MediaTranscriptError(
+        "FACEBOOK_RETRIEVAL_CREDIT_CONSENT_REQUIRED",
+        "Exact one-credit ScrapeCreators consent is required before paid Facebook retrieval.",
+        409,
+        false
+      );
+    }
     if (record.job.provider_mode === "facebook_retrieval_stt" && record.job.status === "COMPLETED") {
       return this.publicJob(record.job, true);
     }
@@ -1613,17 +1678,11 @@ export class ManagedMediaService {
     asset: FacebookMediaAsset,
     languageHint: MediaLanguageHint
   ): Promise<ManagedMediaJobView> {
-    const stt = await this.facebookPipeline!.transcribe(asset, languageHint, (seconds) => {
-      const reservation = this.betaGate.reserveSttSeconds(seconds);
-      if (!reservation.allowed) {
-        throw new MediaTranscriptError(
-          "MEDIA_BETA_STT_QUOTA_EXHAUSTED",
-          "The closed MEDIA BETA daily STT quota is exhausted.",
-          429,
-          false
-        );
-      }
-    });
+    const stt = await this.facebookPipeline!.transcribe(
+      asset,
+      languageHint,
+      (seconds) => this.reserveSttQuota(record.job.job_id, seconds)
+    );
     const updatedAt = new Date().toISOString();
     const updated: ManagedMediaStoredRecord = {
       ...record,
@@ -1658,6 +1717,18 @@ export class ManagedMediaService {
 
   async startNative(input: ManagedMediaNativeInput): Promise<ManagedMediaJobView> {
     this.authorize(input.beta_access_code);
+    if (
+      input.credit_consent?.provider !== "supadata" ||
+      input.credit_consent?.mode !== "native" ||
+      input.credit_consent?.max_credits !== 1
+    ) {
+      throw new MediaTranscriptError(
+        "MEDIA_CREDIT_CONSENT_REQUIRED",
+        "Exact one-credit Supadata native consent is required before processing.",
+        409,
+        false
+      );
+    }
     await this.ensureStore();
     const sourceUrl = normalizeManagedMediaUrl(input.url);
     const baseRequestKey = managedMediaRequestKey(
@@ -1833,6 +1904,20 @@ export class ManagedMediaService {
     input: ManagedMediaAiInput
   ): Promise<ManagedMediaJobView> {
     const record = await this.authorizedRecord(jobId, input.beta_access_code);
+    if (
+      input.credit_consent?.provider !== "supadata" ||
+      input.credit_consent?.mode !== "generate" ||
+      !Number.isInteger(input.credit_consent?.max_credits) ||
+      input.credit_consent.max_credits < 2 ||
+      input.credit_consent.max_credits > 10000
+    ) {
+      throw new MediaTranscriptError(
+        "MEDIA_AI_CREDIT_CONSENT_REQUIRED",
+        "A valid explicit Supadata AI credit consent is required before generated transcription.",
+        409,
+        false
+      );
+    }
     this.authorizeAiProvider();
 
     if (record.job.provider_mode === "generate") {

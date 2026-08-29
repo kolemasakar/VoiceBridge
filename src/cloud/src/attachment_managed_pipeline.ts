@@ -47,7 +47,7 @@ export interface ManagedAttachmentPipeline {
   transcribe(
     file: OpenAiConversationFileRef,
     languageHint: MediaLanguageHint,
-    reserveSttSeconds: (seconds: number) => void
+    reserveSttSeconds: (seconds: number) => void | Promise<void>
   ): Promise<ManagedAttachmentSttResult>;
 }
 
@@ -454,7 +454,7 @@ export class DefaultManagedAttachmentPipeline implements ManagedAttachmentPipeli
   async transcribe(
     file: OpenAiConversationFileRef,
     languageHint: MediaLanguageHint,
-    reserveSttSeconds: (seconds: number) => void
+    reserveSttSeconds: (seconds: number) => void | Promise<void>
   ): Promise<ManagedAttachmentSttResult> {
     if (!this.apiKey) {
       throw new MediaTranscriptError(
@@ -497,7 +497,7 @@ export class DefaultManagedAttachmentPipeline implements ManagedAttachmentPipeli
           false
         );
       }
-      reserveSttSeconds(durationSeconds);
+      await reserveSttSeconds(durationSeconds);
       transcriber = new AssemblyAiAttachmentTranscriber(this.apiKey);
       const uploadUrl = await transcriber.upload(sttPath);
       transcriptId = await transcriber.submit(uploadUrl, languageHint);

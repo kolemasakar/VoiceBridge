@@ -91,7 +91,10 @@ export class MediaBetaGate {
     requestedSeconds: number,
     now = new Date()
   ): MediaBetaReserveResult {
-    const seconds = Math.max(1, Math.ceil(requestedSeconds));
+    if (!Number.isFinite(requestedSeconds) || requestedSeconds <= 0) {
+      return { allowed: false, usage: this.usage(now) };
+    }
+    const seconds = Math.ceil(requestedSeconds);
     const day = utcDay(now);
     if (this.usageDayUtc !== day) {
       this.usageDayUtc = day;

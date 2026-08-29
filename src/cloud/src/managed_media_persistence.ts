@@ -3,6 +3,7 @@ import type {
   ManagedMediaJobStore,
   ManagedMediaStoredRecord,
   ManagedMediaStoreReservation,
+  ManagedMediaSttReservation,
   ManagedMediaStatus
 } from "./managed_media_service.js";
 import type { MediaTranscriptSegment } from "./media_transcript.js";
@@ -58,9 +59,98 @@ export class ManagedMediaPersistentStore implements ManagedMediaJobStore {
     await this.initialized;
   }
 
+  async reserveSttSeconds(
+    jobId: string,
+    dayUtc: string,
+    requestedSeconds: number,
+    dailyLimitSeconds: number
+  ): Promise<ManagedMediaSttReservation> {
+    if (!JOB_ID.test(jobId)) throw new Error("Invalid managed quota job id.");
+    if (!/^\d{4}-\d{2}-\d{2}$/.test(dayUtc)) {
+      throw new Error("Invalid managed quota day.");
+    }
+    if (!Number.isFinite(requestedSeconds) || requestedSeconds <= 0) {
+      throw new Error("Invalid managed quota seconds.");
+    }
+    if (
+      !Number.isInteger(dailyLimitSeconds) ||
+      dailyLimitSeconds < 60 ||
+      dailyLimitSeconds > 86400
+    ) {
+      throw new Error("Invalid managed daily quota limit.");
+    }
+    const seconds = Math.ceil(requestedSeconds);
+    await this.ready();
+    const output = await this.run(`
+WITH quota_lock AS MATERIALIZED (
+  SELECT pg_advisory_xact_lock(hashtext('krc_media_stt_quota|${dayUtc}'))
+),
+existing AS MATERIALIZED (
+  SELECT charges.day_utc, charges.seconds
+  FROM quota_lock, krc_media_stt_charges charges
+  WHERE charges.job_id='${jobId}'
+),
+usage_before AS MATERIALIZED (
+  SELECT COALESCE(SUM(charges.seconds), 0)::bigint AS used_seconds
+  FROM quota_lock
+  LEFT JOIN krc_media_stt_charges charges
+    ON charges.day_utc='${dayUtc}'::date
+),
+inserted AS (
+  INSERT INTO krc_media_stt_charges (job_id, day_utc, seconds)
+  SELECT '${jobId}', '${dayUtc}'::date, ${seconds}
+  FROM usage_before
+  WHERE NOT EXISTS (SELECT 1 FROM existing)
+    AND usage_before.used_seconds + ${seconds} <= ${dailyLimitSeconds}
+  ON CONFLICT (job_id) DO NOTHING
+  RETURNING seconds
+)
+SELECT
+  CASE
+    WHEN EXISTS (
+      SELECT 1 FROM existing
+      WHERE day_utc='${dayUtc}'::date AND seconds >= ${seconds}
+    ) THEN 1
+    WHEN EXISTS (SELECT 1 FROM inserted) THEN 1
+    ELSE 0
+  END,
+  usage_before.used_seconds + COALESCE((SELECT SUM(seconds) FROM inserted), 0),
+  GREATEST(
+    0,
+    ${dailyLimitSeconds} - (
+      usage_before.used_seconds + COALESCE((SELECT SUM(seconds) FROM inserted), 0)
+    )
+  )
+FROM usage_before;
+`);
+    const line = output
+      .split(/\r?\n/)
+      .filter((item) => item.split("\t").length === 3)
+      .at(-1);
+    if (!line) throw new Error("Managed media quota reservation returned no row.");
+    const [allowedRaw, usedRaw, remainingRaw] = line.split("\t");
+    const used = Number(usedRaw);
+    const remaining = Number(remainingRaw);
+    if (
+      (allowedRaw !== "0" && allowedRaw !== "1") ||
+      !Number.isFinite(used) ||
+      !Number.isFinite(remaining)
+    ) {
+      throw new Error("Managed media quota reservation row is malformed.");
+    }
+    return {
+      allowed: allowedRaw === "1",
+      used_seconds: Math.max(0, Math.floor(used)),
+      remaining_seconds: Math.max(0, Math.floor(remaining))
+    };
+  }
+
   async purgeExpired(): Promise<void> {
     await this.ready();
-    await this.run("DELETE FROM krc_managed_media_jobs WHERE expires_at <= now();");
+    await this.run(`
+DELETE FROM krc_managed_media_jobs WHERE expires_at <= now();
+DELETE FROM krc_media_stt_charges WHERE day_utc < current_date - interval '2 days';
+`);
   }
 
   async findByRequestKey(
@@ -181,6 +271,14 @@ CREATE INDEX IF NOT EXISTS krc_managed_media_jobs_active_idx
   ON krc_managed_media_jobs (status, expires_at);
 CREATE INDEX IF NOT EXISTS krc_managed_media_jobs_updated_idx
   ON krc_managed_media_jobs (updated_at DESC);
+CREATE TABLE IF NOT EXISTS krc_media_stt_charges (
+  job_id text PRIMARY KEY,
+  day_utc date NOT NULL,
+  seconds integer NOT NULL CHECK (seconds >= 0),
+  created_at timestamptz NOT NULL DEFAULT now()
+);
+CREATE INDEX IF NOT EXISTS krc_media_stt_charges_day_idx
+  ON krc_media_stt_charges (day_utc);
 `);
   }
 

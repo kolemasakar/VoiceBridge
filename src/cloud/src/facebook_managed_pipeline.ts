@@ -75,7 +75,7 @@ export interface ManagedFacebookPipeline {
   transcribe(
     asset: FacebookMediaAsset,
     languageHint: MediaLanguageHint,
-    reserveSttSeconds: (seconds: number) => void
+    reserveSttSeconds: (seconds: number) => void | Promise<void>
   ): Promise<ManagedFacebookSttResult>;
 }
 
@@ -335,7 +335,7 @@ export class AssemblyAiFacebookMediaStt {
   async transcribe(
     asset: FacebookMediaAsset,
     languageHint: MediaLanguageHint,
-    reserveSttSeconds: (seconds: number) => void
+    reserveSttSeconds: (seconds: number) => void | Promise<void>
   ): Promise<ManagedFacebookSttResult> {
     if (!this.apiKey) {
       throw new MediaTranscriptError(
@@ -351,7 +351,7 @@ export class AssemblyAiFacebookMediaStt {
     let providerDataDeleted = false;
     try {
       const duration = await probeDurationSeconds(downloaded.path);
-      reserveSttSeconds(duration);
+      await reserveSttSeconds(duration);
       transcriber = new AssemblyAiFileTranscriber(this.apiKey);
       const uploadUrl = await transcriber.upload(downloaded.path);
       transcriptId = await transcriber.submit(uploadUrl, languageHint);
@@ -457,7 +457,7 @@ export class DefaultManagedFacebookPipeline implements ManagedFacebookPipeline {
   async transcribe(
     asset: FacebookMediaAsset,
     languageHint: MediaLanguageHint,
-    reserveSttSeconds: (seconds: number) => void
+    reserveSttSeconds: (seconds: number) => void | Promise<void>
   ): Promise<ManagedFacebookSttResult> {
     return this.stt.transcribe(asset, languageHint, reserveSttSeconds);
   }
