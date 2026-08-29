@@ -3,6 +3,7 @@ import { authenticate } from "./auth.js";
 import type { AppConfig } from "./config.js";
 import { createRequestContext, type RequestContext } from "./identifiers.js";
 import { MediaBetaGate } from "./media_beta.js";
+import { managedMediaPlatform } from "./managed_media_url.js";
 import {
   CobaltFacebookRetriever,
   ScrapeCreatorsFacebookRetriever
@@ -248,9 +249,9 @@ export function createManagedMediaHttpHandler(
     consent_options: { approve: 1, reject: 2 },
     automatic_ai_fallback: false,
     instagram_reel_ai_fallback: true,
-    facebook_ai_fallback: true,
-    facebook_ai_requires_duration_metadata: true,
-    facebook_ai_metadata_credits: 1,
+    facebook_ai_fallback: false,
+    facebook_ai_requires_duration_metadata: false,
+    facebook_ai_metadata_credits: 0,
     facebook_retrieval_stt_fallback: true,
     facebook_free_retrieval_provider: "cobalt",
     facebook_free_retrieval_configured: Boolean(config.cobaltEndpoint),
@@ -333,6 +334,14 @@ export function createManagedMediaHttpHandler(
           throw new MediaTranscriptError(
             "INVALID_REQUEST",
             "The managed media preflight request is not valid.",
+            400,
+            false
+          );
+        }
+        if (managedMediaPlatform(input.url) === "facebook") {
+          throw new MediaTranscriptError(
+            "FACEBOOK_FREE_RETRIEVAL_REQUIRED",
+            "Active Facebook intake uses the free Cobalt route; generic Supadata native preflight is disabled.",
             400,
             false
           );
@@ -458,6 +467,14 @@ if (method === "POST" && path === FACEBOOK_FALLBACK) {
           throw new MediaTranscriptError(
             "MEDIA_CREDIT_CONSENT_REQUIRED",
             "Explicit one-credit user consent is required before native transcript processing.",
+            409,
+            false
+          );
+        }
+        if (managedMediaPlatform(input.url) === "facebook") {
+          throw new MediaTranscriptError(
+            "FACEBOOK_FREE_RETRIEVAL_REQUIRED",
+            "Active Facebook intake uses the free Cobalt route; generic Supadata native processing is disabled.",
             409,
             false
           );

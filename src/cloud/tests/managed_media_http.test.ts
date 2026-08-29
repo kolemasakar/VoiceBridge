@@ -498,9 +498,9 @@ test("managed server preserves legacy health and exposes disabled managed capabi
     assert.equal(capabilityBody.explicit_user_consent_required, true);
     assert.equal(capabilityBody.automatic_ai_fallback, false);
     assert.equal(capabilityBody.instagram_reel_ai_fallback, true);
-    assert.equal(capabilityBody.facebook_ai_fallback, true);
-    assert.equal(capabilityBody.facebook_ai_requires_duration_metadata, true);
-    assert.equal(capabilityBody.facebook_ai_metadata_credits, 1);
+    assert.equal(capabilityBody.facebook_ai_fallback, false);
+    assert.equal(capabilityBody.facebook_ai_requires_duration_metadata, false);
+    assert.equal(capabilityBody.facebook_ai_metadata_credits, 0);
     assert.equal(capabilityBody.ai_requires_separate_preflight, true);
     assert.equal(capabilityBody.ai_requires_separate_user_consent, true);
     assert.equal(capabilityBody.ai_generate_credits_per_minute, 2);

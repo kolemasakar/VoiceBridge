@@ -112,5 +112,7 @@ test("managed capability advertises YouTube, Instagram, Facebook and Telegram", 
   assert.equal(capability.telegram_public_retrieval, true);
   assert.equal(capability.telegram_retrieval_provider, "telegram_public_web");
   assert.equal(capability.telegram_retrieval_credits, 0);
-  assert.equal(capability.facebook_ai_fallback, true);
+  assert.equal(capability.facebook_ai_fallback, false);
+  assert.equal(capability.facebook_ai_requires_duration_metadata, false);
+  assert.equal(capability.facebook_ai_metadata_credits, 0);
 });
