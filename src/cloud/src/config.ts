@@ -1,3 +1,4 @@
+export type SttProviderName = "assemblyai" | "gemini";
 export type TranslationProviderName = "gemini" | "azure";
 export type TranslationFallbackProviderName = "gemini" | "none";
 export type TtsProviderName = "gemini" | "azure";
@@ -7,6 +8,8 @@ export interface AppConfig {
   port: number;
   testAccessToken: string;
   assemblyAiApiKey: string | null;
+  sttProvider?: SttProviderName;
+  geminiSttModel?: string;
   geminiApiKey: string | null;
   geminiTranslationModel: string;
   translationProvider?: TranslationProviderName;
@@ -104,6 +107,17 @@ export function loadConfig(
     port: parseInteger(environment.PORT, 8080, "PORT", 1, 65535),
     testAccessToken,
     assemblyAiApiKey: environment.ASSEMBLYAI_API_KEY || null,
+    sttProvider: parseProvider(
+      environment.STT_PROVIDER,
+      "gemini",
+      ["assemblyai", "gemini"] as const,
+      "STT_PROVIDER"
+    ),
+    geminiSttModel: parseIdentifier(
+      environment.GEMINI_STT_MODEL,
+      "gemini-3.5-transcribe-live",
+      "GEMINI_STT_MODEL"
+    ),
     geminiApiKey: environment.GEMINI_API_KEY || null,
     geminiTranslationModel: parseIdentifier(
       environment.GEMINI_TRANSLATION_MODEL,

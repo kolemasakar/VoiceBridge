@@ -12,10 +12,8 @@ import {
 } from "./session_store.js";
 import { StreamTicketStore } from "./stream_ticket_store.js";
 import { attachStreamTransport } from "./stream_transport.js";
-import {
-  createSttProvider,
-  type SttProvider
-} from "./stt_provider.js";
+import { createConfiguredSttProvider } from "./stt_factory.js";
+import type { SttProvider } from "./stt_provider.js";
 import {
   createTranslationProvider,
   type TranslationProvider
@@ -195,7 +193,12 @@ function clientKey(request: IncomingMessage): string {
 export function createVoiceBridgeServer(
   config: AppConfig,
   sessionStore = new SessionStore(),
-  sttProvider: SttProvider = createSttProvider(config.assemblyAiApiKey),
+  sttProvider: SttProvider = createConfiguredSttProvider({
+    provider: config.sttProvider ?? "assemblyai",
+    assemblyAiApiKey: config.assemblyAiApiKey,
+    geminiApiKey: config.geminiApiKey,
+    geminiModel: config.geminiSttModel
+  }),
   translationProvider: TranslationProvider = createTranslationProvider({
     provider: config.translationProvider ?? "azure",
     fallbackProvider: config.translationFallbackProvider ?? "gemini",
@@ -268,7 +271,8 @@ export function createVoiceBridgeServer(
           capabilities: {
             stt: {
               provider: sttProvider.name,
-              configured: sttProvider.configured
+              configured: sttProvider.configured,
+              ...(sttProvider.model ? { model: sttProvider.model } : {})
             },
             translation: {
               provider: translationProvider.name,

@@ -1,17 +1,21 @@
 import { loadConfig } from "./config.js";
 import { listen } from "./server.js";
 import { configuredAssemblyAiSpeechModel } from "./stt_provider.js";
+import { resolveGeminiSttModel } from "./gemini_stt_provider.js";
 
 try {
   const config = loadConfig();
-  const sttModel = configuredAssemblyAiSpeechModel();
+  const sttProvider = config.sttProvider ?? "gemini";
+  const sttModel = sttProvider === "gemini"
+    ? resolveGeminiSttModel(config.geminiSttModel)
+    : configuredAssemblyAiSpeechModel();
   const { server, url } = await listen(config);
   console.log(
     JSON.stringify({
       event: "service_started",
       service: "voicebridge-cloud",
       url,
-      stt_provider: "assemblyai",
+      stt_provider: sttProvider,
       stt_model: sttModel
     })
   );

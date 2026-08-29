@@ -25,56 +25,71 @@ Phase 1 minimum YouTube MVP:
 
 `VALIDATED`
 
-Accepted runtime baseline:
+Current accepted runtime after the 2026-08-29 STT transition:
 
 - cloud service `0.6.0`;
 - browser extension `0.6.2`;
-- AssemblyAI English streaming STT;
+- Gemini 3.5 Transcribe Live English streaming STT by default;
+- AssemblyAI `universal-streaming-english` retained as explicit rollback;
 - Azure Translator primary English-to-Ukrainian translation;
 - Gemini translation fallback;
 - Azure Speech Ukrainian TTS with `uk-UA-OstapNeural`;
 - ordered browser PCM playback;
 - independent original and Ukrainian volume controls;
 - automatic original-audio ducking and restoration;
-- one-press idempotent Stop with visible `STOPPING` state;
+- bounded user Stop: completed text/translation drain, queued playback capped and cancelled;
 - bounded queues, retries, drains, and cleanup;
 - no intentional VoiceBridge content persistence.
 
-Final controlled acceptance evidence:
+The original Phase 1 controlled acceptance baseline remains documented as
+historical evidence. The later Gemini STT transition was validated separately
+against that rollback path.
 
-- English final segments: 28;
-- Ukrainian final segments: 28;
-- voiced segments: 28;
-- played segments: 28;
-- translation retries: 0;
-- TTS retries: 0;
-- pending operations after completion: 0;
-- dropped audio frames: 0;
-- final playback state: `COMPLETED`;
-- final capture state: `IDLE`.
+Current STT transition evidence:
+
+- same-duration Gemini run: 2938 frames, 1 dropped, 6 final STT segments,
+  363 ms reported recognition latency;
+- same-duration AssemblyAI rollback run: 2945 frames, 7 dropped, 4 final STT
+  segments, 378 ms reported recognition latency;
+- both completed with translation pending 0, TTS pending 0, and queued playback
+  0 ms after Stop;
+- qualitative transcript review favored Gemini for coherence and several proper
+  names;
+- no human reference transcript was available, so no WER claim is made.
 
 Active Phase 1 cloud endpoint:
 
 `https://voicebridge-cloud-us.onrender.com`
 
-## Validated Phase 1 Pipeline
+## Current Pipeline
 
 ```text
 YouTube tab audio
     -> VoiceBridge browser capture
     -> VoiceBridge Cloud
-    -> AssemblyAI English STT
+    -> Gemini 3.5 Transcribe Live English STT
     -> Azure Translator Ukrainian translation
     -> Azure Speech Ukrainian TTS
     -> browser PCM playback
     -> automatic original-audio ducking and restoration
 ```
 
-Translation fallback path:
+STT rollback path:
 
 ```text
-AssemblyAI English STT
-    -> Gemini Ukrainian translation
+YouTube tab audio
+    -> VoiceBridge browser capture
+    -> VoiceBridge Cloud
+    -> AssemblyAI universal-streaming-english
+    -> Azure Translator Ukrainian translation
+    -> Azure Speech Ukrainian TTS
+```
+
+Translation fallback remains:
+
+```text
+Selected English STT
+    -> Gemini Ukrainian translation fallback
     -> Azure Speech Ukrainian TTS
 ```
 
@@ -89,6 +104,8 @@ A production identity model must replace the shared token before public multi-us
 ## Documentation
 
 - [Phase 1 MVP Validation](docs/phases/PHASE_1_MVP_VALIDATION.md)
+- [Gemini 3.5 Transcribe STT Acceptance](docs/history/2026-08-29_GEMINI_3_5_TRANSCRIBE_STT_ACCEPTED.md)
+- [Gemini 3.5 Transcribe Default STT ADR](docs/adr/ADR-009_GEMINI_3_5_TRANSCRIBE_DEFAULT_STT.md)
 - [Phase 1 MVP Recovery Bootstrap](docs/bootstrap/PHASE_1_MVP_VALIDATED_BOOTSTRAP.md)
 - [Phase 1 MVP History Entry](docs/history/2026-07-22_PHASE_1_MVP_VALIDATED.md)
 - [Project Overview](docs/overview/01_PROJECT_OVERVIEW.md)
@@ -97,7 +114,7 @@ A production identity model must replace the shared token before public multi-us
 - [Architecture](docs/architecture/04_ARCHITECTURE.md)
 - [Technology Stack](docs/architecture/05_TECHNOLOGY_STACK.md)
 - [Cloud First ADR](docs/adr/ADR-001_CLOUD_FIRST_ARCHITECTURE.md)
-- [Streaming STT Provider ADR](docs/adr/ADR-005_PHASE_1_STREAMING_STT_PROVIDER.md)
+- [Phase 1 Streaming STT Provider ADR](docs/adr/ADR-005_PHASE_1_STREAMING_STT_PROVIDER.md)
 - [Initial Translation Provider ADR](docs/adr/ADR-006_PHASE_1_TRANSLATION_PROVIDER.md)
 - [Initial TTS Provider ADR](docs/adr/ADR-007_PHASE_1_TTS_PROVIDER.md)
 - [Azure Speech TTS ADR](docs/adr/ADR-008_AZURE_TTS_PROVIDER.md)
