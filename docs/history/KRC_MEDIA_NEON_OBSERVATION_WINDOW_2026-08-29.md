@@ -97,7 +97,32 @@ Closing the observation window is not authorization to delete the original Rende
 
 Closing the observation window is also not authorization to merge PR #28, promote production, onboard external testers, or publish the GPT.
 
-## 7. Current gate
+## 7. First later read-only checkpoint - PASS
+
+Observation workflow:
+- KRC MEDIA Neon Read-Only Observation
+- successful run ID: 33249015989
+- workflow commit: 929985720dcb448fc6cba0d1a2326e672bbe2d14
+- result: SUCCESS
+
+Verified without provider-consuming work or runtime/database mutation:
+- isolated Render service still targets the protected Neon direct TLS URL: PASS
+- managed capability contract after inactivity/resume: PASS
+- PostgreSQL major 18: PASS
+- current managed-job rows: 1
+- non-terminal managed jobs: 0
+- accepted post-cutover regression job remains COMPLETED: PASS
+- persisted regression segment count remains 321: PASS
+- regression job API read: PASS
+- regression segments API read: PASS
+- rollback trigger observed: NO
+
+The first harness attempt, run 33248936436, stopped only because it assumed at least two historical managed-job rows would still exist. The current row count is 1. The required post-cutover regression row was present and readable, so the assumption was removed and the corrected read-only workflow passed. No provider work was repeated.
+
+Authoritative checkpoint:
+- docs/history/KRC_MEDIA_NEON_OBSERVATION_CHECKPOINT_2026-08-29.md
+
+## 8. Current gate
 
 DATABASE_CUTOVER: PASS
 ACTIVE_DURABLE_STORE: NEON_POSTGRESQL_18
@@ -105,9 +130,15 @@ POST_CUTOVER_LIVE_MEDIA_JOB: PASS
 NEON_DURABLE_WRITE: PASS
 RESTART_RESILIENCE: PASS
 IDEMPOTENT_REPLAY: PASS
+READ_ONLY_OBSERVATION_CHECKPOINT: PASS
+MANAGED_CAPABILITY_OBSERVATION: PASS
+PRIOR_REGRESSION_JOB_READ: PASS
+PRIOR_REGRESSION_SEGMENT_READ: PASS
+NON_TERMINAL_MANAGED_JOBS: 0
+ROLLBACK_TRIGGER_OBSERVED: NO
 ROLLBACK_OBSERVATION_WINDOW: ACTIVE
 ORIGINAL_RENDER_POSTGRESQL: RETAINED_FOR_ROLLBACK
 SOURCE_DATABASE_DELETION: NOT_AUTHORIZED
 RELEASE_HOLD_OWNER_TESTING: PRESERVED
 
-Next allowed migration-stream action: a later read-only observation checkpoint. No additional provider-consuming media job is required for that checkpoint.
+Next allowed migration-stream action: continue the rollback observation window. Before proposing closure, re-confirm exact-head CI and the availability of the original Render PostgreSQL rollback source. No additional provider-consuming media job is required.
