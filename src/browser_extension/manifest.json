@@ -12,7 +12,6 @@
   ],
   "host_permissions": [
     "https://voicebridge-cloud-us.onrender.com/*",
-    "https://voicebridge-cloud-us-pr-29.onrender.com/*",
     "http://127.0.0.1/*",
     "http://localhost/*"
   ],
