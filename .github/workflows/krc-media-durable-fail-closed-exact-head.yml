@@ -1,0 +1,31 @@
+name: KRC MEDIA Durable Fail Closed Exact Head
+'on':
+  push:
+    branches:
+      - ops/media-beta-a4-2-verify
+    paths:
+      - .github/workflows/krc-media-durable-fail-closed-exact-head.yml
+permissions:
+  contents: read
+jobs:
+  verify:
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: 8a66e610b89a7e1398b5e8cbe4ac59334ffee5d2
+      - name: Verify exact feature head
+        run: test "$(git rev-parse HEAD)" = "8a66e610b89a7e1398b5e8cbe4ac59334ffee5d2"
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 24
+      - name: Full cloud validation
+        working-directory: src/cloud
+        run: |
+          npm ci
+          npm run check
+      - name: Durable fail-closed test retained
+        run: |
+          test -f src/cloud/tests/managed_media_durable_fail_closed.test.ts
+          grep -Fq 'managed durable-store initialization outage rejects before job reservation or provider work' src/cloud/tests/managed_media_durable_fail_closed.test.ts
+          grep -Fq 'managed durable quota-ledger outage fails job before AssemblyAI provider start' src/cloud/tests/managed_media_durable_fail_closed.test.ts
