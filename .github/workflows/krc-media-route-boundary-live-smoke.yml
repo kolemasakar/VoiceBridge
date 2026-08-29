@@ -1,0 +1,157 @@
+name: KRC MEDIA Route Boundary Live Smoke
+
+on:
+  push:
+    branches:
+      - agent/krc-media-transcript
+    paths:
+      - .github/workflows/krc-media-route-boundary-live-smoke.yml
+
+permissions:
+  contents: read
+
+concurrency:
+  group: krc-media-route-boundary-live-smoke
+  cancel-in-progress: false
+
+env:
+  RENDER_API_BASE: https://api.render.com/v1
+  SERVICE_ID: srv-da1kic5bedkc73d6fk60
+  SERVICE_NAME: voicebridge-krc-media-beta-kolemasakar
+  REQUIRED_BRANCH: agent/krc-media-transcript
+  BASE_URL: https://voicebridge-krc-media-beta-kolemasakar.onrender.com
+  HARDENED_SHA: ba402ac809ad033545c934f1cc769a227ccc2008
+
+jobs:
+  smoke:
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    env:
+      RENDER_API_KEY: ${{ secrets.RENDER_API_KEY }}
+      KRC_NEON_DATABASE_URL: ${{ secrets.KRC_NEON_DATABASE_URL }}
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Verify isolated target and protected Neon store
+        shell: bash
+        run: |
+          set -euo pipefail
+          test -n "${RENDER_API_KEY:-}"
+          test -n "${KRC_NEON_DATABASE_URL:-}"
+          echo "::add-mask::$RENDER_API_KEY"
+          echo "::add-mask::$KRC_NEON_DATABASE_URL"
+
+          tmp="$(mktemp)"
+          code="$(curl -sS -o "$tmp" -w '%{http_code}' "${RENDER_API_BASE}/services/${SERVICE_ID}" -H 'Accept: application/json' -H "Authorization: Bearer ${RENDER_API_KEY}")"
+          [[ "$code" == "200" ]]
+          [[ "$(jq -r '.name // empty' "$tmp")" == "$SERVICE_NAME" ]]
+          [[ "$(jq -r '.branch // empty' "$tmp")" == "$REQUIRED_BRANCH" ]]
+          rm -f "$tmp"
+
+          tmp="$(mktemp)"
+          code="$(curl -sS -o "$tmp" -w '%{http_code}' "${RENDER_API_BASE}/services/${SERVICE_ID}/env-vars/KRC_MEDIA_DATABASE_URL" -H 'Accept: application/json' -H "Authorization: Bearer ${RENDER_API_KEY}")"
+          [[ "$code" == "200" ]]
+          current_db="$(jq -r '(.envVar.value // .value // empty)' "$tmp")"
+          rm -f "$tmp"
+          test -n "$current_db"
+          echo "::add-mask::$current_db"
+          [[ "$current_db" == "$KRC_NEON_DATABASE_URL" ]]
+
+      - name: Deploy exact audited runtime
+        shell: bash
+        run: |
+          set -euo pipefail
+          payload="$(jq -nc --arg commitId "$HARDENED_SHA" '{commitId:$commitId,clearCache:"do_not_clear"}')"
+          tmp="$(mktemp)"
+          code="$(curl -sS -o "$tmp" -w '%{http_code}' -X POST "${RENDER_API_BASE}/services/${SERVICE_ID}/deploys" -H 'Accept: application/json' -H 'Content-Type: application/json' -H "Authorization: Bearer ${RENDER_API_KEY}" --data "$payload")"
+          [[ "$code" == "201" || "$code" == "202" ]]
+          deploy_id="$(jq -r '(.deploy // .).id // empty' "$tmp")"
+          rm -f "$tmp"
+          test -n "$deploy_id"
+          for i in $(seq 1 150); do
+            tmp="$(mktemp)"
+            code="$(curl -sS -o "$tmp" -w '%{http_code}' "${RENDER_API_BASE}/services/${SERVICE_ID}/deploys/${deploy_id}" -H 'Accept: application/json' -H "Authorization: Bearer ${RENDER_API_KEY}")"
+            [[ "$code" == "200" ]]
+            status="$(jq -r '(.deploy // .).status // "unknown"' "$tmp")"
+            commit="$(jq -r '(.deploy // .).commit.id // (.deploy // .).commitId // "unknown"' "$tmp")"
+            rm -f "$tmp"
+            if [[ "$status" == "live" ]]; then
+              [[ "$commit" == "$HARDENED_SHA" ]]
+              break
+            fi
+            case "$status" in build_failed|update_failed|canceled|deactivated) exit 1 ;; esac
+            sleep 5
+          done
+
+      - name: Load masked Action bearer
+        shell: bash
+        run: |
+          set -euo pipefail
+          tmp="$(mktemp)"
+          code="$(curl -sS -o "$tmp" -w '%{http_code}' "${RENDER_API_BASE}/services/${SERVICE_ID}/env-vars/KRC_MEDIA_ACTION_TOKEN" -H 'Accept: application/json' -H "Authorization: Bearer ${RENDER_API_KEY}")"
+          [[ "$code" == "200" ]]
+          token="$(jq -r '(.envVar.value // .value // empty)' "$tmp")"
+          rm -f "$tmp"
+          test -n "$token"
+          echo "::add-mask::$token"
+          umask 077
+          printf '%s' "$token" > /tmp/krc-media-action-token
+
+      - name: Verify no-spend route boundaries
+        shell: bash
+        run: |
+          set -euo pipefail
+          token="$(cat /tmp/krc-media-action-token)"
+          echo "::add-mask::$token"
+
+          code="$(curl -sS --max-time 60 -o /tmp/capability.json -w '%{http_code}' "${BASE_URL}/api/v1/media/managed" -H 'Accept: application/json' -H "Authorization: Bearer ${token}")"
+          [[ "$code" == "200" ]]
+          jq -e '.mode=="zero_client_managed_beta" and .configured==true and .durable_store=="postgres" and .restart_resilient_jobs==true and .telegram_public_retrieval==true and .telegram_retrieval_provider=="telegram_public_web" and .telegram_retrieval_credits==0 and .local_attachment_transport==true and .local_attachment_retrieval_provider=="openai_attachment" and .local_attachment_max_bytes==33554432 and .automatic_ai_fallback==false and .facebook_ai_fallback==false and .facebook_automatic_paid_retrieval==false' /tmp/capability.json >/dev/null
+
+          telegram='https://t.me/techcrimes/12101'
+          payload="$(jq -nc --arg url "$telegram" '{url:$url,language_hint:"auto"}')"
+          code="$(curl -sS --max-time 60 -o /tmp/telegram-preflight.json -w '%{http_code}' -X POST "${BASE_URL}/api/v1/media/managed/preflight" -H 'Accept: application/json' -H 'Content-Type: application/json' -H "Authorization: Bearer ${token}" --data "$payload")"
+          [[ "$code" == "400" ]]
+          [[ "$(jq -r '.error.code // empty' /tmp/telegram-preflight.json)" == "TELEGRAM_PUBLIC_RETRIEVAL_REQUIRED" ]]
+
+          payload="$(jq -nc --arg url "$telegram" '{url:$url,language_hint:"auto",credit_consent:{provider:"supadata",mode:"native",max_credits:1}}')"
+          code="$(curl -sS --max-time 60 -o /tmp/telegram-start.json -w '%{http_code}' -X POST "${BASE_URL}/api/v1/media/managed/transcriptions" -H 'Accept: application/json' -H 'Content-Type: application/json' -H "Authorization: Bearer ${token}" --data "$payload")"
+          [[ "$code" == "409" ]]
+          [[ "$(jq -r '.error.code // empty' /tmp/telegram-start.json)" == "TELEGRAM_PUBLIC_RETRIEVAL_REQUIRED" ]]
+
+          payload='{"openaiFileIdRefs":["literal-placeholder"],"language_hint":"auto"}'
+          code="$(curl -sS --max-time 60 -o /tmp/attachment-invalid.json -w '%{http_code}' -X POST "${BASE_URL}/api/v1/media/managed/attachment" -H 'Accept: application/json' -H 'Content-Type: application/json' -H "Authorization: Bearer ${token}" --data "$payload")"
+          [[ "$code" == "400" ]]
+          [[ "$(jq -r '.error.code // empty' /tmp/attachment-invalid.json)" == "INVALID_REQUEST" ]]
+
+          payload='{"url":"https://www.instagram.com/example-user/","language_hint":"auto"}'
+          code="$(curl -sS --max-time 60 -o /tmp/instagram-invalid.json -w '%{http_code}' -X POST "${BASE_URL}/api/v1/media/managed/preflight" -H 'Accept: application/json' -H 'Content-Type: application/json' -H "Authorization: Bearer ${token}" --data "$payload")"
+          [[ "$code" == "400" ]]
+          [[ "$(jq -r '.error.code // empty' /tmp/instagram-invalid.json)" == "INVALID_REQUEST" ]]
+
+          echo "Route-boundary smoke passed without invoking Telegram retrieval, attachment transcription, Instagram transcript provider work, or Facebook retrieval."
+
+      - name: Publish sanitized summary
+        shell: bash
+        run: |
+          {
+            echo '# KRC MEDIA route-boundary live smoke'
+            echo
+            echo '- Exact audited runtime deployed: `PASS`'
+            echo '- Active durable store remains Neon PostgreSQL: `PASS`'
+            echo '- Telegram public route capability: `PASS`'
+            echo '- Telegram retrieval credits: `0`'
+            echo '- Generic Telegram Supadata preflight rejected: `PASS`'
+            echo '- Generic Telegram Supadata start rejected: `PASS`'
+            echo '- Malformed attachment placeholder rejected before STT: `PASS`'
+            echo '- Unsupported Instagram profile rejected before provider work: `PASS`'
+            echo '- Provider-consuming work invoked by smoke: `NO`'
+            echo '- Render environment mutation: `NONE`'
+            echo '- Database mutation: `NONE`'
+          } >> "$GITHUB_STEP_SUMMARY"
+
+      - name: Cleanup runner material
+        if: always()
+        shell: bash
+        run: sudo rm -f /tmp/krc-media-action-token /tmp/capability.json /tmp/telegram-preflight.json /tmp/telegram-start.json /tmp/attachment-invalid.json /tmp/instagram-invalid.json >/dev/null 2>&1 || true
