@@ -272,7 +272,7 @@ export function createVoiceBridgeServer(
             stt: {
               provider: sttProvider.name,
               configured: sttProvider.configured,
-              model: sttProvider.model ?? null
+              ...(sttProvider.model ? { model: sttProvider.model } : {})
             },
             translation: {
               provider: translationProvider.name,
