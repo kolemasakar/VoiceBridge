@@ -85,6 +85,8 @@ test("Phase 1 YOUTUBE_MVP request remains backward compatible", async () => {
   const response = await createSession(phase1Request());
   assert.equal(response.status, 201);
   const created = await response.json();
+  assert.equal(created.source_language, "en");
+  assert.equal(created.target_language, "uk");
   assert.equal(created.runtime_mode, "YOUTUBE_MVP");
   assert.equal(created.source, null);
   assert.deepEqual(created.provider_preferences, {
@@ -123,6 +125,46 @@ test("UNIVERSAL_BROWSER_AUDIO stores normalized browser source metadata", async 
   assert.deepEqual(stored.source, {
     kind: "BROWSER_TAB",
     adapter: "chromium_tab"
+  });
+});
+
+test("session language tags are canonicalized through the registry", async () => {
+  const response = await createSession({
+    ...universalRequest(),
+    source_language: "EN",
+    target_language: "UK"
+  });
+  assert.equal(response.status, 201);
+  const created = await response.json();
+  assert.equal(created.source_language, "en");
+  assert.equal(created.target_language, "uk");
+});
+
+test("malformed and unsupported language combinations fail before streaming", async () => {
+  for (const body of [
+    { ...universalRequest(), source_language: "not_a_language" },
+    { ...universalRequest(), source_language: "de" },
+    { ...universalRequest(), target_language: "fr" },
+    { ...universalRequest(), source_language: "en-US" }
+  ]) {
+    const response = await createSession(body);
+    assert.equal(response.status, 400);
+    const error = await response.json();
+    assert.equal(error.error.code, "INVALID_REQUEST");
+  }
+});
+
+test("health exposes sanitized validated language capabilities", async () => {
+  const response = await api("/api/v1/health", {}, false);
+  assert.equal(response.status, 200);
+  const body = await response.json();
+  assert.deepEqual(body.capabilities.languages, {
+    registry_version: "1.0.0",
+    validation_policy: "validated_pairs_only",
+    source_languages: [{ tag: "en", label: "English" }],
+    target_languages: [{ tag: "uk", label: "Ukrainian" }],
+    pairs: [{ source_language: "en", target_language: "uk" }],
+    defaults: { source_language: "en", target_language: "uk" }
   });
 });
 
