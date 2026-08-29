@@ -10,7 +10,7 @@ def replace_once(path: str, old: str, new: str) -> None:
     p.write_text(s.replace(old, new, 1))
 
 
-# Client-assisted ingest can delegate the quota decision to a durable shared ledger.
+# Client-assisted ingest delegates STT quota decisions to the durable shared ledger.
 replace_once(
     "src/cloud/src/media_client_ingest.ts",
     'import { MediaBetaGate, type MediaBetaUsage } from "./media_beta.js";',
@@ -49,9 +49,7 @@ replace_once(
       if (!reservation.allowed) {"""
 )
 
-# Client persistent store gains the same atomic per-day reservation primitive and
-# advisory lock key as the managed KRCM store, so KRCC and KRCM compete against
-# one shared daily STT budget.
+# Client persistent store gains the same atomic durable STT ledger as managed media.
 replace_once(
     "src/cloud/src/media_client_persistence.ts",
     """export interface PersistedMediaClientJob {
@@ -107,19 +105,17 @@ replace_once(
     const seconds = Math.ceil(requestedSeconds);
     await this.ready();
     const output = await this.run(`
-WITH quota_lock AS MATERIALIZED (
-  SELECT pg_advisory_xact_lock(hashtext('krc_media_stt_quota|${dayUtc}'))
-),
-existing AS MATERIALIZED (
+BEGIN;
+SELECT pg_advisory_xact_lock(hashtext('krc_media_stt_quota|${dayUtc}'));
+WITH existing AS MATERIALIZED (
   SELECT charges.day_utc, charges.seconds
-  FROM quota_lock, krc_media_stt_charges charges
+  FROM krc_media_stt_charges charges
   WHERE charges.job_id='${jobId}'
 ),
 usage_before AS MATERIALIZED (
   SELECT COALESCE(SUM(charges.seconds), 0)::bigint AS used_seconds
-  FROM quota_lock
-  LEFT JOIN krc_media_stt_charges charges
-    ON charges.day_utc='${dayUtc}'::date
+  FROM krc_media_stt_charges charges
+  WHERE charges.day_utc='${dayUtc}'::date
 ),
 inserted AS (
   INSERT INTO krc_media_stt_charges (job_id, day_utc, seconds)
@@ -147,6 +143,7 @@ SELECT
     )
   )
 FROM usage_before;
+COMMIT;
 `);
     const line = output
       .split(/\\r?\\n/)
@@ -174,7 +171,7 @@ FROM usage_before;
     if (!this.enabled) return;"""
 )
 
-# Wire the client path to the persistent quota ledger before AssemblyAI starts.
+# Wire legacy KRCC audio ingestion to the durable reservation before AssemblyAI starts.
 replace_once(
     "src/cloud/src/media_client_http.ts",
     """export function createMediaClientHttpHandler(config: AppConfig) {
@@ -240,9 +237,53 @@ replace_once(
   });"""
 )
 
-# Both managed and legacy client stores may initialize on the same process boot.
-# PostgreSQL CREATE TABLE IF NOT EXISTS can still race in separate sessions, so
-# serialize the shared schema DDL with one session advisory lock.
+# Fix the already-hardened KRCM reservation: a lock acquired inside one SQL
+# statement cannot refresh that statement's MVCC snapshot after waiting. Acquire
+# the transaction-scoped advisory lock in a preceding statement inside BEGIN.
+replace_once(
+    "src/cloud/src/managed_media_persistence.ts",
+    """    const output = await this.run(`
+WITH quota_lock AS MATERIALIZED (
+  SELECT pg_advisory_xact_lock(hashtext('krc_media_stt_quota|${dayUtc}'))
+),
+existing AS MATERIALIZED (
+  SELECT charges.day_utc, charges.seconds
+  FROM quota_lock, krc_media_stt_charges charges
+  WHERE charges.job_id='${jobId}'
+),
+usage_before AS MATERIALIZED (
+  SELECT COALESCE(SUM(charges.seconds), 0)::bigint AS used_seconds
+  FROM quota_lock
+  LEFT JOIN krc_media_stt_charges charges
+    ON charges.day_utc='${dayUtc}'::date
+),""",
+    """    const output = await this.run(`
+BEGIN;
+SELECT pg_advisory_xact_lock(hashtext('krc_media_stt_quota|${dayUtc}'));
+WITH existing AS MATERIALIZED (
+  SELECT charges.day_utc, charges.seconds
+  FROM krc_media_stt_charges charges
+  WHERE charges.job_id='${jobId}'
+),
+usage_before AS MATERIALIZED (
+  SELECT COALESCE(SUM(charges.seconds), 0)::bigint AS used_seconds
+  FROM krc_media_stt_charges charges
+  WHERE charges.day_utc='${dayUtc}'::date
+),"""
+)
+replace_once(
+    "src/cloud/src/managed_media_persistence.ts",
+    """FROM usage_before;
+`);
+    const line = output""",
+    """FROM usage_before;
+COMMIT;
+`);
+    const line = output"""
+)
+
+# Both stores can initialize concurrently at process boot. Serialize shared DDL
+# across their independent psql sessions to avoid CREATE TABLE IF NOT EXISTS races.
 for schema_path in (
     "src/cloud/src/managed_media_persistence.ts",
     "src/cloud/src/media_client_persistence.ts",
