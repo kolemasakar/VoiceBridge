@@ -18,7 +18,7 @@ Two defense-in-depth gaps were identified in durable-record continuation validat
 
 Implementation commit:
 
-`8da6011cbd8f1134f125266951eebaef894be31c` — `Harden managed media state continuation boundaries`
+`8da6011cbd8f1134f125266951eebaef894be31c` - `Harden managed media state continuation boundaries`
 
 The implementation now additionally requires:
 
