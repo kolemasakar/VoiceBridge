@@ -147,12 +147,9 @@ function withServerOwnerAccessCode(
   accessCodes: string[] | undefined
 ): unknown {
   if (!value || typeof value !== "object" || Array.isArray(value)) return value;
-  const input = value as Record<string, unknown>;
-  if (typeof input.beta_access_code === "string" && input.beta_access_code) {
-    return value;
-  }
   const ownerCode = accessCodes?.[0];
   if (!ownerCode) return value;
+  const input = value as Record<string, unknown>;
   return { ...input, beta_access_code: ownerCode };
 }
 
