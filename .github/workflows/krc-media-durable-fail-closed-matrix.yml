@@ -1,0 +1,37 @@
+name: KRC MEDIA Durable Fail Closed Matrix
+'on':
+  push:
+    branches:
+      - agent/krc-media-transcript
+    paths:
+      - src/cloud/tests/managed_media_durable_fail_closed.test.ts
+      - .github/workflows/krc-media-durable-fail-closed-matrix.yml
+permissions:
+  contents: write
+jobs:
+  validate:
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 24
+      - name: Full cloud validation
+        working-directory: src/cloud
+        run: |
+          npm ci
+          npm run check
+      - name: Verify no-spend matrix scope
+        run: |
+          test -f src/cloud/tests/managed_media_durable_fail_closed.test.ts
+          grep -Fq 'MANAGED_DURABLE_STORE_UNAVAILABLE' src/cloud/tests/managed_media_durable_fail_closed.test.ts
+          grep -Fq 'MEDIA_CLIENT_DURABLE_QUOTA_UNAVAILABLE' src/cloud/tests/managed_media_durable_fail_closed.test.ts
+      - name: Remove temporary workflow after success
+        run: |
+          git config user.name 'github-actions[bot]'
+          git config user.email '41898282+github-actions[bot]@users.noreply.github.com'
+          git rm .github/workflows/krc-media-durable-fail-closed-matrix.yml
+          git commit -m 'Remove completed durable fail-closed harness'
+          git push origin HEAD:agent/krc-media-transcript
