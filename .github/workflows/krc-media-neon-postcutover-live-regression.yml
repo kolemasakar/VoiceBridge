@@ -1,0 +1,308 @@
+name: KRC MEDIA Neon Post-Cutover Live Regression
+
+on:
+  push:
+    branches:
+      - agent/krc-media-transcript
+    paths:
+      - .github/workflows/krc-media-neon-postcutover-live-regression.yml
+
+permissions:
+  contents: read
+
+concurrency:
+  group: krc-media-neon-postcutover-live-regression
+  cancel-in-progress: false
+
+env:
+  RENDER_API_BASE: https://api.render.com/v1
+  SERVICE_ID: srv-da1kic5bedkc73d6fk60
+  SERVICE_NAME: voicebridge-krc-media-beta-kolemasakar
+  REQUIRED_BRANCH: agent/krc-media-transcript
+  BASE_URL: https://voicebridge-krc-media-beta-kolemasakar.onrender.com
+  POSTGRES_IMAGE: postgres:18
+  FALLBACK_TEST_URL: https://www.youtube.com/watch?v=Bu0O72fbfwg
+
+jobs:
+  live-regression:
+    name: One-credit owner-only Neon durability regression
+    runs-on: ubuntu-latest
+    timeout-minutes: 35
+    env:
+      RENDER_API_KEY: ${{ secrets.RENDER_API_KEY }}
+      KRC_NEON_DATABASE_URL: ${{ secrets.KRC_NEON_DATABASE_URL }}
+    steps:
+      - name: Checkout exact head
+        uses: actions/checkout@v4
+
+      - name: Verify protected Neon runtime boundary
+        shell: bash
+        run: |
+          set -euo pipefail
+          test -n "${RENDER_API_KEY:-}" || { echo "RENDER_API_KEY missing" >&2; exit 1; }
+          test -n "${KRC_NEON_DATABASE_URL:-}" || { echo "KRC_NEON_DATABASE_URL missing" >&2; exit 1; }
+          echo "::add-mask::$RENDER_API_KEY"
+          echo "::add-mask::$KRC_NEON_DATABASE_URL"
+          [[ "$KRC_NEON_DATABASE_URL" == *".neon.tech"* ]]
+          [[ "$KRC_NEON_DATABASE_URL" != *"-pooler."* ]]
+          [[ "$KRC_NEON_DATABASE_URL" == *"sslmode=require"* ]]
+
+          tmp="$(mktemp)"
+          code="$(curl -sS -o "$tmp" -w '%{http_code}' \
+            "${RENDER_API_BASE}/services/${SERVICE_ID}" \
+            -H 'Accept: application/json' \
+            -H "Authorization: Bearer ${RENDER_API_KEY}")"
+          [[ "$code" == "200" ]]
+          [[ "$(jq -r '.name // empty' "$tmp")" == "$SERVICE_NAME" ]]
+          [[ "$(jq -r '.branch // empty' "$tmp")" == "$REQUIRED_BRANCH" ]]
+          rm -f "$tmp"
+          [[ "$GITHUB_REF_NAME" == "$REQUIRED_BRANCH" ]]
+
+          tmp="$(mktemp)"
+          code="$(curl -sS -o "$tmp" -w '%{http_code}' \
+            "${RENDER_API_BASE}/services/${SERVICE_ID}/env-vars/KRC_MEDIA_DATABASE_URL" \
+            -H 'Accept: application/json' \
+            -H "Authorization: Bearer ${RENDER_API_KEY}")"
+          [[ "$code" == "200" ]]
+          current_db="$(jq -r '(.envVar.value // .value // empty)' "$tmp")"
+          rm -f "$tmp"
+          test -n "$current_db"
+          echo "::add-mask::$current_db"
+          [[ "$current_db" == "$KRC_NEON_DATABASE_URL" ]]
+          echo "Neon runtime boundary verified."
+
+      - name: Load masked Action bearer
+        shell: bash
+        run: |
+          set -euo pipefail
+          tmp="$(mktemp)"
+          code="$(curl -sS -o "$tmp" -w '%{http_code}' \
+            "${RENDER_API_BASE}/services/${SERVICE_ID}/env-vars/KRC_MEDIA_ACTION_TOKEN" \
+            -H 'Accept: application/json' \
+            -H "Authorization: Bearer ${RENDER_API_KEY}")"
+          [[ "$code" == "200" ]]
+          action_token="$(jq -r '(.envVar.value // .value // empty)' "$tmp")"
+          rm -f "$tmp"
+          test -n "$action_token"
+          echo "::add-mask::$action_token"
+          umask 077
+          printf '%s' "$action_token" > /tmp/krc-media-action-token
+          echo "Masked Action bearer ready."
+
+      - name: Verify capability and select known native source
+        shell: bash
+        run: |
+          set -euo pipefail
+          action_token="$(cat /tmp/krc-media-action-token)"
+          code="$(curl -sS --max-time 60 -o /tmp/krc-capability.json -w '%{http_code}' \
+            "${BASE_URL}/api/v1/media/managed" \
+            -H 'Accept: application/json' \
+            -H "Authorization: Bearer ${action_token}")"
+          [[ "$code" == "200" ]]
+          jq -e '.mode=="zero_client_managed_beta" and .configured==true and .durable_store=="postgres" and .restart_resilient_jobs==true and .facebook_automatic_paid_retrieval==false and .telegram_retrieval_credits==0 and .local_attachment_retrieval_provider=="openai_attachment"' /tmp/krc-capability.json >/dev/null
+
+          docker pull "$POSTGRES_IMAGE" >/dev/null
+          nonterminal="$(docker run --rm -e KRC_NEON_DATABASE_URL="$KRC_NEON_DATABASE_URL" "$POSTGRES_IMAGE" \
+            psql -X -A -t -v ON_ERROR_STOP=1 --dbname "$KRC_NEON_DATABASE_URL" \
+            -c "SELECT count(*) FROM public.krc_managed_media_jobs WHERE status NOT IN ('COMPLETED','FAILED');")"
+          [[ "$nonterminal" == "0" ]]
+
+          candidate="$(docker run --rm -e KRC_NEON_DATABASE_URL="$KRC_NEON_DATABASE_URL" "$POSTGRES_IMAGE" \
+            psql -X -A -t -F $'\t' -v ON_ERROR_STOP=1 --dbname "$KRC_NEON_DATABASE_URL" \
+            -c "SELECT payload->>'source_url', payload->>'language_hint' FROM public.krc_managed_media_jobs WHERE status='COMPLETED' AND payload->>'provider_mode'='native' AND COALESCE((payload->>'segment_count')::int,0)>0 AND payload->>'source_url' LIKE '%youtube%' ORDER BY updated_at DESC LIMIT 1;")"
+
+          source_url="${FALLBACK_TEST_URL}"
+          language_hint="auto"
+          if [[ -n "$candidate" ]]; then
+            source_url="${candidate%%$'\t'*}"
+            language_hint="${candidate#*$'\t'}"
+            [[ -n "$language_hint" ]] || language_hint="auto"
+          fi
+
+          case "$source_url" in
+            *\?*) source_url="${source_url}&krc_regression=20260829-neon" ;;
+            *) source_url="${source_url}?krc_regression=20260829-neon" ;;
+          esac
+          source_hash="$(printf '%s' "$source_url" | sha256sum | awk '{print $1}')"
+          echo "source_hash=$source_hash" >> "$GITHUB_ENV"
+          echo "language_hint=$language_hint" >> "$GITHUB_ENV"
+          umask 077
+          printf '%s' "$source_url" > /tmp/krc-live-source-url
+          echo "Known public YouTube source selected; URL retained only in ephemeral runner state."
+
+      - name: Native one-credit preflight
+        shell: bash
+        run: |
+          set -euo pipefail
+          action_token="$(cat /tmp/krc-media-action-token)"
+          source_url="$(cat /tmp/krc-live-source-url)"
+          payload="$(jq -nc --arg url "$source_url" --arg lang "$language_hint" '{url:$url,language_hint:$lang}')"
+          code="$(curl -sS --max-time 90 -o /tmp/krc-preflight.json -w '%{http_code}' \
+            -X POST "${BASE_URL}/api/v1/media/managed/preflight" \
+            -H 'Accept: application/json' -H 'Content-Type: application/json' \
+            -H "Authorization: Bearer ${action_token}" \
+            --data "$payload")"
+          [[ "$code" == "200" ]]
+          jq -e '.provider=="supadata" and .mode=="native" and .estimated_credits==1 and .can_continue==true and .consent_required==true' /tmp/krc-preflight.json >/dev/null
+          available="$(jq -r '.credits_available' /tmp/krc-preflight.json)"
+          echo "credits_available_before=$available" >> "$GITHUB_ENV"
+          echo "Native preflight passed for exactly one approved credit ceiling."
+
+      - name: Start exactly one native media job
+        shell: bash
+        run: |
+          set -euo pipefail
+          action_token="$(cat /tmp/krc-media-action-token)"
+          source_url="$(cat /tmp/krc-live-source-url)"
+          payload="$(jq -nc --arg url "$source_url" --arg lang "$language_hint" '{url:$url,language_hint:$lang,credit_consent:{provider:"supadata",mode:"native",max_credits:1}}')"
+          code="$(curl -sS --max-time 180 -o /tmp/krc-start.json -w '%{http_code}' \
+            -X POST "${BASE_URL}/api/v1/media/managed/transcriptions" \
+            -H 'Accept: application/json' -H 'Content-Type: application/json' \
+            -H "Authorization: Bearer ${action_token}" \
+            --data "$payload")"
+          [[ "$code" == "200" ]]
+          job_id="$(jq -r '.job_id // empty' /tmp/krc-start.json)"
+          test -n "$job_id"
+          [[ "$job_id" =~ ^KRCM_[A-Za-z0-9-]+$ ]]
+          status="$(jq -r '.status // empty' /tmp/krc-start.json)"
+          if [[ "$status" != "COMPLETED" ]]; then
+            echo "Native regression did not complete; status=$status error=$(jq -r '.error.code // "none"' /tmp/krc-start.json)" >&2
+            exit 1
+          fi
+          jq -e '.provider=="supadata" and .provider_mode=="native" and .reused==false and .credit_charge_uncertain==false and .segment_count>0 and .transcript_characters>0 and (.credits_charged>=0 and .credits_charged<=1)' /tmp/krc-start.json >/dev/null
+          charged="$(jq -r '.credits_charged' /tmp/krc-start.json)"
+          segments="$(jq -r '.segment_count' /tmp/krc-start.json)"
+          chars="$(jq -r '.transcript_characters' /tmp/krc-start.json)"
+          echo "job_id=$job_id" >> "$GITHUB_ENV"
+          echo "credits_charged=$charged" >> "$GITHUB_ENV"
+          echo "segment_count=$segments" >> "$GITHUB_ENV"
+          echo "transcript_characters=$chars" >> "$GITHUB_ENV"
+          echo "Exactly one native start completed; transcript content was not printed."
+
+      - name: Verify Neon write and API read
+        shell: bash
+        run: |
+          set -euo pipefail
+          action_token="$(cat /tmp/krc-media-action-token)"
+          code="$(curl -sS --max-time 60 -o /tmp/krc-job-before-restart.json -w '%{http_code}' \
+            "${BASE_URL}/api/v1/media/managed/transcriptions/${job_id}" \
+            -H 'Accept: application/json' -H "Authorization: Bearer ${action_token}")"
+          [[ "$code" == "200" ]]
+          jq -e --arg id "$job_id" '.job_id==$id and .status=="COMPLETED" and .provider_mode=="native" and .segment_count>0' /tmp/krc-job-before-restart.json >/dev/null
+
+          code="$(curl -sS --max-time 60 -o /tmp/krc-segments-before-restart.json -w '%{http_code}' \
+            "${BASE_URL}/api/v1/media/managed/transcriptions/${job_id}/segments?cursor=0&limit=1" \
+            -H 'Accept: application/json' -H "Authorization: Bearer ${action_token}")"
+          [[ "$code" == "200" ]]
+          jq -e --arg id "$job_id" '.job_id==$id and (.segments|length)>0' /tmp/krc-segments-before-restart.json >/dev/null
+
+          dbrow="$(docker run --rm -e KRC_NEON_DATABASE_URL="$KRC_NEON_DATABASE_URL" "$POSTGRES_IMAGE" \
+            psql -X -A -t -F '|' -v ON_ERROR_STOP=1 --dbname "$KRC_NEON_DATABASE_URL" \
+            -v job_id="$job_id" \
+            -c "SELECT count(*), min(status), min(payload->>'provider_mode'), min(payload->>'segment_count'), min(extract(epoch from updated_at)::bigint) FROM public.krc_managed_media_jobs WHERE job_id=:'job_id';")"
+          IFS='|' read -r row_count row_status row_mode row_segments row_updated <<< "$dbrow"
+          [[ "$row_count" == "1" && "$row_status" == "COMPLETED" && "$row_mode" == "native" ]]
+          [[ "$row_segments" -gt 0 ]]
+          echo "db_updated_epoch=$row_updated" >> "$GITHUB_ENV"
+          echo "Neon durable write and API read passed."
+
+      - name: Redeploy exact head for restart test
+        shell: bash
+        run: |
+          set -euo pipefail
+          payload="$(jq -nc --arg commitId "$GITHUB_SHA" '{commitId:$commitId,clearCache:"do_not_clear"}')"
+          tmp="$(mktemp)"
+          code="$(curl -sS -o "$tmp" -w '%{http_code}' -X POST \
+            "${RENDER_API_BASE}/services/${SERVICE_ID}/deploys" \
+            -H 'Accept: application/json' -H 'Content-Type: application/json' \
+            -H "Authorization: Bearer ${RENDER_API_KEY}" --data "$payload")"
+          [[ "$code" == "201" || "$code" == "202" ]]
+          deploy_id="$(jq -r '(.deploy // .).id // empty' "$tmp")"
+          rm -f "$tmp"
+          test -n "$deploy_id"
+          for i in $(seq 1 120); do
+            tmp="$(mktemp)"
+            code="$(curl -sS -o "$tmp" -w '%{http_code}' \
+              "${RENDER_API_BASE}/services/${SERVICE_ID}/deploys/${deploy_id}" \
+              -H 'Accept: application/json' -H "Authorization: Bearer ${RENDER_API_KEY}")"
+            [[ "$code" == "200" ]]
+            status="$(jq -r '(.deploy // .).status // "unknown"' "$tmp")"
+            commit="$(jq -r '(.deploy // .).commit.id // (.deploy // .).commitId // "unknown"' "$tmp")"
+            rm -f "$tmp"
+            if [[ "$status" == "live" ]]; then
+              [[ "$commit" == "$GITHUB_SHA" ]]
+              echo "Exact-head restart is live."
+              exit 0
+            fi
+            case "$status" in build_failed|update_failed|canceled|deactivated) exit 1 ;; esac
+            sleep 5
+          done
+          echo "Timed out waiting for restart deploy." >&2
+          exit 1
+
+      - name: Verify post-restart durability and idempotency
+        shell: bash
+        run: |
+          set -euo pipefail
+          action_token="$(cat /tmp/krc-media-action-token)"
+          code="$(curl -sS --max-time 60 -o /tmp/krc-job-after-restart.json -w '%{http_code}' \
+            "${BASE_URL}/api/v1/media/managed/transcriptions/${job_id}" \
+            -H 'Accept: application/json' -H "Authorization: Bearer ${action_token}")"
+          [[ "$code" == "200" ]]
+          jq -e --arg id "$job_id" '.job_id==$id and .status=="COMPLETED" and .segment_count>0' /tmp/krc-job-after-restart.json >/dev/null
+
+          code="$(curl -sS --max-time 60 -o /tmp/krc-segments-after-restart.json -w '%{http_code}' \
+            "${BASE_URL}/api/v1/media/managed/transcriptions/${job_id}/segments?cursor=0&limit=1" \
+            -H 'Accept: application/json' -H "Authorization: Bearer ${action_token}")"
+          [[ "$code" == "200" ]]
+          jq -e --arg id "$job_id" '.job_id==$id and (.segments|length)>0' /tmp/krc-segments-after-restart.json >/dev/null
+
+          source_url="$(cat /tmp/krc-live-source-url)"
+          payload="$(jq -nc --arg url "$source_url" --arg lang "$language_hint" '{url:$url,language_hint:$lang,credit_consent:{provider:"supadata",mode:"native",max_credits:1}}')"
+          code="$(curl -sS --max-time 90 -o /tmp/krc-replay.json -w '%{http_code}' \
+            -X POST "${BASE_URL}/api/v1/media/managed/transcriptions" \
+            -H 'Accept: application/json' -H 'Content-Type: application/json' \
+            -H "Authorization: Bearer ${action_token}" --data "$payload")"
+          [[ "$code" == "200" ]]
+          jq -e --arg id "$job_id" --argjson charged "$credits_charged" '.job_id==$id and .status=="COMPLETED" and .reused==true and .credits_charged==$charged' /tmp/krc-replay.json >/dev/null
+
+          dbrow="$(docker run --rm -e KRC_NEON_DATABASE_URL="$KRC_NEON_DATABASE_URL" "$POSTGRES_IMAGE" \
+            psql -X -A -t -F '|' -v ON_ERROR_STOP=1 --dbname "$KRC_NEON_DATABASE_URL" \
+            -v job_id="$job_id" \
+            -c "SELECT count(*), min(status), min(extract(epoch from updated_at)::bigint) FROM public.krc_managed_media_jobs WHERE job_id=:'job_id';")"
+          IFS='|' read -r row_count row_status row_updated <<< "$dbrow"
+          [[ "$row_count" == "1" && "$row_status" == "COMPLETED" ]]
+          [[ "$row_updated" == "$db_updated_epoch" ]]
+          echo "Post-restart read and idempotent replay passed without a second provider start."
+
+      - name: Publish sanitized regression summary
+        shell: bash
+        run: |
+          {
+            echo '# KRC MEDIA Neon post-cutover live regression'
+            echo
+            echo '- Release state: `RELEASE_HOLD_OWNER_TESTING`'
+            echo '- Active durable store: `Neon PostgreSQL 18`'
+            echo '- Test source SHA256: `'$source_hash'`'
+            echo '- Provider mode: `supadata/native`'
+            echo '- Approved credit ceiling: `1`'
+            echo '- Provider credits charged by created job: `'$credits_charged'`'
+            echo '- Job status: `COMPLETED`'
+            echo '- Segment count: `'$segment_count'`'
+            echo '- Transcript characters: `'$transcript_characters'`'
+            echo '- Neon durable write: `PASS`'
+            echo '- API job/segments read before restart: `PASS`'
+            echo '- Exact-head restart: `PASS`'
+            echo '- API job/segments read after restart: `PASS`'
+            echo '- Idempotent replay returned same job: `PASS`'
+            echo '- Duplicate provider start: `NOT OBSERVED`'
+            echo '- Paid Facebook fallback: `NOT USED`'
+            echo '- ScrapeCreators: `NOT USED`'
+            echo '- Original Render PostgreSQL: `RETAINED`'
+          } >> "$GITHUB_STEP_SUMMARY"
+
+      - name: Remove temporary runner material
+        if: always()
+        shell: bash
+        run: |
+          sudo rm -f /tmp/krc-* >/dev/null 2>&1 || true
