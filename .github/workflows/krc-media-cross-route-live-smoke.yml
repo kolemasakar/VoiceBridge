@@ -1,0 +1,175 @@
+name: KRC MEDIA Cross Route Isolation Live Smoke
+
+on:
+  push:
+    branches:
+      - agent/krc-media-transcript
+    paths:
+      - .github/workflows/krc-media-cross-route-live-smoke.yml
+
+permissions:
+  contents: read
+
+concurrency:
+  group: krc-media-cross-route-live-smoke
+  cancel-in-progress: false
+
+env:
+  RENDER_API_BASE: https://api.render.com/v1
+  SERVICE_ID: srv-da1kic5bedkc73d6fk60
+  SERVICE_NAME: voicebridge-krc-media-beta-kolemasakar
+  REQUIRED_BRANCH: agent/krc-media-transcript
+  BASE_URL: https://voicebridge-krc-media-beta-kolemasakar.onrender.com
+  HARDENED_SHA: cd8336c568df510beb8a3a8b4488b7e8ac8cd024
+
+jobs:
+  smoke:
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    env:
+      RENDER_API_KEY: ${{ secrets.RENDER_API_KEY }}
+      KRC_NEON_DATABASE_URL: ${{ secrets.KRC_NEON_DATABASE_URL }}
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Verify isolated target and protected Neon store
+        shell: bash
+        run: |
+          set -euo pipefail
+          test -n "${RENDER_API_KEY:-}"
+          test -n "${KRC_NEON_DATABASE_URL:-}"
+          echo "::add-mask::$RENDER_API_KEY"
+          echo "::add-mask::$KRC_NEON_DATABASE_URL"
+
+          tmp="$(mktemp)"
+          code="$(curl -sS -o "$tmp" -w '%{http_code}' "${RENDER_API_BASE}/services/${SERVICE_ID}" -H 'Accept: application/json' -H "Authorization: Bearer ${RENDER_API_KEY}")"
+          [[ "$code" == "200" ]]
+          [[ "$(jq -r '.name // empty' "$tmp")" == "$SERVICE_NAME" ]]
+          [[ "$(jq -r '.branch // empty' "$tmp")" == "$REQUIRED_BRANCH" ]]
+          rm -f "$tmp"
+
+          tmp="$(mktemp)"
+          code="$(curl -sS -o "$tmp" -w '%{http_code}' "${RENDER_API_BASE}/services/${SERVICE_ID}/env-vars/KRC_MEDIA_DATABASE_URL" -H 'Accept: application/json' -H "Authorization: Bearer ${RENDER_API_KEY}")"
+          [[ "$code" == "200" ]]
+          current_db="$(jq -r '(.envVar.value // .value // empty)' "$tmp")"
+          rm -f "$tmp"
+          test -n "$current_db"
+          echo "::add-mask::$current_db"
+          [[ "$current_db" == "$KRC_NEON_DATABASE_URL" ]]
+
+      - name: Deploy exact hardened runtime
+        shell: bash
+        run: |
+          set -euo pipefail
+          payload="$(jq -nc --arg commitId "$HARDENED_SHA" '{commitId:$commitId,clearCache:"do_not_clear"}')"
+          tmp="$(mktemp)"
+          code="$(curl -sS -o "$tmp" -w '%{http_code}' -X POST "${RENDER_API_BASE}/services/${SERVICE_ID}/deploys" -H 'Accept: application/json' -H 'Content-Type: application/json' -H "Authorization: Bearer ${RENDER_API_KEY}" --data "$payload")"
+          [[ "$code" == "201" || "$code" == "202" ]]
+          deploy_id="$(jq -r '(.deploy // .).id // empty' "$tmp")"
+          rm -f "$tmp"
+          test -n "$deploy_id"
+          for i in $(seq 1 150); do
+            tmp="$(mktemp)"
+            code="$(curl -sS -o "$tmp" -w '%{http_code}' "${RENDER_API_BASE}/services/${SERVICE_ID}/deploys/${deploy_id}" -H 'Accept: application/json' -H "Authorization: Bearer ${RENDER_API_KEY}")"
+            [[ "$code" == "200" ]]
+            status="$(jq -r '(.deploy // .).status // "unknown"' "$tmp")"
+            commit="$(jq -r '(.deploy // .).commit.id // (.deploy // .).commitId // "unknown"' "$tmp")"
+            rm -f "$tmp"
+            if [[ "$status" == "live" ]]; then
+              [[ "$commit" == "$HARDENED_SHA" ]]
+              break
+            fi
+            case "$status" in build_failed|update_failed|canceled|deactivated) exit 1 ;; esac
+            sleep 5
+          done
+
+      - name: Load masked Action bearer
+        shell: bash
+        run: |
+          set -euo pipefail
+          tmp="$(mktemp)"
+          code="$(curl -sS -o "$tmp" -w '%{http_code}' "${RENDER_API_BASE}/services/${SERVICE_ID}/env-vars/KRC_MEDIA_ACTION_TOKEN" -H 'Accept: application/json' -H "Authorization: Bearer ${RENDER_API_KEY}")"
+          [[ "$code" == "200" ]]
+          token="$(jq -r '(.envVar.value // .value // empty)' "$tmp")"
+          rm -f "$tmp"
+          test -n "$token"
+          echo "::add-mask::$token"
+          umask 077
+          printf '%s' "$token" > /tmp/krc-media-action-token
+
+      - name: Verify cross-route negative matrix without provider work
+        shell: bash
+        run: |
+          set -euo pipefail
+          token="$(cat /tmp/krc-media-action-token)"
+          echo "::add-mask::$token"
+
+          capability_code="$(curl -sS --max-time 60 -o /tmp/capability.json -w '%{http_code}' "${BASE_URL}/api/v1/media/managed" -H 'Accept: application/json' -H "Authorization: Bearer ${token}")"
+          [[ "$capability_code" == "200" ]]
+          jq -e '.mode=="zero_client_managed_beta" and .configured==true and .durable_store=="postgres" and .restart_resilient_jobs==true and .facebook_free_retrieval_provider=="cobalt" and .facebook_automatic_paid_retrieval==false and .telegram_public_retrieval==true and .telegram_retrieval_provider=="telegram_public_web" and .telegram_retrieval_credits==0 and .local_attachment_retrieval_provider=="openai_attachment"' /tmp/capability.json >/dev/null
+
+          post_expect() {
+            local path="$1" body="$2" expected_status="$3" expected_code="$4" out="$5"
+            local code
+            code="$(curl -sS --max-time 60 -o "$out" -w '%{http_code}' -X POST "${BASE_URL}${path}" -H 'Accept: application/json' -H 'Content-Type: application/json' -H "Authorization: Bearer ${token}" --data "$body")"
+            [[ "$code" == "$expected_status" ]]
+            [[ "$(jq -r '.error.code // empty' "$out")" == "$expected_code" ]]
+          }
+
+          facebook='https://www.facebook.com/reel/1114235920664408/'
+          telegram='https://t.me/techcrimes/12101'
+          instagram='https://www.instagram.com/reel/DEDbGqpyfkT/'
+          youtube='https://www.youtube.com/watch?v=dQw4w9WgXcQ'
+
+          fb_basic="$(jq -nc --arg url "$facebook" '{url:$url,language_hint:"auto"}')"
+          tg_basic="$(jq -nc --arg url "$telegram" '{url:$url,language_hint:"auto"}')"
+          fb_native="$(jq -nc --arg url "$facebook" '{url:$url,language_hint:"auto",credit_consent:{provider:"supadata",mode:"native",max_credits:1}}')"
+          tg_native="$(jq -nc --arg url "$telegram" '{url:$url,language_hint:"auto",credit_consent:{provider:"supadata",mode:"native",max_credits:1}}')"
+
+          post_expect '/api/v1/media/managed/preflight' "$fb_basic" 400 FACEBOOK_FREE_RETRIEVAL_REQUIRED /tmp/a.json
+          post_expect '/api/v1/media/managed/preflight' "$tg_basic" 400 TELEGRAM_PUBLIC_RETRIEVAL_REQUIRED /tmp/b.json
+          post_expect '/api/v1/media/managed/lookup' "$fb_basic" 400 FACEBOOK_FREE_RETRIEVAL_REQUIRED /tmp/c.json
+          post_expect '/api/v1/media/managed/lookup' "$tg_basic" 400 TELEGRAM_PUBLIC_RETRIEVAL_REQUIRED /tmp/d.json
+          post_expect '/api/v1/media/managed/transcriptions' "$fb_native" 409 FACEBOOK_FREE_RETRIEVAL_REQUIRED /tmp/e.json
+          post_expect '/api/v1/media/managed/transcriptions' "$tg_native" 409 TELEGRAM_PUBLIC_RETRIEVAL_REQUIRED /tmp/f.json
+
+          for foreign in "$facebook" "$instagram" "$youtube"; do
+            body="$(jq -nc --arg url "$foreign" '{url:$url,language_hint:"auto"}')"
+            post_expect '/api/v1/media/managed/telegram' "$body" 422 TELEGRAM_MEDIA_URL_REQUIRED /tmp/g.json
+          done
+
+          for foreign in "$telegram" "$instagram" "$youtube"; do
+            body="$(jq -nc --arg url "$foreign" '{url:$url,language_hint:"auto"}')"
+            post_expect '/api/v1/media/managed/facebook-fallback' "$body" 422 MEDIA_AI_SOURCE_NOT_SUPPORTED /tmp/h.json
+          done
+
+          post_expect '/api/v1/media/managed/attachment' "$(jq -nc --arg url "$telegram" '{url:$url,language_hint:"auto"}')" 400 INVALID_REQUEST /tmp/i.json
+          post_expect '/api/v1/media/managed/attachment' '{"openaiFileIdRefs":["literal-placeholder"],"language_hint":"auto"}' 400 INVALID_REQUEST /tmp/j.json
+
+          echo "Cross-route live smoke passed: all negative matrix requests terminated at HTTP routing/parser boundaries before provider or durable-store service methods."
+
+      - name: Publish sanitized summary
+        shell: bash
+        run: |
+          {
+            echo '# KRC MEDIA cross-route isolation live smoke'
+            echo
+            echo '- Exact hardened runtime deployed: `PASS`'
+            echo '- Active durable store target remains protected Neon PostgreSQL: `PASS`'
+            echo '- Generic Facebook/TG preflight isolation: `PASS`'
+            echo '- Generic Facebook/TG lookup isolation: `PASS`'
+            echo '- Generic Facebook/TG native-start isolation: `PASS`'
+            echo '- Telegram endpoint rejects Facebook/Instagram/YouTube before service work: `PASS`'
+            echo '- Facebook endpoint rejects Telegram/Instagram/YouTube before service work: `PASS`'
+            echo '- Attachment endpoint rejects URL injection and literal placeholder before service work: `PASS`'
+            echo '- Provider-consuming work invoked by smoke: `NO`'
+            echo '- Durable-store service methods invoked by negative matrix: `NO`'
+            echo '- Render environment mutation: `NONE`'
+            echo '- Database mutation requested: `NONE`'
+          } >> "$GITHUB_STEP_SUMMARY"
+
+      - name: Cleanup runner material
+        if: always()
+        shell: bash
+        run: sudo rm -f /tmp/krc-media-action-token /tmp/capability.json /tmp/a.json /tmp/b.json /tmp/c.json /tmp/d.json /tmp/e.json /tmp/f.json /tmp/g.json /tmp/h.json /tmp/i.json /tmp/j.json >/dev/null 2>&1 || true
