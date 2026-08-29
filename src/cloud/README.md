@@ -4,7 +4,7 @@ Version:
 
 `0.6.0`
 
-Pipeline:
+Validated default pipeline:
 
 ```text
 AssemblyAI English STT
@@ -23,9 +23,10 @@ AZURE_TRANSLATOR_KEY
 GEMINI_API_KEY
 ```
 
-AssemblyAI model configuration:
+STT provider selection defaults to the validated AssemblyAI rollback baseline:
 
 ```text
+STT_PROVIDER=assemblyai
 ASSEMBLYAI_SPEECH_MODEL=universal-streaming-english
 ```
 
@@ -46,7 +47,49 @@ The conservative preset gives the streaming model more context before it closes
 a final English segment. It may increase the delay before some final segments,
 but it does not select a paid model or add a paid feature.
 
-Provider selection:
+## Gemini 3.5 Transcribe Candidate
+
+The migration branch contains an opt-in Gemini Live STT candidate behind the
+same `SttProvider` contract. It is not the default provider and must not replace
+AssemblyAI until controlled A/B validation and explicit acceptance are complete.
+
+Candidate selection:
+
+```text
+STT_PROVIDER=gemini
+GEMINI_STT_MODEL=gemini-3.5-transcribe-live
+```
+
+The candidate uses the existing cloud-side `GEMINI_API_KEY`. No provider key is
+sent to the browser or stored in the repository.
+
+The validated VoiceBridge browser input remains PCM16 mono at 48 kHz. The Gemini
+adapter resamples this stream in the cloud to PCM16 mono at 16 kHz and sends
+100 ms provider chunks. The browser transport and stable VoiceBridge transcript
+event contract are unchanged.
+
+Candidate operational constraints verified from official Google documentation
+on 2026-08-29:
+
+- Gemini 3.5 Transcribe Live is a WebSocket real-time transcription model;
+- the Live transcription session limit is 10 minutes;
+- Free Tier input and output are listed as free for this model;
+- Free Tier content may be used to improve Google products;
+- exact project rate limits must be checked in Google AI Studio;
+- VoiceBridge must not enable paid usage or automatic paid fallback for this
+  candidate.
+
+Official references:
+
+- https://ai.google.dev/gemini-api/docs/live-guide
+- https://ai.google.dev/gemini-api/docs/live-transcription
+- https://ai.google.dev/gemini-api/docs/models/gemini-3.5-transcribe
+- https://ai.google.dev/gemini-api/docs/pricing
+- https://ai.google.dev/gemini-api/docs/billing
+- https://ai.google.dev/gemini-api/docs/rate-limits
+- https://ai.google.dev/gemini-api/terms
+
+Provider selection for downstream services remains unchanged:
 
 ```text
 TRANSLATION_PROVIDER=azure
@@ -63,7 +106,7 @@ AZURE_SPEECH_REGION=eastus
 AZURE_TTS_VOICE=uk-UA-OstapNeural
 ```
 
-Gemini fallback configuration:
+Gemini translation fallback configuration:
 
 ```text
 GEMINI_TRANSLATION_MODEL=gemini-3.1-flash-lite
@@ -74,14 +117,13 @@ in the browser extension or repository.
 
 ## Runtime Behavior
 
-- AssemblyAI receives an explicit approved STT model on every connection;
-- AssemblyAI receives explicit conservative turn-detection parameters;
-- the selected STT provider and model are recorded in the structured
-  `service_started` log event;
+- AssemblyAI remains the default STT provider and rollback baseline;
+- Gemini STT is selected only by explicit `STT_PROVIDER=gemini` configuration;
+- selected STT provider and model are reported in service metadata;
 - final English segments are translated in order;
 - Azure Translator is attempted first;
-- Gemini is used when Azure is unavailable or fails;
-- fallback results report provider `gemini-fallback`;
+- Gemini is used when Azure translation is unavailable or fails;
+- translation fallback results report provider `gemini-fallback`;
 - final Ukrainian translations are synthesized by Azure Speech;
 - translation and TTS queues drain during Stop;
 - provider failures are sanitized and isolated;
