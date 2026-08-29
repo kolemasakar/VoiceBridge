@@ -1,6 +1,6 @@
 # VoiceBridge Phase 2 M5 Configurable Language UI
 
-Status: IMPLEMENTED - AUTOMATED VALIDATION PENDING - LIVE ACCEPTANCE PENDING
+Status: IMPLEMENTED - AUTOMATED VALIDATION PASSED - LIVE ACCEPTANCE PENDING
 
 Date: 2026-08-29
 
@@ -75,6 +75,8 @@ If cloud capability metadata cannot be loaded:
 - no local language fallback list is used;
 - a clear capability error is shown.
 
+Language readiness is coordinated with the current capture state so a registry refresh cannot re-enable Start during ACTIVE, PAUSED, STOPPING, or DRAINING states.
+
 Before every cloud session starts, the service worker fetches current language capabilities and revalidates the saved selection.
 
 A stale saved pair cannot silently start a session. It is rejected unless it is still present in the cloud validated pair set.
@@ -130,6 +132,7 @@ P2-M5 adds or updates coverage for:
 - stale UI selection normalization to the cloud default;
 - no local English/Ukrainian language catalog in the language UI module;
 - capture blocking until capabilities load;
+- coordination of language readiness with active/Stop capture states;
 - `GET_LANGUAGE_CAPABILITIES` service-worker contract;
 - session language values coming from validated selection rather than hard-coded browser values;
 - stale saved service-worker selection rejection;
@@ -139,7 +142,39 @@ P2-M5 adds or updates coverage for:
 
 Existing source adapter, playback, Stop, provider, and cloud regression suites remain required.
 
-## 10. Explicitly Unchanged
+## 10. Automated Validation Evidence
+
+Pull request:
+
+`#43 - Implement Phase 2 M5 configurable language UI`
+
+Validated implementation head before this evidence-only documentation commit:
+
+`2d307ff98b3eba79ad2b0071d9b02cb2df0f95bd`
+
+Validate run:
+
+`33273356329 - SUCCESS`
+
+Jobs:
+
+- `browser-extension` - SUCCESS;
+- `repository-docs` - SUCCESS;
+- `cloud` - SUCCESS.
+
+Browser evidence:
+
+- JavaScript syntax validation passed;
+- browser contract suite: `32 passed / 0 failed`;
+- manifest validation passed;
+- extension `0.8.0` packaged successfully;
+- `language_ui.js` is included in the packaged extension;
+- PR-run artifact ID: `9720752430`;
+- PR-run artifact upload digest: `sha256:4fe4a188e3a1da4a23a7f6b909084bfcba160e53b7e61aa21bbfe879364e1917`.
+
+This evidence commit changes the PR head. The final PR head MUST pass Validate again before merge.
+
+## 11. Explicitly Unchanged
 
 P2-M5 does NOT:
 
@@ -154,7 +189,7 @@ P2-M5 does NOT:
 - add automatic paid fallback;
 - modify KRC Media.
 
-## 11. Automated Acceptance Gate
+## 12. Automated Acceptance Gate
 
 Before merge:
 
@@ -170,7 +205,7 @@ After merge:
 
 - post-merge `main` Validate must pass.
 
-## 12. Controlled Live Acceptance Gate
+## 13. Controlled Live Acceptance Gate
 
 P2-M5 MUST NOT be marked complete from automated CI alone because the user-visible popup and live session-start path changed.
 
@@ -189,7 +224,7 @@ Use the exact post-merge `VoiceBridge_Extension_0.8.0` artifact and verify:
 
 Any functional failure keeps P2-M5 in `LIVE_ACCEPTANCE_PENDING` and blocks P2-M6.
 
-## 13. Next Gate
+## 14. Next Gate
 
 Only after controlled live acceptance passes may P2-M5 become COMPLETE and P2-M6 begin:
 
