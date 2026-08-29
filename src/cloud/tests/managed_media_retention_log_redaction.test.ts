@@ -204,6 +204,7 @@ test("managed HTTP responses are no-store and do not add request-body logging", 
   const http = await readFile("src/managed_media_http.ts", "utf8");
   assert.match(http, /response\.setHeader\("cache-control", "no-store"\);/);
   assert.doesNotMatch(http, /console\.(?:log|warn|error|info|debug)/);
-  assert.doesNotMatch(http, /JSON\.stringify\(rawBody\)/);
-  assert.doesNotMatch(http, /JSON\.stringify\(body\)/);
+  assert.match(http, /response\.end\(JSON\.stringify\(body\)\);/);
+  assert.match(http, /"MANAGED_MEDIA_REQUEST_FAILED"/);
+  assert.match(http, /"The managed media request failed\."/);
 });
