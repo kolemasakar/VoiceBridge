@@ -377,6 +377,22 @@ export function createManagedMediaHttpHandler(
             false
           );
         }
+        if (managedMediaPlatform(input.url) === "facebook") {
+          throw new MediaTranscriptError(
+            "FACEBOOK_FREE_RETRIEVAL_REQUIRED",
+            "Active Facebook intake uses the free Cobalt route; generic Supadata lookup is disabled.",
+            400,
+            false
+          );
+        }
+        if (managedMediaPlatform(input.url) === "telegram") {
+          throw new MediaTranscriptError(
+            "TELEGRAM_PUBLIC_RETRIEVAL_REQUIRED",
+            "Active Telegram intake uses the public Telegram retrieval route; generic Supadata lookup is disabled.",
+            400,
+            false
+          );
+        }
         const job = await service.lookup(input);
         if (!job) {
           throw new MediaTranscriptError(
@@ -433,6 +449,14 @@ export function createManagedMediaHttpHandler(
             false
           );
         }
+        if (managedMediaPlatform(input.url) !== "telegram") {
+          throw new MediaTranscriptError(
+            "TELEGRAM_MEDIA_URL_REQUIRED",
+            "The managed Telegram path accepts only public Telegram post URLs.",
+            422,
+            false
+          );
+        }
         const job = await service.startTelegram(input);
         sendJson(
           response,
@@ -453,6 +477,14 @@ if (method === "POST" && path === FACEBOOK_FALLBACK) {
       "INVALID_REQUEST",
       "The managed Facebook fallback request is not valid.",
       400,
+      false
+    );
+  }
+  if (managedMediaPlatform(input.url) !== "facebook") {
+    throw new MediaTranscriptError(
+      "MEDIA_AI_SOURCE_NOT_SUPPORTED",
+      "The managed Facebook fallback accepts only public Facebook media.",
+      422,
       false
     );
   }
