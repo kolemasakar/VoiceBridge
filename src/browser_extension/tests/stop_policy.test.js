@@ -28,7 +28,8 @@ function createContext() {
       ttsBuffered: 3,
       ttsRetryInMs: 2000,
       playbackStatus: "PLAYING",
-      playbackQueuedMs: 45000
+      playbackQueuedMs: 45000,
+      playbackPlayedCount: 0
     },
     streamCloseExpected: false,
     streamSocket: {
@@ -44,6 +45,10 @@ function createContext() {
     playbackDuckingActive: false,
     applyOriginalGain() {},
     cancelPlayback() {},
+    requestMetricsPublish() {},
+    streamSnapshot() {
+      return { playback_played_count: context.streamState.playbackPlayedCount };
+    },
     startCapture: async () => undefined,
     stopCapture: () => new Promise((resolve) => {
       resolveStop = resolve;
@@ -117,6 +122,52 @@ test("stop policy keeps non-user shutdown behavior unchanged", async () => {
     data: { status: "CLOSED" }
   });
   assert.equal(runtime.closed.length, 0);
+
+  runtime.resolveStop();
+  await stop;
+});
+
+test("played segments advance when a scheduled TTS segment finishes playback", () => {
+  const runtime = createContext();
+  runtime.context.audioContext = { currentTime: 0 };
+
+  runtime.context.handleStreamEvent({
+    event_type: "TTS_AUDIO_START",
+    data: { segment_id: "segment-1", source_segment_count: 2 }
+  });
+  runtime.context.schedulePcmChunk(new Uint8Array([0, 0]), 24000);
+  runtime.context.playbackEndTime = 1;
+  runtime.context.handleStreamEvent({
+    event_type: "TTS_AUDIO_END",
+    data: { segment_id: "segment-1" }
+  });
+
+  assert.equal(runtime.context.streamState.playbackPlayedCount, 0);
+
+  runtime.context.audioContext.currentTime = 1.1;
+  runtime.context.streamSnapshot();
+  assert.equal(runtime.context.streamState.playbackPlayedCount, 2);
+});
+
+test("discarded post-stop TTS is not counted as played", async () => {
+  const runtime = createContext();
+  runtime.context.audioContext = { currentTime: 2 };
+  const stop = runtime.context.stopCapture("USER_STOP");
+
+  runtime.context.handleStreamEvent({
+    event_type: "TTS_AUDIO_START",
+    data: { segment_id: "segment-2", source_segment_count: 1 }
+  });
+  runtime.context.schedulePcmChunk(new Uint8Array([0, 0]), 24000);
+  runtime.context.playbackEndTime = 2.5;
+  runtime.context.handleStreamEvent({
+    event_type: "TTS_AUDIO_END",
+    data: { segment_id: "segment-2" }
+  });
+
+  runtime.context.audioContext.currentTime = 3;
+  runtime.context.streamSnapshot();
+  assert.equal(runtime.context.streamState.playbackPlayedCount, 0);
 
   runtime.resolveStop();
   await stop;
