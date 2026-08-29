@@ -20,6 +20,12 @@ export interface PersistedMediaClientJob {
   expiresAt: string;
 }
 
+export interface MediaClientSttReservation {
+  allowed: boolean;
+  used_seconds: number;
+  remaining_seconds: number;
+}
+
 function hexJson(value: unknown): string {
   return Buffer.from(JSON.stringify(value), "utf8").toString("hex");
 }
@@ -85,6 +91,94 @@ export class MediaClientPersistentStore {
       });
     }
     await this.initialized;
+  }
+
+  async reserveSttSeconds(
+    jobId: string,
+    dayUtc: string,
+    requestedSeconds: number,
+    dailyLimitSeconds: number
+  ): Promise<MediaClientSttReservation> {
+    if (!this.enabled) {
+      throw new Error("MEDIA BETA durable quota store is disabled.");
+    }
+    if (!JOB_ID.test(jobId)) throw new Error("Invalid persistent quota job id.");
+    if (!/^\d{4}-\d{2}-\d{2}$/.test(dayUtc)) {
+      throw new Error("Invalid persistent quota day.");
+    }
+    if (!Number.isFinite(requestedSeconds) || requestedSeconds <= 0) {
+      throw new Error("Invalid persistent quota seconds.");
+    }
+    if (
+      !Number.isInteger(dailyLimitSeconds) ||
+      dailyLimitSeconds < 60 ||
+      dailyLimitSeconds > 86400
+    ) {
+      throw new Error("Invalid persistent daily quota limit.");
+    }
+    const seconds = Math.ceil(requestedSeconds);
+    await this.ready();
+    const output = await this.run(`
+BEGIN;
+SELECT pg_advisory_xact_lock(hashtext('krc_media_stt_quota|${dayUtc}'));
+WITH existing AS MATERIALIZED (
+  SELECT charges.day_utc, charges.seconds
+  FROM krc_media_stt_charges charges
+  WHERE charges.job_id='${jobId}'
+),
+usage_before AS MATERIALIZED (
+  SELECT COALESCE(SUM(charges.seconds), 0)::bigint AS used_seconds
+  FROM krc_media_stt_charges charges
+  WHERE charges.day_utc='${dayUtc}'::date
+),
+inserted AS (
+  INSERT INTO krc_media_stt_charges (job_id, day_utc, seconds)
+  SELECT '${jobId}', '${dayUtc}'::date, ${seconds}
+  FROM usage_before
+  WHERE NOT EXISTS (SELECT 1 FROM existing)
+    AND usage_before.used_seconds + ${seconds} <= ${dailyLimitSeconds}
+  ON CONFLICT (job_id) DO NOTHING
+  RETURNING seconds
+)
+SELECT
+  CASE
+    WHEN EXISTS (
+      SELECT 1 FROM existing
+      WHERE day_utc='${dayUtc}'::date AND seconds >= ${seconds}
+    ) THEN 1
+    WHEN EXISTS (SELECT 1 FROM inserted) THEN 1
+    ELSE 0
+  END,
+  usage_before.used_seconds + COALESCE((SELECT SUM(seconds) FROM inserted), 0),
+  GREATEST(
+    0,
+    ${dailyLimitSeconds} - (
+      usage_before.used_seconds + COALESCE((SELECT SUM(seconds) FROM inserted), 0)
+    )
+  )
+FROM usage_before;
+COMMIT;
+`);
+    const line = output
+      .split(/\r?\n/)
+      .filter((item) => item.split("\t").length === 3)
+      .at(-1);
+    if (!line) throw new Error("Persistent quota reservation returned no row.");
+    const [allowedRaw, usedRaw, remainingRaw] = line.split("\t");
+    const used = Number(usedRaw);
+    const remaining = Number(remainingRaw);
+    if (
+      (allowedRaw !== "0" && allowedRaw !== "1") ||
+      !Number.isFinite(used) ||
+      !Number.isFinite(remaining)
+    ) {
+      throw new Error("Persistent quota reservation row is malformed.");
+    }
+    return {
+      allowed: allowedRaw === "1",
+      used_seconds: Math.max(0, Math.floor(used)),
+      remaining_seconds: Math.max(0, Math.floor(remaining))
+    };
   }
 
   async put(record: PersistedMediaClientJob): Promise<void> {
@@ -221,6 +315,7 @@ DELETE FROM krc_media_stt_charges WHERE day_utc < current_date - interval '2 day
 
   private async initialize(): Promise<void> {
     await this.run(`
+SELECT pg_advisory_lock(hashtext('krc_media_schema_init'));
 CREATE TABLE IF NOT EXISTS krc_media_client_jobs (
   job_id text PRIMARY KEY,
   request_key text NOT NULL,
@@ -244,6 +339,7 @@ CREATE TABLE IF NOT EXISTS krc_media_stt_charges (
 );
 CREATE INDEX IF NOT EXISTS krc_media_stt_charges_day_idx
   ON krc_media_stt_charges (day_utc);
+SELECT pg_advisory_unlock(hashtext('krc_media_schema_init'));
 `);
   }
 

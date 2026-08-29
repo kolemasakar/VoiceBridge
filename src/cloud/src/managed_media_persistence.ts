@@ -82,19 +82,17 @@ export class ManagedMediaPersistentStore implements ManagedMediaJobStore {
     const seconds = Math.ceil(requestedSeconds);
     await this.ready();
     const output = await this.run(`
-WITH quota_lock AS MATERIALIZED (
-  SELECT pg_advisory_xact_lock(hashtext('krc_media_stt_quota|${dayUtc}'))
-),
-existing AS MATERIALIZED (
+BEGIN;
+SELECT pg_advisory_xact_lock(hashtext('krc_media_stt_quota|${dayUtc}'));
+WITH existing AS MATERIALIZED (
   SELECT charges.day_utc, charges.seconds
-  FROM quota_lock, krc_media_stt_charges charges
+  FROM krc_media_stt_charges charges
   WHERE charges.job_id='${jobId}'
 ),
 usage_before AS MATERIALIZED (
   SELECT COALESCE(SUM(charges.seconds), 0)::bigint AS used_seconds
-  FROM quota_lock
-  LEFT JOIN krc_media_stt_charges charges
-    ON charges.day_utc='${dayUtc}'::date
+  FROM krc_media_stt_charges charges
+  WHERE charges.day_utc='${dayUtc}'::date
 ),
 inserted AS (
   INSERT INTO krc_media_stt_charges (job_id, day_utc, seconds)
@@ -122,6 +120,7 @@ SELECT
     )
   )
 FROM usage_before;
+COMMIT;
 `);
     const line = output
       .split(/\r?\n/)
@@ -257,6 +256,7 @@ LIMIT 1;
 
   private async initialize(): Promise<void> {
     await this.run(`
+SELECT pg_advisory_lock(hashtext('krc_media_schema_init'));
 CREATE TABLE IF NOT EXISTS krc_managed_media_jobs (
   job_id text PRIMARY KEY,
   request_key text NOT NULL UNIQUE,
@@ -279,6 +279,7 @@ CREATE TABLE IF NOT EXISTS krc_media_stt_charges (
 );
 CREATE INDEX IF NOT EXISTS krc_media_stt_charges_day_idx
   ON krc_media_stt_charges (day_utc);
+SELECT pg_advisory_unlock(hashtext('krc_media_schema_init'));
 `);
   }
 

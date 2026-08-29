@@ -3,7 +3,7 @@ import { createHash, randomUUID, timingSafeEqual } from "node:crypto";
 import { mkdtemp, readFile, rm, stat, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import { MediaBetaGate, type MediaBetaUsage } from "./media_beta.js";
+import { MediaBetaGate, type MediaBetaReserveResult, type MediaBetaUsage } from "./media_beta.js";
 import {
   MediaTranscriptError,
   chunkTranscriptWords,
@@ -369,6 +369,10 @@ class AssemblyAiAsyncTranscriber {
 export interface MediaClientIngestServiceOptions {
   assemblyAiApiKey: string | null;
   betaGate: MediaBetaGate;
+  reserveSttSeconds?: ((
+    jobId: string,
+    requestedSeconds: number
+  ) => Promise<MediaBetaReserveResult>) | undefined;
   maxDurationSeconds: number;
   jobTtlSeconds: number;
   maxConcurrentJobs: number;
@@ -788,7 +792,9 @@ export class MediaClientIngestService {
       }
       job.media.duration_seconds = durationSeconds;
 
-      const reservation = this.options.betaGate.reserveSttSeconds(durationSeconds);
+      const reservation = this.options.reserveSttSeconds
+        ? await this.options.reserveSttSeconds(job.job_id, durationSeconds)
+        : this.options.betaGate.reserveSttSeconds(durationSeconds);
       job.beta_quota = reservation.usage;
       if (!reservation.allowed) {
         throw new MediaTranscriptError(

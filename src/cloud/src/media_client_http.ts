@@ -188,16 +188,47 @@ export function createMediaClientHttpHandler(config: AppConfig) {
     config.mediaBetaCodes ?? [],
     config.mediaDailySttSeconds ?? 7200
   );
-  const service = new MediaClientIngestService({
-    assemblyAiApiKey: config.assemblyAiApiKey,
-    betaGate,
-    maxDurationSeconds: config.mediaMaxDurationSeconds ?? 3600,
-    jobTtlSeconds: config.mediaJobTtlSeconds ?? 3600,
-    maxConcurrentJobs: config.mediaMaxConcurrentJobs ?? 1
-  });
   const jobTtlSeconds = config.mediaJobTtlSeconds ?? 3600;
   const databaseUrl = process.env.KRC_MEDIA_DATABASE_URL?.trim() || null;
   const persistentStore = new MediaClientPersistentStore(databaseUrl);
+  const service = new MediaClientIngestService({
+    assemblyAiApiKey: config.assemblyAiApiKey,
+    betaGate,
+    reserveSttSeconds: persistentStore.enabled
+      ? async (jobId, requestedSeconds) => {
+          const usage = betaGate.usage();
+          let durable;
+          try {
+            durable = await persistentStore.reserveSttSeconds(
+              jobId,
+              usage.day_utc,
+              requestedSeconds,
+              usage.daily_limit_seconds
+            );
+          } catch {
+            throw new MediaTranscriptError(
+              "MEDIA_CLIENT_DURABLE_QUOTA_UNAVAILABLE",
+              "The durable MEDIA BETA STT quota ledger is temporarily unavailable.",
+              503,
+              true
+            );
+          }
+          const snapshot = {
+            day_utc: usage.day_utc,
+            daily_limit_seconds: usage.daily_limit_seconds,
+            used_seconds: durable.used_seconds,
+            remaining_seconds: durable.remaining_seconds
+          };
+          if (durable.allowed) {
+            betaGate.restoreUsage(snapshot.day_utc, snapshot.used_seconds);
+          }
+          return { allowed: durable.allowed, usage: snapshot };
+        }
+      : undefined,
+    maxDurationSeconds: config.mediaMaxDurationSeconds ?? 3600,
+    jobTtlSeconds,
+    maxConcurrentJobs: config.mediaMaxConcurrentJobs ?? 1
+  });
   const recordCache = new Map<string, PersistedMediaClientJob>();
   const lastPersistedVersion = new Map<string, string>();
 
