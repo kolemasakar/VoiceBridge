@@ -1,6 +1,6 @@
 # KRC MEDIA Route-Boundary Audit - Telegram / Local Attachment / Instagram
 
-Status: STATIC_PASS_TELEGRAM_HARDENED
+Status: LIVE_ACCEPTED
 Date: 2026-08-29
 Repository: kolemasakar/VoiceBridge
 Branch: agent/krc-media-transcript
@@ -15,7 +15,7 @@ Audited routes:
 - one local current-conversation audio/video attachment;
 - Instagram Reel/video post.
 
-The audit began with source inspection and no-provider-spend regression checks. No live media retrieval or transcription job was started by this static phase.
+The audit began with source inspection and no-provider-spend regression checks. No live provider-consuming media retrieval or transcription job was started by this audit.
 
 ## Telegram finding
 
@@ -95,9 +95,43 @@ Verified behavior:
 
 This differs intentionally from Facebook and Telegram, whose accepted active routes are dedicated retrieval/STT pipelines and therefore must not enter the generic native Supadata path.
 
-## Resource boundary
+## Exact-head source validation before live smoke
 
-This static audit and Telegram hardening did not:
+Audited source/documentation head:
+
+`ba402ac809ad033545c934f1cc769a227ccc2008`
+
+Exact-head PR validation:
+- `Validate` run `33258033682`: SUCCESS;
+- `A9.7-F Cobalt Package Validate` run `33258033680`: SUCCESS;
+- `A9.10 Attachment Probe Validate` run `33258033757`: SUCCESS.
+
+## Live isolated-runtime acceptance
+
+No-provider-spend smoke:
+- workflow: `KRC MEDIA Route Boundary Live Smoke`;
+- run ID: `33258126715`;
+- result: SUCCESS;
+- exact audited runtime `ba402ac809ad033545c934f1cc769a227ccc2008` deployed to isolated Render service: PASS;
+- isolated service name/feature branch verification: PASS;
+- protected `KRC_MEDIA_DATABASE_URL` remained equal to the expected Neon target: PASS;
+- managed capability remained configured and restart-resilient on PostgreSQL durable storage: PASS;
+- Telegram public retrieval capability/provider/zero retrieval credits: PASS;
+- local attachment transport/provider/32 MiB limit: PASS;
+- global automatic AI fallback remained false: PASS;
+- Facebook AI and automatic paid retrieval remained disabled: PASS;
+- generic Telegram Supadata preflight rejected with `TELEGRAM_PUBLIC_RETRIEVAL_REQUIRED`: PASS;
+- generic Telegram Supadata start rejected with `TELEGRAM_PUBLIC_RETRIEVAL_REQUIRED`: PASS;
+- malformed local attachment placeholder rejected with `INVALID_REQUEST` before STT: PASS;
+- unsupported Instagram profile URL rejected with `INVALID_REQUEST` before transcript-provider work: PASS.
+
+The smoke deliberately did not invoke the dedicated Telegram retrieval endpoint, valid local attachment transcription, valid Instagram transcript provider work, or Facebook retrieval. Provider-consuming work invoked by the smoke: NONE.
+
+The temporary live-smoke workflow was removed immediately after the successful run.
+
+## Resource and release boundary
+
+This audit, hardening, and live acceptance did not:
 - start Cobalt retrieval;
 - start Telegram public retrieval;
 - start Supadata transcript work;
@@ -110,16 +144,20 @@ This static audit and Telegram hardening did not:
 - touch VoiceBridge main;
 - authorize production/public rollout.
 
-## Current gate
+## Accepted state
 
 ```text
-TELEGRAM_GENERIC_SUPADATA_INGRESS: BLOCKED_IN_SOURCE
-TELEGRAM_PUBLIC_ROUTE: PRESERVED
+TELEGRAM_GENERIC_SUPADATA_INGRESS: LIVE_BLOCKED
+TELEGRAM_PUBLIC_ROUTE: LIVE_PRESERVED
 TELEGRAM_RETRIEVAL_CREDITS: 0
 LOCAL_ATTACHMENT_BOUNDARY_AUDIT: PASS
+LOCAL_ATTACHMENT_INVALID_INPUT_LIVE_SMOKE: PASS
 INSTAGRAM_BOUNDARY_AUDIT: PASS
-PROVIDER_CONSUMING_WORK_IN_STATIC_AUDIT: NONE
+INSTAGRAM_INVALID_SOURCE_LIVE_SMOKE: PASS
+PROVIDER_CONSUMING_WORK_IN_ACCEPTANCE_SMOKE: NONE
+RENDER_ENV_MUTATION: NONE
+NEON_DATA_MUTATION: NONE
 RELEASE_HOLD_OWNER_TESTING: PRESERVED
 ```
 
-Next acceptance step: exact-head CI followed by an isolated Render no-provider-spend smoke that verifies the hardened Telegram generic-ingress rejection and unchanged capability/durable-store state before marking the Telegram hardening live-accepted.
+No Builder update is required. The accepted Builder instructions already route Telegram through the dedicated public Telegram path, local attachments through the attachment-specific path, and Instagram through the consent-gated managed Supadata path.
