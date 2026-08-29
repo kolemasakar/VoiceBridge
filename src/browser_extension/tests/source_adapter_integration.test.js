@@ -21,13 +21,20 @@ test("popup loads the source adapter before popup orchestration", () => {
   assert.ok(adapterIndex < popupIndex);
 });
 
-test("popup routes source preparation and stream acquisition through adapter", () => {
+test("popup routes generic source preparation and stream acquisition through adapter", () => {
   assert.match(
     popupSource,
     /createChromiumTabSourceAdapter\(chrome\)/
   );
-  assert.match(popupSource, /phase1SourceAdapter\.prepare\(\)/);
-  assert.match(popupSource, /phase1SourceAdapter\.start\(preparedSource\)/);
+  assert.match(popupSource, /browserTabSourceAdapter\.prepare\(\)/);
+  assert.match(popupSource, /browserTabSourceAdapter\.start\(preparedSource\)/);
   assert.doesNotMatch(popupSource, /chrome\.tabCapture\.getMediaStreamId/);
   assert.doesNotMatch(popupSource, /chrome\.tabs\.query/);
+});
+
+test("popup starts the cloud session with normalized browser source metadata", () => {
+  assert.match(
+    popupSource,
+    /serviceWorkerMessage\("START_CLOUD_SESSION",\s*\{\s*source_kind:\s*preparedSource\.source_kind,\s*source_adapter:\s*preparedSource\.source_adapter\s*\}\)/s
+  );
 });
