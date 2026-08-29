@@ -106,20 +106,25 @@
   function attach({ chromeApi = chrome, documentRef = document } = {}) {
     const sourceSelect = documentRef.querySelector("#source-language");
     const targetSelect = documentRef.querySelector("#target-language");
+    const status = documentRef.querySelector("#language-status");
     const detail = documentRef.querySelector("#language-detail");
     const start = documentRef.querySelector("#start");
     const error = documentRef.querySelector("#error");
-    if (!sourceSelect || !targetSelect || !detail || !start) return null;
+    if (!sourceSelect || !targetSelect || !status || !detail || !start) {
+      return null;
+    }
 
     let capabilities = null;
     let ready = false;
     sourceSelect.disabled = true;
     targetSelect.disabled = true;
 
-    function setReady(value) {
+    function setReady(value, stateText) {
       ready = value;
       sourceSelect.disabled = !value;
       targetSelect.disabled = !value;
+      status.textContent = stateText;
+      status.className = value ? "ready" : "";
       if (!value) start.disabled = true;
     }
 
@@ -138,7 +143,7 @@
     }
 
     async function refresh() {
-      setReady(false);
+      setReady(false, "LOADING");
       detail.textContent = "Loading validated languages from VoiceBridge Cloud...";
       try {
         const response = await chromeApi.runtime.sendMessage({
@@ -171,11 +176,11 @@
         await saveSelection();
         detail.textContent =
           "Validated by cloud registry " + capabilities.registry_version + ".";
-        setReady(true);
+        setReady(true, "READY");
       } catch (cause) {
         capabilities = null;
         detail.textContent = cause.message;
-        setReady(false);
+        setReady(false, "UNAVAILABLE");
       }
     }
 
@@ -226,5 +231,5 @@
 });
 
 if (typeof document !== "undefined" && typeof chrome !== "undefined") {
-  VoiceBridgeLanguageUI.attach();
+  globalThis.VoiceBridgeLanguageUI.attach();
 }
