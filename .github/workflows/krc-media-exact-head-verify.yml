@@ -1,0 +1,52 @@
+name: KRC MEDIA Exact Head Verify
+'on':
+  push:
+    branches:
+      - ops/media-beta-a4-2-verify
+    paths:
+      - .github/workflows/krc-media-exact-head-verify.yml
+permissions:
+  contents: read
+jobs:
+  exact-head:
+    runs-on: ubuntu-24.04
+    steps:
+      - name: Checkout exact accepted VoiceBridge head
+        uses: actions/checkout@v4
+        with:
+          ref: 53f237afa63e26c4954bda155495b694c8ef0b76
+      - name: Verify exact commit
+        run: test "$(git rev-parse HEAD)" = "53f237afa63e26c4954bda155495b694c8ef0b76"
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 24
+      - name: Full cloud build and tests
+        working-directory: src/cloud
+        run: |
+          npm ci
+          npm run check
+      - name: Browser syntax gates
+        run: |
+          node --check src/browser_extension/audio_processor.js
+          node --check src/browser_extension/offscreen.js
+          node --check src/browser_extension/popup.js
+          node --check src/browser_extension/service_worker.js
+      - name: A9.10 attachment probe invariants
+        working-directory: src/cloud
+        run: |
+          grep -Fq 'files.oaiusercontent.com' src/managed_attachment_probe.ts
+          grep -Fq 'redirect: "manual"' src/managed_attachment_probe.ts
+          grep -Fq 'MANAGED_ATTACHMENT_PROBE_MAX_BYTES = 64 * 1024' src/managed_attachment_probe.ts
+          grep -Fq 'retrieval_credits_charged: 0' src/managed_attachment_probe_http.ts
+          grep -Fq 'stt_seconds_charged: 0' src/managed_attachment_probe_http.ts
+          ! grep -Eq 'AssemblyAi|assemblyAiApiKey|startManagedAttachmentTranscription' src/managed_attachment_probe.ts src/managed_attachment_probe_http.ts
+      - name: A9.7-F free Cobalt package invariants
+        run: |
+          blueprint=deploy/cobalt-a9-7-f/render.cobalt-beta.yaml
+          keys=deploy/cobalt-a9-7-f/cobalt-keys.json.example
+          wiring=deploy/cobalt-a9-7-f/voicebridge.env.example
+          grep -Fq 'plan: free' "$blueprint"
+          grep -Fq 'region: frankfurt' "$blueprint"
+          grep -Fq 'allowedServices": ["facebook"]' "$keys"
+          grep -Fq 'KRC_MEDIA_COBALT_ENDPOINT=https://krc-cobalt-media-beta-kolemasakar.onrender.com' "$wiring"
+          ! grep -RIEq 'SCRAPECREATORS_API_KEY|SUPADATA_API_KEY|ASSEMBLYAI_API_KEY' deploy/cobalt-a9-7-f/render.cobalt-beta.yaml deploy/cobalt-a9-7-f/voicebridge.env.example
