@@ -149,7 +149,7 @@ export function loadConfig(
     ),
     ttsProvider: parseProvider(
       environment.TTS_PROVIDER,
-      "gemini",
+      "azure",
       ["azure", "gemini"] as const,
       "TTS_PROVIDER"
     ),

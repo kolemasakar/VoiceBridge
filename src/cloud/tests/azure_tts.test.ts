@@ -24,7 +24,7 @@ function ttsRequest(): TtsRequest {
 
 test("configuration exposes selectable Azure TTS settings", () => {
   const defaults = loadConfig({ TEST_ACCESS_TOKEN: TOKEN });
-  assert.equal(defaults.ttsProvider, "gemini");
+  assert.equal(defaults.ttsProvider, "azure");
   assert.equal(defaults.azureSpeechKey, null);
   assert.equal(defaults.azureSpeechRegion, "eastus");
   assert.equal(defaults.azureTtsVoice, "uk-UA-OstapNeural");

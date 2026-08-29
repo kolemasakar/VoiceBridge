@@ -3,10 +3,10 @@
 UA: Dorozhnia karta rozvytku VoiceBridge vid MVP do universalnoho AI perekladacha.
 
 Purpose:
-Define the approved development roadmap, phases, milestones, and project evolution strategy.
+Define the approved development roadmap, phases, validation gates, and project evolution strategy.
 
 Scope:
-Project phases, objectives, validation points, and major capabilities.
+Project phases, objectives, accepted runtime baselines, validation points, and major capabilities.
 
 Out of Scope:
 Detailed implementation tasks and low-level technical design.
@@ -18,12 +18,14 @@ Status:
 Approved
 
 Version:
-2.0.0
+2.1.0
 
 Last Updated:
-2026-07-22
+2026-08-29
 
 ## 1. Project Vision
+
+UA: Bachennia proiektu
 
 VoiceBridge is an open-source AI communication bridge that removes language barriers.
 
@@ -38,6 +40,8 @@ Long-term goal:
 - enable real-time multilingual communication between people using different languages.
 
 ## 2. Development Strategy
+
+UA: Stratehiia rozvytku
 
 The project follows incremental validation and a Cloud First implementation model.
 
@@ -60,16 +64,20 @@ Each phase MUST:
 
 ## 3. Phase Overview
 
+UA: Ohliad faz
+
 | Phase | Name | Objective | Status |
 |------|------|-----------|--------|
 | 0 | Repository Foundation | Create project foundation and governance | Completed |
 | 1 | Cloud YouTube MVP | Browser client with cloud speech translation pipeline | Completed - MVP Validated |
-| 2 | Universal Cloud Audio | Generalize browser audio input and cloud processing | Planned |
+| 2 | Universal Cloud Audio | Generalize browser audio input and cloud processing | Planned - Next functional phase |
 | 3 | Cloud Service Hardening | Improve reliability, security, observability, and provider portability | Planned |
 | 4 | Multi Platform Expansion | Support browser-accessible communication services | Planned |
 | 5 | Interpreter Mode and Optional Agent | Enable two-way translation and add a minimal local agent only if required | Planned |
 
 ## 4. Phase 1 Cloud YouTube MVP
+
+UA: Faza 1 Cloud YouTube MVP
 
 Goal:
 Create the first working English-to-Ukrainian YouTube voice translation demonstration.
@@ -78,39 +86,53 @@ Final result:
 
 `VOICEBRIDGE_PHASE_1_MVP_VALIDATED`
 
-Accepted runtime baseline:
+Current accepted runtime after the 2026-08-29 STT transition:
 
 - cloud service `0.6.0`;
 - browser extension `0.6.2`;
-- AssemblyAI English streaming STT;
-- Azure Translator primary translation;
+- Gemini 3.5 Transcribe Live English streaming STT by default;
+- AssemblyAI `universal-streaming-english` retained as an explicit rollback provider;
+- Azure Translator primary English-to-Ukrainian translation;
 - Gemini translation fallback;
-- Azure Speech Ukrainian TTS;
-- browser PCM playback;
+- Azure Speech Ukrainian TTS with `uk-UA-OstapNeural`;
+- ordered browser PCM playback;
 - automatic original-audio ducking and restoration;
-- one-press idempotent Stop with visible `STOPPING` state.
+- bounded user Stop with completed text and translation drain and capped playback cleanup.
 
-Validated pipeline:
+Current validated pipeline:
 
 ```text
 YouTube tab audio
     -> VoiceBridge browser extension
     -> VoiceBridge Cloud
-    -> AssemblyAI English STT
+    -> Gemini 3.5 Transcribe Live English STT
     -> Azure Translator
     -> Azure Speech Ukrainian TTS
     -> browser playback
 ```
 
-Fallback path:
+STT rollback path:
 
 ```text
-AssemblyAI English STT
-    -> Gemini translation
+YouTube tab audio
+    -> VoiceBridge browser extension
+    -> VoiceBridge Cloud
+    -> AssemblyAI universal-streaming-english
+    -> Azure Translator
+    -> Azure Speech Ukrainian TTS
+```
+
+Translation fallback path:
+
+```text
+Selected English STT
+    -> Gemini translation fallback
     -> Azure Speech Ukrainian TTS
 ```
 
 ### 4.1 Milestone State
+
+UA: Stan etapiv
 
 | Milestone | Capability | Status |
 |-----------|------------|--------|
@@ -122,50 +144,67 @@ AssemblyAI English STT
 | 6 | Ukrainian TTS and Browser Playback | Passed |
 | 7 | Minimum End-to-End MVP Acceptance | Passed |
 | 8 | Documentation and Recovery Baseline | Passed |
+| 9 | Gemini 3.5 Transcribe Live STT Transition | Passed |
+| 10 | Played-segment Instrumentation Repair | Passed |
 
-Additional production hardening is not required to classify the controlled minimum MVP as validated. Production authentication, multi-session readiness, advanced observability, recovery, and broader platform support move to later approved work.
+### 4.2 Final MVP Acceptance Evidence
 
-### 4.2 Final Acceptance Evidence
+UA: Dokazy finalnoho pryiniattia MVP
 
-Controlled final session:
+The original controlled Phase 1 acceptance run completed:
 
-- English final segments: 28;
-- Ukrainian final segments: 28;
-- Ukrainian voiced segments: 28;
-- Ukrainian played segments: 28;
+- 28 English final segments;
+- 28 Ukrainian final segments;
+- 28 Ukrainian voiced segments;
+- 28 Ukrainian played segments;
 - translation pending: 0;
 - translation retries: 0;
 - TTS pending: 0;
 - TTS retries: 0;
 - queued audio after completion: 0 ms;
 - dropped audio frames: 0;
-- Stop completed with one user action;
-- final states included `IDLE`, `COMPLETED`, and `CLOSED`.
+- Stop completed with one user action.
 
-Observed final stage latency:
+Observed final-stage latency in that baseline was 712 ms STT, 81 ms translation, and 190 ms TTS.
 
-- STT: 712 ms;
-- translation: 81 ms;
-- TTS: 190 ms.
+### 4.3 Gemini STT Transition Evidence
 
-A prior Azure Speech endurance session ran for more than 12 minutes and completed 108 English, translated, voiced, and played segments.
+UA: Dokazy perekhodu STT na Gemini
 
-Project owner acceptance:
+A controlled same-duration comparison on 2026-08-29 used approximately 59 seconds of the same English source fragment.
 
-- Ukrainian voice was understandable;
-- automatic ducking worked;
-- original audio restoration worked;
-- the Azure-based pipeline worked normally;
-- one-press Stop worked normally.
+Gemini run:
+
+- 2938 frames sent;
+- 1 dropped frame;
+- 6 final STT segments;
+- 363 ms reported recognition latency;
+- translation pending after Stop: 0;
+- TTS pending after Stop: 0;
+- queued playback after Stop: 0 ms.
+
+AssemblyAI rollback run:
+
+- 2945 frames sent;
+- 7 dropped frames;
+- 4 final STT segments;
+- 378 ms reported recognition latency;
+- translation pending after Stop: 0;
+- TTS pending after Stop: 0;
+- queued playback after Stop: 0 ms.
+
+The latency result is treated as near parity. Qualitative review favored Gemini for transcript coherence and several proper names. No WER claim is made because no human reference transcript was available.
 
 Canonical record:
 
-`docs/phases/PHASE_1_MVP_VALIDATION.md`
+`../history/2026-08-29_GEMINI_3_5_TRANSCRIBE_STT_ACCEPTED.md`
 
 ## 5. Phase 2 Universal Cloud Audio Translation
 
+UA: Faza 2 Universalnyi khmarnyi audio pereklad
+
 Goal:
-Separate browser audio capture from the cloud translation pipeline and support more browser-accessible audio sources.
+Separate browser audio capture from source-specific YouTube behavior and support additional browser-accessible audio sources through the existing cloud pipeline.
 
 Candidate capabilities:
 
@@ -173,12 +212,18 @@ Candidate capabilities:
 - configurable source and target languages;
 - reusable streaming session contracts;
 - provider-independent speech pipeline;
-- improved source adapters;
+- source adapter boundaries independent from translation and synthesis;
 - continued Cloud First execution.
 
-Entry requires explicit project-owner approval.
+Entry gate:
+
+- Phase 1 canonical documentation and configuration MUST be synchronized;
+- the Phase 1 recovery checkpoint MUST be current;
+- the Phase 2 design and acceptance criteria MUST be explicitly recorded before functional implementation begins.
 
 ## 6. Phase 3 Cloud Service Hardening
+
+UA: Faza 3 Posylennia khmarnoho servisu
 
 Goal:
 Prepare the cloud platform for reliable expansion.
@@ -197,6 +242,8 @@ Candidate capabilities:
 
 ## 7. Phase 4 Multi Platform Expansion
 
+UA: Faza 4 Rozshyrennia na kilkakh platformakh
+
 Goal:
 Support different browser-accessible communication sources.
 
@@ -208,6 +255,8 @@ Possible platforms:
 - mobile applications where supported.
 
 ## 8. Phase 5 Interpreter Mode and Optional Agent
+
+UA: Faza 5 Rezhym perekladacha ta neoboviazkovyi ahent
 
 Goal:
 Enable real-time two-way multilingual communication.
@@ -221,6 +270,8 @@ Possible capabilities:
 
 ## 9. Milestone Criteria
 
+UA: Kryterii etapiv
+
 A milestone is completed only when:
 
 - objectives are achieved;
@@ -231,21 +282,26 @@ A milestone is completed only when:
 
 ## 10. References
 
+UA: Posylannia
+
 - `../overview/07_PROJECT_DESCRIPTION.md`
 - `02_REPOSITORY_STRUCTURE.md`
+- `../architecture/04_ARCHITECTURE.md`
+- `../architecture/05_TECHNOLOGY_STACK.md`
 - `../governance/15_REPOSITORY_RULES.md`
 - `../governance/16_AI_DEVELOPMENT_RULES.md`
 - `../phases/PHASE_1_CLOUD_YOUTUBE_MVP.md`
-- `../phases/PHASE_1_MILESTONE_4_STT_INTEGRATION_VALIDATION.md`
-- `../phases/PHASE_1_MILESTONE_5_TRANSLATION_INTEGRATION.md`
-- `../phases/PHASE_1_MILESTONE_6_TTS_PLAYBACK.md`
 - `../phases/PHASE_1_MVP_VALIDATION.md`
-- `../bootstrap/PHASE_1_MVP_VALIDATED_BOOTSTRAP.md`
+- `../history/2026-08-29_GEMINI_3_5_TRANSCRIBE_STT_ACCEPTED.md`
+- `../adr/ADR-009_GEMINI_3_5_TRANSCRIBE_DEFAULT_STT.md`
 
 ## 11. Version History
 
+UA: Istoriia versii
+
 | Version | Date | Description |
 |---------|------|-------------|
+| 2.1.0 | 2026-08-29 | Synchronized Phase 1 with the accepted Gemini STT default and defined the Phase 2 entry gate |
 | 2.0.0 | 2026-07-22 | Validated and closed the minimum Phase 1 YouTube MVP |
 | 1.6.0 | 2026-07-21 | Passed Milestone 5 and activated Milestone 6 TTS and browser playback validation |
 | 1.5.0 | 2026-07-21 | Recorded live Gemini translation and cloud 0.4.2 graceful drain |
