@@ -2,10 +2,10 @@
 
 Version:
 
-`0.7.0`
+`0.8.0`
 
 The extension captures audio that is actively playing in the current HTTP or
-HTTPS browser tab, displays English and Ukrainian text, plays Ukrainian PCM,
+HTTPS browser tab, displays source and translated text, plays translated PCM,
 and automatically ducks the original audio.
 
 Before pressing Start, begin audio playback in the source tab. Restricted
@@ -14,6 +14,21 @@ actionable error before a cloud streaming session is started.
 
 YouTube remains a supported regression case, but is no longer the only browser
 source accepted by the extension.
+
+## Languages
+
+Language choices are loaded from the VoiceBridge Cloud capability registry.
+The browser extension does not maintain its own provider language catalog and
+does not infer support from provider marketing matrices.
+
+Only cloud-validated source/target pairs are selectable. If capability metadata
+cannot be loaded, capture is blocked rather than falling back to a local list.
+Saved selections are revalidated against the current cloud registry before a
+new session starts.
+
+The current validated registry contains only the accepted `en -> uk` path.
+Additional language pairs require separate provider implementation and
+controlled VoiceBridge acceptance before the cloud registry may advertise them.
 
 ## Permission Boundary
 

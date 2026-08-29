@@ -9,7 +9,7 @@ const manifest = JSON.parse(fs.readFileSync(
 ));
 
 test("universal active-tab path does not request broad host access", () => {
-  assert.equal(manifest.version, "0.7.0");
+  assert.equal(manifest.version, "0.8.0");
   assert.deepEqual(manifest.permissions, [
     "activeTab",
     "offscreen",
@@ -25,8 +25,9 @@ test("universal active-tab path does not request broad host access", () => {
   assert.ok(!manifest.host_permissions.some((value) => value.includes("*://*")));
 });
 
-test("extension metadata no longer claims YouTube-only scope", () => {
+test("extension metadata describes translated speech without fixed target-language wording", () => {
   assert.equal(manifest.name, "VoiceBridge");
   assert.doesNotMatch(manifest.description, /YouTube-only/i);
   assert.match(manifest.description, /active browser tab/i);
+  assert.match(manifest.description, /translated speech/i);
 });
