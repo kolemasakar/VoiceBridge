@@ -185,8 +185,7 @@ test("Gemini Live setup and FIR resampling preserve the STT contract", async () 
       responseModalities: ["TEXT"]
     });
     assert.deepEqual(receivedSetup.inputAudioTranscription, {
-      languageCodes: ["en-US"],
-      mode: "VERBATIM"
+      languageCodes: []
     });
 
     assert.equal(providerAudio.length, 2);
