@@ -1,4 +1,4 @@
-# KRC MEDIA Route-Boundary Audit — Telegram / Local Attachment / Instagram
+# KRC MEDIA Route-Boundary Audit - Telegram / Local Attachment / Instagram
 
 Status: STATIC_PASS_TELEGRAM_HARDENED
 Date: 2026-08-29
@@ -60,7 +60,7 @@ Net implementation diff from the accepted Facebook-hardening baseline contains o
 
 ## Local attachment audit
 
-Result: PASS — no additional server hardening required in this audit.
+Result: PASS - no additional server hardening required in this audit.
 
 Verified boundary:
 - active HTTP intake is the attachment-specific endpoint;
@@ -82,7 +82,7 @@ No arbitrary external attachment URL route was identified.
 
 ## Instagram audit
 
-Result: PASS — current generic managed Supadata route is intentional for Instagram and no additional boundary hardening is required.
+Result: PASS - current generic managed Supadata route is intentional for Instagram and no additional boundary hardening is required.
 
 Verified behavior:
 - public Reel/video-post URL normalization remains restricted to supported Instagram forms;
