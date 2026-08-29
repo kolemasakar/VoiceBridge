@@ -1,6 +1,6 @@
 # VoiceBridge Phase 2 M4 Language Capability Registry
 
-Status: IMPLEMENTED - AUTOMATED VALIDATION PENDING
+Status: IMPLEMENTED - AUTOMATED VALIDATION PASSED - MERGE PENDING
 
 Date: 2026-08-29
 
@@ -146,7 +146,31 @@ Extended `session_contract.test.ts` covers:
 - rejection before streaming/session-provider work;
 - browser-facing health capability metadata.
 
-## 9. Explicitly Unchanged
+## 9. Automated Validation Evidence
+
+Pull request:
+
+`#41 - Implement Phase 2 M4 language capability registry`
+
+Validated implementation head before this evidence-only documentation commit:
+
+`52335c5c3a5e595925a1570cec3516fa8c92fd17`
+
+Validate run:
+
+`33272707724 - SUCCESS`
+
+Jobs:
+
+- `browser-extension` - SUCCESS;
+- `repository-docs` - SUCCESS;
+- `cloud` - SUCCESS.
+
+The cloud job built and ran the complete cloud test suite including the new language registry and extended session contract coverage.
+
+Because this milestone evidence update changes the PR head, the new final PR head MUST also pass Validate before merge.
+
+## 10. Explicitly Unchanged
 
 P2-M4 does NOT:
 
@@ -160,7 +184,7 @@ P2-M4 does NOT:
 - add automatic paid fallback;
 - modify KRC Media.
 
-## 10. Acceptance Gate
+## 11. Acceptance Gate
 
 P2-M4 may be marked complete only when:
 
@@ -174,7 +198,7 @@ P2-M4 may be marked complete only when:
 - final PR head Validate is green;
 - post-merge `main` Validate is green.
 
-## 11. Next Gate
+## 12. Next Gate
 
 After P2-M4 is complete, begin:
 
