@@ -60,8 +60,8 @@ jobs:
           node --check src/browser_extension/popup.js
           node --check src/browser_extension/transcript_copy.js
           node --check src/browser_extension/service_worker.js
-      - name: Test browser stop policy
-        run: node --test src/browser_extension/tests/stop_policy.test.js
+      - name: Test browser contracts
+        run: node --test src/browser_extension/tests/*.test.js
       - name: Validate browser manifest
         run: node -e "JSON.parse(require('fs').readFileSync('src/browser_extension/manifest.json', 'utf8'))"
       - name: Package browser extension 0.6.2
