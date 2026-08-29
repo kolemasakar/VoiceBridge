@@ -57,6 +57,17 @@ jobs:
           echo "::add-mask::$current_db"
           [[ "$current_db" == "$KRC_NEON_DATABASE_URL" ]]
 
+          max_body=32768
+          tmp="$(mktemp)"
+          code="$(curl -sS -o "$tmp" -w '%{http_code}' "${RENDER_API_BASE}/services/${SERVICE_ID}/env-vars/MAX_REQUEST_BODY_BYTES" -H 'Accept: application/json' -H "Authorization: Bearer ${RENDER_API_KEY}" || true)"
+          if [[ "$code" == "200" ]]; then
+            configured_max="$(jq -r '(.envVar.value // .value // empty)' "$tmp")"
+            if [[ "$configured_max" =~ ^[0-9]+$ ]]; then max_body="$configured_max"; fi
+          fi
+          rm -f "$tmp"
+          [[ "$max_body" -ge 1024 && "$max_body" -le 1048576 ]]
+          printf '%s' "$max_body" > /tmp/max-body-bytes
+
       - name: Deploy exact hardened runtime
         shell: bash
         run: |
@@ -108,32 +119,36 @@ jobs:
           echo "::add-mask::$token"
 
           expect_json_error() {
-            local method="$1" path="$2" authorization="$3" body_file="$4" expected_status="$5" expected_code="$6" out="$7"
+            local label="$1" method="$2" path="$3" authorization="$4" body_file="$5" expected_status="$6" expected_code="$7" out="$8"
             local args=(curl -sS --max-time 60 -o "$out" -w '%{http_code}' -X "$method" "${BASE_URL}${path}" -H 'Accept: application/json')
             if [[ -n "$authorization" ]]; then args+=(-H "Authorization: $authorization"); fi
             if [[ -n "$body_file" ]]; then args+=(-H 'Content-Type: application/json' --data-binary "@$body_file"); fi
-            local code
+            local code actual_code
             code="$("${args[@]}")"
+            actual_code="$(jq -r '.error.code // empty' "$out" 2>/dev/null || true)"
+            echo "$label: HTTP=$code CODE=${actual_code:-NON_JSON_OR_EMPTY}"
             [[ "$code" == "$expected_status" ]]
-            [[ "$(jq -r '.error.code // empty' "$out")" == "$expected_code" ]]
+            [[ "$actual_code" == "$expected_code" ]]
           }
 
           printf '%s' '{"url":"https://www.youtube.com/watch?v=dQw4w9WgXcQ"}' > /tmp/good.json
           printf '%s' '{not-json' > /tmp/malformed.json
-          python - <<'PY'
-          import json
+          max_body="$(cat /tmp/max-body-bytes)"
+          python - "$max_body" <<'PY'
+          import json, sys
+          maximum = int(sys.argv[1])
           with open('/tmp/oversized.json','w',encoding='utf-8') as f:
-              json.dump({'url':'https://www.youtube.com/watch?v=dQw4w9WgXcQ','padding':'x'*1100000}, f)
+              json.dump({'url':'https://www.youtube.com/watch?v=dQw4w9WgXcQ','padding':'x'*(maximum + 2048)}, f)
           PY
 
-          expect_json_error POST /api/v1/media/managed/preflight '' /tmp/good.json 401 AUTHENTICATION_REQUIRED /tmp/a.json
-          expect_json_error POST /api/v1/media/managed/preflight 'Bearer definitely-wrong-token' /tmp/good.json 401 AUTHENTICATION_FAILED /tmp/b.json
-          expect_json_error POST /api/v1/media/managed/preflight "Bearer $token" /tmp/malformed.json 400 INVALID_REQUEST /tmp/c.json
-          expect_json_error POST /api/v1/media/managed/preflight "Bearer $token" /tmp/oversized.json 413 REQUEST_BODY_TOO_LARGE /tmp/d.json
-          expect_json_error GET /api/v1/media/managed/preflight "Bearer $token" '' 404 NOT_FOUND /tmp/e.json
-          expect_json_error GET /api/v1/media/managed/transcriptions/not-a-job "Bearer $token" '' 404 NOT_FOUND /tmp/f.json
-          expect_json_error GET '/api/v1/media/managed/transcriptions/KRCM_safe123/segments?cursor=0%20OR%201%3D1' "Bearer $token" '' 400 INVALID_PAGINATION /tmp/g.json
-          expect_json_error GET '/api/v1/media/managed/transcriptions/KRCM_safe123/segments?limit=51' "Bearer $token" '' 400 INVALID_PAGINATION /tmp/h.json
+          expect_json_error missing-bearer POST /api/v1/media/managed/preflight '' /tmp/good.json 401 AUTHENTICATION_REQUIRED /tmp/a.json
+          expect_json_error invalid-bearer POST /api/v1/media/managed/preflight 'Bearer definitely-wrong-token' /tmp/good.json 401 AUTHENTICATION_FAILED /tmp/b.json
+          expect_json_error malformed-json POST /api/v1/media/managed/preflight "Bearer $token" /tmp/malformed.json 400 INVALID_REQUEST /tmp/c.json
+          expect_json_error oversized-json POST /api/v1/media/managed/preflight "Bearer $token" /tmp/oversized.json 413 REQUEST_BODY_TOO_LARGE /tmp/d.json
+          expect_json_error wrong-method GET /api/v1/media/managed/preflight "Bearer $token" '' 404 NOT_FOUND /tmp/e.json
+          expect_json_error malformed-job-id GET /api/v1/media/managed/transcriptions/not-a-job "Bearer $token" '' 404 NOT_FOUND /tmp/f.json
+          expect_json_error pagination-injection GET '/api/v1/media/managed/transcriptions/KRCM_safe123/segments?cursor=0%20OR%201%3D1' "Bearer $token" '' 400 INVALID_PAGINATION /tmp/g.json
+          expect_json_error pagination-range GET '/api/v1/media/managed/transcriptions/KRCM_safe123/segments?limit=51' "Bearer $token" '' 400 INVALID_PAGINATION /tmp/h.json
 
           echo 'Auth/input/replay live smoke passed: all requests terminated before provider-consuming work or durable-store mutation.'
 
@@ -145,12 +160,9 @@ jobs:
             echo
             echo '- Exact hardened runtime deployed: `PASS`'
             echo '- Protected Neon durable-store target unchanged: `PASS`'
-            echo '- Missing bearer rejected before service work: `PASS`'
-            echo '- Invalid bearer rejected before service work: `PASS`'
-            echo '- Malformed JSON rejected before service work: `PASS`'
-            echo '- Oversized JSON rejected before service work: `PASS`'
-            echo '- Wrong method failed closed: `PASS`'
-            echo '- Malformed job ID failed closed: `PASS`'
+            echo '- Missing/invalid bearer boundary: `PASS`'
+            echo '- Malformed/oversized JSON boundary: `PASS`'
+            echo '- Wrong method and malformed job ID fail closed: `PASS`'
             echo '- Pagination injection/out-of-range rejected before service read: `PASS`'
             echo '- Provider-consuming work invoked by smoke: `NO`'
             echo '- Database mutation requested: `NONE`'
@@ -161,4 +173,4 @@ jobs:
         if: always()
         shell: bash
         run: |
-          sudo rm -f /tmp/krc-media-action-token /tmp/good.json /tmp/malformed.json /tmp/oversized.json /tmp/a.json /tmp/b.json /tmp/c.json /tmp/d.json /tmp/e.json /tmp/f.json /tmp/g.json /tmp/h.json >/dev/null 2>&1 || true
+          sudo rm -f /tmp/krc-media-action-token /tmp/max-body-bytes /tmp/good.json /tmp/malformed.json /tmp/oversized.json /tmp/a.json /tmp/b.json /tmp/c.json /tmp/d.json /tmp/e.json /tmp/f.json /tmp/g.json /tmp/h.json >/dev/null 2>&1 || true
