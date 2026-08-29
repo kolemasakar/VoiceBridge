@@ -1,0 +1,145 @@
+name: KRC MEDIA Consent Credit Live No-Spend Smoke
+on:
+  push:
+    branches:
+      - agent/krc-media-transcript
+    paths:
+      - .github/workflows/krc-media-consent-credit-live-no-spend.yml
+permissions:
+  contents: write
+env:
+  RENDER_API_BASE: https://api.render.com/v1
+  SERVICE_ID: srv-da1kic5bedkc73d6fk60
+  SERVICE_NAME: voicebridge-krc-media-beta-kolemasakar
+  REQUIRED_BRANCH: agent/krc-media-transcript
+  BASE_URL: https://voicebridge-krc-media-beta-kolemasakar.onrender.com
+  IMPLEMENTATION_SHA: 2f0f02769dbdf2e8240e6b08867ecef2faaede16
+jobs:
+  smoke:
+    runs-on: ubuntu-24.04
+    env:
+      RENDER_API_KEY: ${{ secrets.RENDER_API_KEY }}
+      KRC_NEON_DATABASE_URL: ${{ secrets.KRC_NEON_DATABASE_URL }}
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+      - name: Verify isolated target and protected Neon target
+        shell: bash
+        run: |
+          set -euo pipefail
+          test -n "${RENDER_API_KEY:-}"
+          test -n "${KRC_NEON_DATABASE_URL:-}"
+          echo "::add-mask::$RENDER_API_KEY"
+          echo "::add-mask::$KRC_NEON_DATABASE_URL"
+          tmp="$(mktemp)"
+          code="$(curl -sS -o "$tmp" -w '%{http_code}' "${RENDER_API_BASE}/services/${SERVICE_ID}" -H "Authorization: Bearer ${RENDER_API_KEY}")"
+          [[ "$code" == 200 ]]
+          [[ "$(jq -r '.name' "$tmp")" == "$SERVICE_NAME" ]]
+          [[ "$(jq -r '.branch' "$tmp")" == "$REQUIRED_BRANCH" ]]
+          rm -f "$tmp"
+          tmp="$(mktemp)"
+          code="$(curl -sS -o "$tmp" -w '%{http_code}' "${RENDER_API_BASE}/services/${SERVICE_ID}/env-vars/KRC_MEDIA_DATABASE_URL" -H "Authorization: Bearer ${RENDER_API_KEY}")"
+          [[ "$code" == 200 ]]
+          current_db="$(jq -r '(.envVar.value // .value // empty)' "$tmp")"
+          rm -f "$tmp"
+          test -n "$current_db"
+          echo "::add-mask::$current_db"
+          [[ "$current_db" == "$KRC_NEON_DATABASE_URL" ]]
+      - name: Capture durable-state counters before smoke
+        shell: bash
+        run: |
+          set -euo pipefail
+          psql "$KRC_NEON_DATABASE_URL" -At -F $'\t' -c "select (select count(*) from krc_managed_media_jobs), (select count(*) from krc_media_client_jobs), (select count(*) from krc_media_stt_charges), (select coalesce(sum(seconds),0) from krc_media_stt_charges);" > /tmp/krc-before.tsv
+          test "$(awk -F $'\t' 'NF==4{print NF}' /tmp/krc-before.tsv | tail -1)" = 4
+      - name: Deploy exact hardened runtime
+        shell: bash
+        run: |
+          set -euo pipefail
+          tmp="$(mktemp)"
+          payload="$(jq -nc --arg commitId "$IMPLEMENTATION_SHA" '{commitId:$commitId,clearCache:"do_not_clear"}')"
+          code="$(curl -sS -o "$tmp" -w '%{http_code}' -X POST "${RENDER_API_BASE}/services/${SERVICE_ID}/deploys" -H 'Content-Type: application/json' -H "Authorization: Bearer ${RENDER_API_KEY}" --data "$payload")"
+          [[ "$code" == 201 || "$code" == 202 ]]
+          deploy_id="$(jq -r '(.deploy // .).id // empty' "$tmp")"
+          rm -f "$tmp"
+          test -n "$deploy_id"
+          live=0
+          for i in $(seq 1 150); do
+            tmp="$(mktemp)"
+            code="$(curl -sS -o "$tmp" -w '%{http_code}' "${RENDER_API_BASE}/services/${SERVICE_ID}/deploys/${deploy_id}" -H "Authorization: Bearer ${RENDER_API_KEY}")"
+            [[ "$code" == 200 ]]
+            status="$(jq -r '(.deploy // .).status // "unknown"' "$tmp")"
+            commit="$(jq -r '(.deploy // .).commit.id // (.deploy // .).commitId // "unknown"' "$tmp")"
+            rm -f "$tmp"
+            if [[ "$status" == live ]]; then
+              [[ "$commit" == "$IMPLEMENTATION_SHA" ]]
+              live=1
+              break
+            fi
+            case "$status" in
+              build_failed|update_failed|canceled|deactivated) exit 1 ;;
+            esac
+            sleep 5
+          done
+          [[ "$live" == 1 ]]
+      - name: Load masked Action bearer
+        shell: bash
+        run: |
+          set -euo pipefail
+          tmp="$(mktemp)"
+          code="$(curl -sS -o "$tmp" -w '%{http_code}' "${RENDER_API_BASE}/services/${SERVICE_ID}/env-vars/KRC_MEDIA_ACTION_TOKEN" -H "Authorization: Bearer ${RENDER_API_KEY}")"
+          [[ "$code" == 200 ]]
+          token="$(jq -r '(.envVar.value // .value // empty)' "$tmp")"
+          rm -f "$tmp"
+          test -n "$token"
+          echo "::add-mask::$token"
+          umask 077
+          printf '%s' "$token" > /tmp/krc-action-token
+      - name: Run invalid-consent no-spend matrix
+        shell: bash
+        run: |
+          set -euo pipefail
+          token="$(cat /tmp/krc-action-token)"
+          echo "::add-mask::$token"
+          random_job="KRCM_consent-no-spend-$(date +%s)-$RANDOM"
+          check409() {
+            label="$1"
+            path="$2"
+            body="$3"
+            expected="$4"
+            out="/tmp/${label}.json"
+            http="$(curl -sS --max-time 60 -o "$out" -w '%{http_code}' -X POST "${BASE_URL}${path}" -H "Authorization: Bearer ${token}" -H 'Content-Type: application/json' --data "$body")"
+            code="$(jq -r '.error.code // empty' "$out")"
+            echo "$label HTTP=$http CODE=$code"
+            [[ "$http" == 409 && "$code" == "$expected" ]]
+          }
+          native_body="$(jq -nc '{url:"https://youtu.be/consent-live-guard",language_hint:"auto",credit_consent:{provider:"supadata",mode:"native",max_credits:2}}')"
+          metadata_body="$(jq -nc '{credit_consent:{provider:"supadata",mode:"metadata",max_credits:2}}')"
+          ai_body="$(jq -nc '{credit_consent:{provider:"other",mode:"generate",max_credits:40}}')"
+          fb_body="$(jq -nc '{credit_consent:{provider:"scrapecreators",mode:"facebook_post",max_credits:2}}')"
+          check409 native-invalid "/api/v1/media/managed/transcriptions" "$native_body" MEDIA_CREDIT_CONSENT_REQUIRED
+          check409 metadata-invalid "/api/v1/media/managed/transcriptions/${random_job}/facebook-ai-estimate" "$metadata_body" MEDIA_METADATA_CREDIT_CONSENT_REQUIRED
+          check409 ai-invalid "/api/v1/media/managed/transcriptions/${random_job}/ai" "$ai_body" MEDIA_AI_CREDIT_CONSENT_REQUIRED
+          check409 facebook-invalid "/api/v1/media/managed/transcriptions/${random_job}/facebook-retrieval" "$fb_body" FACEBOOK_RETRIEVAL_CREDIT_CONSENT_REQUIRED
+          echo CONSENT_CREDIT_LIVE_NO_SPEND=PASS
+      - name: Verify durable-state counters unchanged
+        shell: bash
+        run: |
+          set -euo pipefail
+          psql "$KRC_NEON_DATABASE_URL" -At -F $'\t' -c "select (select count(*) from krc_managed_media_jobs), (select count(*) from krc_media_client_jobs), (select count(*) from krc_media_stt_charges), (select coalesce(sum(seconds),0) from krc_media_stt_charges);" > /tmp/krc-after.tsv
+          diff -u /tmp/krc-before.tsv /tmp/krc-after.tsv
+          echo DURABLE_STATE_COUNTERS_UNCHANGED=PASS
+      - name: Remove temporary workflow
+        shell: bash
+        run: |
+          set -euo pipefail
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git rm .github/workflows/krc-media-consent-credit-live-no-spend.yml
+          git commit -m "Remove completed consent credit live smoke workflow"
+          git push origin HEAD:agent/krc-media-transcript
+      - name: Cleanup runner material
+        if: always()
+        shell: bash
+        run: |
+          sudo rm -f /tmp/krc-action-token /tmp/krc-before.tsv /tmp/krc-after.tsv /tmp/native-invalid.json /tmp/metadata-invalid.json /tmp/ai-invalid.json /tmp/facebook-invalid.json >/dev/null 2>&1 || true
