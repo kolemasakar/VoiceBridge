@@ -7,32 +7,13 @@ import { DEFAULT_ASSEMBLYAI_SPEECH_MODEL } from "../src/stt_provider.js";
 
 const TOKEN = "voicebridge-test-token-123456789";
 
-test("STT factory keeps AssemblyAI as the default rollback provider", () => {
+test("STT factory uses Gemini as the accepted default provider", () => {
   const config = loadConfig({ TEST_ACCESS_TOKEN: TOKEN });
-  assert.equal(config.sttProvider, "assemblyai");
-
-  const provider = createConfiguredSttProvider({
-    provider: config.sttProvider ?? "assemblyai",
-    assemblyAiApiKey: null,
-    geminiApiKey: null,
-    geminiModel: config.geminiSttModel
-  });
-  assert.equal(provider.name, "assemblyai");
-  assert.equal(provider.configured, false);
-  assert.equal(provider.model, DEFAULT_ASSEMBLYAI_SPEECH_MODEL);
-});
-
-test("STT factory selects Gemini only when explicitly configured", () => {
-  const config = loadConfig({
-    TEST_ACCESS_TOKEN: TOKEN,
-    STT_PROVIDER: "gemini",
-    GEMINI_STT_MODEL: DEFAULT_GEMINI_STT_MODEL
-  });
   assert.equal(config.sttProvider, "gemini");
   assert.equal(config.geminiSttModel, DEFAULT_GEMINI_STT_MODEL);
 
   const provider = createConfiguredSttProvider({
-    provider: config.sttProvider ?? "assemblyai",
+    provider: config.sttProvider ?? "gemini",
     assemblyAiApiKey: null,
     geminiApiKey: null,
     geminiModel: config.geminiSttModel
@@ -40,6 +21,24 @@ test("STT factory selects Gemini only when explicitly configured", () => {
   assert.equal(provider.name, "gemini");
   assert.equal(provider.configured, false);
   assert.equal(provider.model, DEFAULT_GEMINI_STT_MODEL);
+});
+
+test("STT factory keeps AssemblyAI as an explicit rollback provider", () => {
+  const config = loadConfig({
+    TEST_ACCESS_TOKEN: TOKEN,
+    STT_PROVIDER: "assemblyai"
+  });
+  assert.equal(config.sttProvider, "assemblyai");
+
+  const provider = createConfiguredSttProvider({
+    provider: config.sttProvider ?? "gemini",
+    assemblyAiApiKey: null,
+    geminiApiKey: null,
+    geminiModel: config.geminiSttModel
+  });
+  assert.equal(provider.name, "assemblyai");
+  assert.equal(provider.configured, false);
+  assert.equal(provider.model, DEFAULT_ASSEMBLYAI_SPEECH_MODEL);
 });
 
 test("STT provider config rejects unknown provider values", () => {
