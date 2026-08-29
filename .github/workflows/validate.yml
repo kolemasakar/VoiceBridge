@@ -57,6 +57,7 @@ jobs:
           node --check src/browser_extension/audio_processor.js
           node --check src/browser_extension/offscreen.js
           node --check src/browser_extension/stop_policy.js
+          node --check src/browser_extension/source_adapter.js
           node --check src/browser_extension/popup.js
           node --check src/browser_extension/transcript_copy.js
           node --check src/browser_extension/service_worker.js
@@ -73,6 +74,7 @@ jobs:
           cp src/browser_extension/offscreen.html dist/extension/
           cp src/browser_extension/offscreen.js dist/extension/
           cp src/browser_extension/stop_policy.js dist/extension/
+          cp src/browser_extension/source_adapter.js dist/extension/
           cp src/browser_extension/popup.css dist/extension/
           cp src/browser_extension/popup.html dist/extension/
           cp src/browser_extension/popup.js dist/extension/
