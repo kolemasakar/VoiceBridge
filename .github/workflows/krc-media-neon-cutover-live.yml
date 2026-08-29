@@ -1,0 +1,333 @@
+name: KRC MEDIA Neon Cutover Live
+
+on:
+  push:
+    branches:
+      - agent/krc-media-transcript
+    paths:
+      - .github/workflows/krc-media-neon-cutover-live.yml
+
+permissions:
+  contents: read
+
+concurrency:
+  group: krc-media-neon-cutover-live
+  cancel-in-progress: false
+
+env:
+  RENDER_API_BASE: https://api.render.com/v1
+  SERVICE_ID: srv-da1kic5bedkc73d6fk60
+  SERVICE_NAME: voicebridge-krc-media-beta-kolemasakar
+  SOURCE_DB_NAME: voicebridge-krc-media-beta-db
+  REQUIRED_BRANCH: agent/krc-media-transcript
+  BETA_BASE_URL: https://voicebridge-krc-media-beta-kolemasakar.onrender.com
+  EXPORT_PATH: /api/v1/media/internal-db-export
+  EXPORT_RUNTIME_SHA: 159bff89988f464a989d426f60628a2fa92ba41e
+  POSTGRES_IMAGE: postgres:18
+
+jobs:
+  cutover:
+    name: Guarded owner-only Render PostgreSQL to Neon cutover
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    env:
+      RENDER_API_KEY: ${{ secrets.RENDER_API_KEY }}
+      KRC_NEON_DATABASE_URL: ${{ secrets.KRC_NEON_DATABASE_URL }}
+    steps:
+      - name: Checkout exact head
+        uses: actions/checkout@v4
+
+      - name: Prepare protected rollback state
+        shell: bash
+        run: |
+          set -euo pipefail
+          test -n "${RENDER_API_KEY:-}"
+          test -n "${KRC_NEON_DATABASE_URL:-}"
+          echo "::add-mask::$RENDER_API_KEY"
+          echo "::add-mask::$KRC_NEON_DATABASE_URL"
+          [[ "$KRC_NEON_DATABASE_URL" != *"-pooler."* ]]
+          [[ "$KRC_NEON_DATABASE_URL" == *"sslmode=require"* ]]
+
+          tmp="$(mktemp)"
+          code="$(curl -sS -o "$tmp" -w '%{http_code}' \
+            "${RENDER_API_BASE}/services/${SERVICE_ID}" \
+            -H 'Accept: application/json' \
+            -H "Authorization: Bearer ${RENDER_API_KEY}")"
+          [[ "$code" == "200" ]]
+          [[ "$(jq -r '.name // empty' "$tmp")" == "$SERVICE_NAME" ]]
+          [[ "$(jq -r '.branch // empty' "$tmp")" == "$REQUIRED_BRANCH" ]]
+          rm -f "$tmp"
+
+          for key in KRC_MEDIA_DATABASE_URL KRC_MEDIA_ACTION_TOKEN TEST_ACCESS_TOKEN; do
+            tmp="$(mktemp)"
+            code="$(curl -sS -o "$tmp" -w '%{http_code}' \
+              "${RENDER_API_BASE}/services/${SERVICE_ID}/env-vars/${key}" \
+              -H 'Accept: application/json' \
+              -H "Authorization: Bearer ${RENDER_API_KEY}")"
+            [[ "$code" == "200" ]]
+            value="$(jq -r '(.envVar.value // .value // empty)' "$tmp")"
+            rm -f "$tmp"
+            test -n "$value"
+            echo "::add-mask::$value"
+            umask 077
+            case "$key" in
+              KRC_MEDIA_DATABASE_URL) printf '%s' "$value" > /tmp/krc-old-db-url ;;
+              KRC_MEDIA_ACTION_TOKEN) printf '%s' "$value" > /tmp/krc-media-token ;;
+              TEST_ACCESS_TOKEN) printf '%s' "$value" > /tmp/krc-test-token ;;
+            esac
+          done
+
+          old_db_url="$(cat /tmp/krc-old-db-url)"
+          [[ "$old_db_url" != "$KRC_NEON_DATABASE_URL" ]]
+          [[ "$old_db_url" != *".neon.tech"* ]]
+
+          pg_tmp="$(mktemp)"
+          pg_code="$(curl -sS -G -o "$pg_tmp" -w '%{http_code}' \
+            "${RENDER_API_BASE}/postgres" \
+            --data-urlencode "name=${SOURCE_DB_NAME}" \
+            --data-urlencode 'limit=20' \
+            -H 'Accept: application/json' \
+            -H "Authorization: Bearer ${RENDER_API_KEY}")"
+          [[ "$pg_code" == "200" ]]
+          source_pg_id="$(jq -r '[.[] | (.postgres // .) | select(.name == "voicebridge-krc-media-beta-db")][0].id // empty' "$pg_tmp")"
+          rm -f "$pg_tmp"
+          test -n "$source_pg_id"
+          echo "$source_pg_id" > /tmp/krc-source-pg-id
+
+          conn_tmp="$(mktemp)"
+          conn_code="$(curl -sS -o "$conn_tmp" -w '%{http_code}' \
+            "${RENDER_API_BASE}/postgres/${source_pg_id}/connection-info" \
+            -H 'Accept: application/json' \
+            -H "Authorization: Bearer ${RENDER_API_KEY}")"
+          [[ "$conn_code" == "200" ]]
+          jq -e '.. | strings | select(startswith("postgres://") or startswith("postgresql://"))' "$conn_tmp" >/dev/null
+          rm -f "$conn_tmp"
+          echo "Protected rollback source is recoverable."
+
+      - name: Final source-Neon equality guard
+        shell: bash
+        run: |
+          set -euo pipefail
+          payload="$(jq -nc --arg commitId "$EXPORT_RUNTIME_SHA" '{commitId:$commitId,clearCache:"do_not_clear"}')"
+          tmp="$(mktemp)"
+          code="$(curl -sS -o "$tmp" -w '%{http_code}' -X POST \
+            "${RENDER_API_BASE}/services/${SERVICE_ID}/deploys" \
+            -H 'Accept: application/json' -H 'Content-Type: application/json' \
+            -H "Authorization: Bearer ${RENDER_API_KEY}" --data "$payload")"
+          [[ "$code" == "201" || "$code" == "202" ]]
+          deploy_id="$(jq -r '(.deploy // .).id // empty' "$tmp")"
+          rm -f "$tmp"
+          test -n "$deploy_id"
+          for i in $(seq 1 150); do
+            tmp="$(mktemp)"
+            code="$(curl -sS -o "$tmp" -w '%{http_code}' \
+              "${RENDER_API_BASE}/services/${SERVICE_ID}/deploys/${deploy_id}" \
+              -H 'Accept: application/json' -H "Authorization: Bearer ${RENDER_API_KEY}")"
+            [[ "$code" == "200" ]]
+            status="$(jq -r '(.deploy // .).status // "unknown"' "$tmp")"
+            commit="$(jq -r '(.deploy // .).commit.id // (.deploy // .).commitId // "unknown"' "$tmp")"
+            rm -f "$tmp"
+            if [[ "$status" == "live" ]]; then [[ "$commit" == "$EXPORT_RUNTIME_SHA" ]]; break; fi
+            case "$status" in build_failed|update_failed|canceled|deactivated) exit 1 ;; esac
+            sleep 5
+          done
+
+          media_token="$(cat /tmp/krc-media-token)"
+          echo "::add-mask::$media_token"
+          fp_code="$(curl -sS --max-time 90 -o /tmp/krc-source-fingerprint.txt -w '%{http_code}' \
+            "${BETA_BASE_URL}${EXPORT_PATH}/fingerprint" \
+            -H 'Accept: text/plain' -H "Authorization: Bearer ${media_token}")"
+          [[ "$fp_code" == "200" ]]
+
+          docker pull "$POSTGRES_IMAGE" >/dev/null
+          docker run --rm -i -e KRC_NEON_DATABASE_URL="$KRC_NEON_DATABASE_URL" "$POSTGRES_IMAGE" \
+            psql -X -A -t -F '|' -v ON_ERROR_STOP=1 --dbname "$KRC_NEON_DATABASE_URL" \
+            < scripts/krc-media-neon-fingerprint.sql > /tmp/krc-neon-fingerprint.txt
+          diff -u /tmp/krc-source-fingerprint.txt /tmp/krc-neon-fingerprint.txt
+
+          neon_counts="$(docker run --rm -e KRC_NEON_DATABASE_URL="$KRC_NEON_DATABASE_URL" "$POSTGRES_IMAGE" \
+            psql -X -A -t -F '|' -v ON_ERROR_STOP=1 --dbname "$KRC_NEON_DATABASE_URL" \
+            -c "SELECT (SELECT count(*) FROM public.krc_managed_media_jobs),(SELECT count(*) FROM public.krc_media_client_jobs),(SELECT count(*) FROM public.krc_media_stt_charges),(SELECT count(*) FROM public.krc_managed_media_jobs WHERE status NOT IN ('COMPLETED','FAILED'));")"
+          [[ "$neon_counts" == "1|0|0|0" ]]
+          echo "Final source and Neon equality guard passed."
+
+      - name: Switch isolated Render durable store to Neon
+        shell: bash
+        run: |
+          set -euo pipefail
+          payload="$(jq -nc --arg value "$KRC_NEON_DATABASE_URL" '{value:$value}')"
+          tmp="$(mktemp)"
+          code="$(curl -sS -o "$tmp" -w '%{http_code}' -X PUT \
+            "${RENDER_API_BASE}/services/${SERVICE_ID}/env-vars/KRC_MEDIA_DATABASE_URL" \
+            -H 'Accept: application/json' -H 'Content-Type: application/json' \
+            -H "Authorization: Bearer ${RENDER_API_KEY}" --data "$payload")"
+          [[ "$code" == "200" ]]
+          rm -f "$tmp"
+
+          tmp="$(mktemp)"
+          code="$(curl -sS -o "$tmp" -w '%{http_code}' \
+            "${RENDER_API_BASE}/services/${SERVICE_ID}/env-vars/KRC_MEDIA_DATABASE_URL" \
+            -H 'Accept: application/json' -H "Authorization: Bearer ${RENDER_API_KEY}")"
+          [[ "$code" == "200" ]]
+          current="$(jq -r '(.envVar.value // .value // empty)' "$tmp")"
+          rm -f "$tmp"
+          echo "::add-mask::$current"
+          [[ "$current" == "$KRC_NEON_DATABASE_URL" ]]
+          touch /tmp/krc-cutover-mutated
+          echo "KRC_MEDIA_DATABASE_URL switched to protected Neon value."
+
+      - name: Deploy and verify Neon-backed runtime
+        shell: bash
+        run: |
+          set -euo pipefail
+          payload="$(jq -nc --arg commitId "$GITHUB_SHA" '{commitId:$commitId,clearCache:"do_not_clear"}')"
+          tmp="$(mktemp)"
+          code="$(curl -sS -o "$tmp" -w '%{http_code}' -X POST \
+            "${RENDER_API_BASE}/services/${SERVICE_ID}/deploys" \
+            -H 'Accept: application/json' -H 'Content-Type: application/json' \
+            -H "Authorization: Bearer ${RENDER_API_KEY}" --data "$payload")"
+          [[ "$code" == "201" || "$code" == "202" ]]
+          deploy_id="$(jq -r '(.deploy // .).id // empty' "$tmp")"
+          rm -f "$tmp"
+          test -n "$deploy_id"
+          for i in $(seq 1 150); do
+            tmp="$(mktemp)"
+            code="$(curl -sS -o "$tmp" -w '%{http_code}' \
+              "${RENDER_API_BASE}/services/${SERVICE_ID}/deploys/${deploy_id}" \
+              -H 'Accept: application/json' -H "Authorization: Bearer ${RENDER_API_KEY}")"
+            [[ "$code" == "200" ]]
+            status="$(jq -r '(.deploy // .).status // "unknown"' "$tmp")"
+            commit="$(jq -r '(.deploy // .).commit.id // (.deploy // .).commitId // "unknown"' "$tmp")"
+            rm -f "$tmp"
+            if [[ "$status" == "live" ]]; then [[ "$commit" == "$GITHUB_SHA" ]]; break; fi
+            case "$status" in build_failed|update_failed|canceled|deactivated) exit 1 ;; esac
+            sleep 5
+          done
+
+          media_token="$(cat /tmp/krc-media-token)"
+          test_token="$(cat /tmp/krc-test-token)"
+          echo "::add-mask::$media_token"
+          echo "::add-mask::$test_token"
+
+          capability_code="$(curl -sS --max-time 60 -o /tmp/krc-capability.json -w '%{http_code}' \
+            "${BETA_BASE_URL}/api/v1/media/managed" -H 'Accept: application/json' \
+            -H "Authorization: Bearer ${media_token}")"
+          [[ "$capability_code" == "200" ]]
+          jq -e '.mode=="zero_client_managed_beta" and .configured==true and .durable_store=="postgres" and .restart_resilient_jobs==true and .facebook_automatic_paid_retrieval==false and .telegram_retrieval_credits==0 and .local_attachment_retrieval_provider=="openai_attachment"' /tmp/krc-capability.json >/dev/null
+
+          removed_code="$(curl -sS --max-time 60 -o /tmp/krc-removed.json -w '%{http_code}' \
+            "${BETA_BASE_URL}${EXPORT_PATH}" -H "Authorization: Bearer ${test_token}")"
+          removed_error="$(jq -r '.error.code // "none"' /tmp/krc-removed.json 2>/dev/null || echo non_json)"
+          [[ "$removed_code" == "404" && "$removed_error" == "NOT_FOUND" ]]
+
+          counts="$(docker run --rm -e KRC_NEON_DATABASE_URL="$KRC_NEON_DATABASE_URL" "$POSTGRES_IMAGE" \
+            psql -X -A -t -F '|' -v ON_ERROR_STOP=1 --dbname "$KRC_NEON_DATABASE_URL" \
+            -c "SELECT (SELECT count(*) FROM public.krc_managed_media_jobs),(SELECT count(*) FROM public.krc_media_client_jobs),(SELECT count(*) FROM public.krc_media_stt_charges),(SELECT count(*) FROM public.krc_managed_media_jobs WHERE status NOT IN ('COMPLETED','FAILED'));")"
+          [[ "$counts" == "1|0|0|0" ]]
+
+          live_job="$(docker run --rm -e KRC_NEON_DATABASE_URL="$KRC_NEON_DATABASE_URL" "$POSTGRES_IMAGE" \
+            psql -X -A -t -v ON_ERROR_STOP=1 --dbname "$KRC_NEON_DATABASE_URL" \
+            -c "SELECT job_id FROM public.krc_managed_media_jobs WHERE expires_at > now() ORDER BY updated_at DESC LIMIT 1;")"
+          runtime_read="skipped_expired"
+          if [[ -n "$live_job" ]]; then
+            job_code="$(curl -sS --max-time 60 -o /tmp/krc-job.json -w '%{http_code}' \
+              "${BETA_BASE_URL}/api/v1/media/managed/transcriptions/${live_job}" \
+              -H 'Accept: application/json' -H "Authorization: Bearer ${media_token}")"
+            [[ "$job_code" == "200" ]]
+            jq -e --arg id "$live_job" '.job_id==$id' /tmp/krc-job.json >/dev/null
+            seg_code="$(curl -sS --max-time 60 -o /tmp/krc-segments.json -w '%{http_code}' \
+              "${BETA_BASE_URL}/api/v1/media/managed/transcriptions/${live_job}/segments" \
+              -H 'Accept: application/json' -H "Authorization: Bearer ${media_token}")"
+            [[ "$seg_code" == "200" ]]
+            jq -e --arg id "$live_job" '.job_id==$id' /tmp/krc-segments.json >/dev/null
+            runtime_read="pass"
+          fi
+          echo "$runtime_read" > /tmp/krc-runtime-read
+          echo "Neon-backed runtime verification passed."
+
+      - name: Restart resilience verification
+        shell: bash
+        run: |
+          set -euo pipefail
+          payload="$(jq -nc --arg commitId "$GITHUB_SHA" '{commitId:$commitId,clearCache:"do_not_clear"}')"
+          tmp="$(mktemp)"
+          code="$(curl -sS -o "$tmp" -w '%{http_code}' -X POST \
+            "${RENDER_API_BASE}/services/${SERVICE_ID}/deploys" \
+            -H 'Accept: application/json' -H 'Content-Type: application/json' \
+            -H "Authorization: Bearer ${RENDER_API_KEY}" --data "$payload")"
+          [[ "$code" == "201" || "$code" == "202" ]]
+          deploy_id="$(jq -r '(.deploy // .).id // empty' "$tmp")"
+          rm -f "$tmp"
+          test -n "$deploy_id"
+          for i in $(seq 1 150); do
+            tmp="$(mktemp)"
+            code="$(curl -sS -o "$tmp" -w '%{http_code}' "${RENDER_API_BASE}/services/${SERVICE_ID}/deploys/${deploy_id}" \
+              -H 'Accept: application/json' -H "Authorization: Bearer ${RENDER_API_KEY}")"
+            [[ "$code" == "200" ]]
+            status="$(jq -r '(.deploy // .).status // "unknown"' "$tmp")"
+            commit="$(jq -r '(.deploy // .).commit.id // (.deploy // .).commitId // "unknown"' "$tmp")"
+            rm -f "$tmp"
+            if [[ "$status" == "live" ]]; then [[ "$commit" == "$GITHUB_SHA" ]]; break; fi
+            case "$status" in build_failed|update_failed|canceled|deactivated) exit 1 ;; esac
+            sleep 5
+          done
+          media_token="$(cat /tmp/krc-media-token)"
+          code="$(curl -sS --max-time 60 -o /tmp/krc-capability-restart.json -w '%{http_code}' \
+            "${BETA_BASE_URL}/api/v1/media/managed" -H 'Accept: application/json' \
+            -H "Authorization: Bearer ${media_token}")"
+          [[ "$code" == "200" ]]
+          jq -e '.configured==true and .durable_store=="postgres" and .restart_resilient_jobs==true' /tmp/krc-capability-restart.json >/dev/null
+          echo "Restart resilience verification passed."
+
+      - name: Publish sanitized cutover summary
+        shell: bash
+        run: |
+          source_sha="$(sha256sum /tmp/krc-source-fingerprint.txt | awk '{print $1}')"
+          neon_sha="$(sha256sum /tmp/krc-neon-fingerprint.txt | awk '{print $1}')"
+          source_pg_id="$(cat /tmp/krc-source-pg-id)"
+          runtime_read="$(cat /tmp/krc-runtime-read 2>/dev/null || echo not_checked)"
+          {
+            echo '# KRC MEDIA Neon cutover'
+            echo
+            echo '- Release state: `RELEASE_HOLD_OWNER_TESTING`'
+            echo '- Database cutover performed: `true`'
+            echo '- KRC_MEDIA_DATABASE_URL now targets protected Neon direct TLS connection: `true`'
+            echo '- Final source/Neon exact equality before cutover: `PASS`'
+            echo "- Source fingerprint SHA256: \`${source_sha}\`"
+            echo "- Neon fingerprint SHA256: \`${neon_sha}\`"
+            echo '- Row counts managed/client/stt: `1/0/0`'
+            echo '- Non-terminal jobs at cutover: `0`'
+            echo '- Managed capability after cutover: `PASS`'
+            echo '- Restart resilience: `PASS`'
+            echo "- Runtime existing-state read: \`${runtime_read}\`"
+            echo '- Temporary export route removed: `PASS`'
+            echo '- New media/transcription job started: `false`'
+            echo '- Paid fallback activated: `false`'
+            echo '- Source Render PostgreSQL deleted: `false`'
+            echo "- Retained Render source Postgres ID: \`${source_pg_id}\`"
+          } >> "$GITHUB_STEP_SUMMARY"
+
+      - name: Automatic rollback on failure
+        if: failure()
+        shell: bash
+        run: |
+          set +e
+          if [[ -s /tmp/krc-old-db-url ]]; then
+            old="$(cat /tmp/krc-old-db-url)"
+            echo "::add-mask::$old"
+            payload="$(jq -nc --arg value "$old" '{value:$value}')"
+            curl -sS -X PUT "${RENDER_API_BASE}/services/${SERVICE_ID}/env-vars/KRC_MEDIA_DATABASE_URL" \
+              -H 'Accept: application/json' -H 'Content-Type: application/json' \
+              -H "Authorization: Bearer ${RENDER_API_KEY}" --data "$payload" >/dev/null
+            deploy_payload="$(jq -nc --arg commitId "$GITHUB_SHA" '{commitId:$commitId,clearCache:"do_not_clear"}')"
+            curl -sS -X POST "${RENDER_API_BASE}/services/${SERVICE_ID}/deploys" \
+              -H 'Accept: application/json' -H 'Content-Type: application/json' \
+              -H "Authorization: Bearer ${RENDER_API_KEY}" --data "$deploy_payload" >/dev/null
+            echo 'Rollback to protected Render PostgreSQL value requested.'
+          fi
+
+      - name: Remove temporary runner material
+        if: always()
+        shell: bash
+        run: |
+          sudo rm -f /tmp/krc-* >/dev/null 2>&1 || true
