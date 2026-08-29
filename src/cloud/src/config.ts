@@ -109,7 +109,7 @@ export function loadConfig(
     assemblyAiApiKey: environment.ASSEMBLYAI_API_KEY || null,
     sttProvider: parseProvider(
       environment.STT_PROVIDER,
-      "assemblyai",
+      "gemini",
       ["assemblyai", "gemini"] as const,
       "STT_PROVIDER"
     ),
