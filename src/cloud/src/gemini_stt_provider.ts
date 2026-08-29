@@ -22,6 +22,43 @@ const MAX_PROVIDER_MESSAGE_BYTES = 1048576;
 const CONNECT_TIMEOUT_MS = 10000;
 const FINALIZATION_GRACE_MS = 1500;
 const CLOSE_TIMEOUT_MS = 3000;
+const PCM16_MIN = -32768;
+const PCM16_MAX = 32767;
+const DECIMATION_FACTOR = 3;
+// 31-tap Hamming-windowed sinc low-pass for 48 kHz to 16 kHz decimation.
+const FIR_COEFFICIENTS = [
+  0.0016948642895205,
+  0.0012014915300349335,
+  -0.0009047320201385198,
+  -0.00422754533561236,
+  -0.005427042574212399,
+  0,
+  0.011365095290230158,
+  0.01858421791009226,
+  0.008250100127311023,
+  -0.02123646030330576,
+  -0.04893920635990442,
+  -0.039590259460608554,
+  0.02985812514688922,
+  0.14510694985134165,
+  0.25451078063616367,
+  0.29950724254439726,
+  0.25451078063616367,
+  0.14510694985134162,
+  0.029858125146889226,
+  -0.03959025946060857,
+  -0.04893920635990444,
+  -0.021236460303305768,
+  0.00825010012731103,
+  0.018584217910092266,
+  0.011365095290230161,
+  0,
+  -0.005427042574212398,
+  -0.004227545335612362,
+  -0.0009047320201385194,
+  0.0012014915300349335,
+  0.0016948642895205
+] as const;
 
 export function resolveGeminiSttModel(value: string | undefined): string {
   const model = value === undefined ? DEFAULT_GEMINI_STT_MODEL : value.trim();
@@ -99,39 +136,57 @@ function rawDataText(data: RawData): string {
   return data.toString("utf8");
 }
 
-class Pcm48kTo16kResampler {
-  private remainder = Buffer.alloc(0);
+class Pcm48kTo16kFirDecimator {
+  private readonly history = new Float64Array(FIR_COEFFICIENTS.length);
+  private historyCursor = 0;
+  private phase = 0;
+  private byteRemainder = Buffer.alloc(0);
 
   process(frame: Buffer): Buffer {
-    const source = this.remainder.byteLength > 0
-      ? Buffer.concat([this.remainder, frame])
+    const source = this.byteRemainder.byteLength > 0
+      ? Buffer.concat([this.byteRemainder, frame])
       : frame;
-    const groupBytes = 6;
-    const processBytes = source.byteLength - source.byteLength % groupBytes;
-    this.remainder = source.subarray(processBytes);
-    if (processBytes === 0) {
+    const completeBytes = source.byteLength - source.byteLength % 2;
+    this.byteRemainder = source.subarray(completeBytes);
+    if (completeBytes === 0) {
       return Buffer.alloc(0);
     }
 
-    const output = Buffer.allocUnsafe(processBytes / 3);
-    let outputOffset = 0;
-    for (let offset = 0; offset < processBytes; offset += groupBytes) {
-      const average = Math.round(
-        (
-          source.readInt16LE(offset) +
-          source.readInt16LE(offset + 2) +
-          source.readInt16LE(offset + 4)
-        ) / 3
+    const maximumOutputSamples = Math.ceil(
+      completeBytes / 2 / DECIMATION_FACTOR
+    );
+    const output = Buffer.allocUnsafe(maximumOutputSamples * 2);
+    let outputSamples = 0;
+
+    for (let offset = 0; offset < completeBytes; offset += 2) {
+      this.history[this.historyCursor] = source.readInt16LE(offset);
+      this.historyCursor = (this.historyCursor + 1) % this.history.length;
+      this.phase = (this.phase + 1) % DECIMATION_FACTOR;
+      if (this.phase !== 0) {
+        continue;
+      }
+
+      let filtered = 0;
+      for (let index = 0; index < FIR_COEFFICIENTS.length; index += 1) {
+        const historyIndex =
+          (this.historyCursor - 1 - index + this.history.length) %
+          this.history.length;
+        filtered += FIR_COEFFICIENTS[index]! * this.history[historyIndex]!;
+      }
+      const sample = Math.max(
+        PCM16_MIN,
+        Math.min(PCM16_MAX, Math.round(filtered))
       );
-      output.writeInt16LE(average, outputOffset);
-      outputOffset += 2;
+      output.writeInt16LE(sample, outputSamples * 2);
+      outputSamples += 1;
     }
-    return output;
+
+    return output.subarray(0, outputSamples * 2);
   }
 }
 
 class GeminiSttConnection implements SttConnection {
-  private readonly resampler: Pcm48kTo16kResampler | null;
+  private readonly resampler: Pcm48kTo16kFirDecimator | null;
   private pendingAudio = Buffer.alloc(0);
   private audioSamplesSent = 0;
   private finalAudioEndMs = 0;
@@ -144,7 +199,7 @@ class GeminiSttConnection implements SttConnection {
   ) {
     this.resampler = sourceSampleRateHz === GEMINI_STT_SAMPLE_RATE_HZ
       ? null
-      : new Pcm48kTo16kResampler();
+      : new Pcm48kTo16kFirDecimator();
   }
 
   sendAudio(frame: Buffer): boolean {

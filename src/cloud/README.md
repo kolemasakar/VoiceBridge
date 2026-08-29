@@ -64,9 +64,9 @@ The candidate uses the existing cloud-side `GEMINI_API_KEY`. No provider key is
 sent to the browser or stored in the repository.
 
 The validated VoiceBridge browser input remains PCM16 mono at 48 kHz. The Gemini
-adapter resamples this stream in the cloud to PCM16 mono at 16 kHz and sends
-100 ms provider chunks. The browser transport and stable VoiceBridge transcript
-event contract are unchanged.
+adapter applies a bounded stateful FIR low-pass decimator in the cloud to produce
+PCM16 mono at 16 kHz and sends 100 ms provider chunks. The browser transport and
+stable VoiceBridge transcript event contract are unchanged.
 
 Candidate operational constraints verified from official Google documentation
 on 2026-08-29:
@@ -81,8 +81,7 @@ on 2026-08-29:
 
 Official references:
 
-- https://ai.google.dev/gemini-api/docs/live-guide
-- https://ai.google.dev/gemini-api/docs/live-transcription
+- https://ai.google.dev/gemini-api/docs/live-api/live-transcribe
 - https://ai.google.dev/gemini-api/docs/models/gemini-3.5-transcribe
 - https://ai.google.dev/gemini-api/docs/pricing
 - https://ai.google.dev/gemini-api/docs/billing
