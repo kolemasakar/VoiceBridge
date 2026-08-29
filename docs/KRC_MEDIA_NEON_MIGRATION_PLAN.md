@@ -10,7 +10,7 @@ Release state: RELEASE_HOLD_OWNER_TESTING
 
 Move the isolated KRC MEDIA BETA durable PostgreSQL store from Render PostgreSQL to Neon Free PostgreSQL without changing the application data model or MEDIA BETA behavior.
 
-The database cutover is now completed and verified. Neon PostgreSQL 18 is the active durable store for the isolated MEDIA BETA service. The original Render PostgreSQL database is retained unchanged as the rollback source during the observation window.
+The database cutover is completed and verified. Neon PostgreSQL 18 is the active durable store for the isolated MEDIA BETA service. The original Render PostgreSQL database is retained unchanged as the rollback source during the observation window.
 
 This migration does not authorize a PR merge, public or production promotion, external tester onboarding, source database deletion, or any change to the accepted MEDIA BETA retrieval/provider contract.
 
@@ -45,7 +45,7 @@ The persistence implementation uses standard PostgreSQL and psql. No Render-spec
 
 Canonical path executed:
 
-Render PostgreSQL -> owner-authenticated read-only pg_dump custom archive -> PostgreSQL 18 restore -> structural/data verification -> Neon PostgreSQL 18 -> exact verification -> guarded KRC_MEDIA_DATABASE_URL cutover -> runtime/restart verification
+Render PostgreSQL -> owner-authenticated read-only pg_dump custom archive -> PostgreSQL 18 restore -> structural/data verification -> Neon PostgreSQL 18 -> exact verification -> guarded KRC_MEDIA_DATABASE_URL cutover -> runtime/restart verification -> controlled owner-only live durability regression -> later read-only observation checkpoint
 
 The original Render PostgreSQL database remains intact for rollback during the observation window.
 
@@ -227,12 +227,36 @@ Post-cutover verification:
 - managed capability after restart: PASS
 - automatic rollback: NOT TRIGGERED
 
-No new media/transcription job was started as part of the cutover workflow. This avoided intentionally consuming retrieval or STT provider resources during the database switch. A controlled live media regression remains a separate owner-only test action.
+No new media/transcription job was started as part of the cutover workflow. This avoided intentionally consuming retrieval or STT provider resources during the database switch.
 
 Historical checkpoint:
 - docs/history/KRC_MEDIA_NEON_CUTOVER_2026-08-29.md
 
-## 11. Active durable-store state
+## 11. Post-cutover live durability regression - completed
+
+Owner-approved controlled live regression:
+- initial guarded workflow run: 33248257261
+- successful continuation run: 33248337547
+- accepted result: PASS
+
+Verified:
+- exactly one Supadata native provider start
+- provider credits charged: 1
+- completed managed job persisted in Neon
+- API job and segments readable before restart
+- exact-head Render redeploy/restart: PASS
+- API job and segments readable after restart
+- same-request replay returned the same durable job with reused = true
+- persisted updated_at unchanged on replay
+- duplicate provider start: NOT OBSERVED
+- Facebook paid fallback/ScrapeCreators: NOT USED
+
+The initial guarded run encountered only a diagnostic harness SQL placeholder defect after provider completion. The continuation reused the already-created durable job and did not repeat provider work.
+
+Historical checkpoint:
+- docs/history/KRC_MEDIA_NEON_POSTCUTOVER_LIVE_REGRESSION_2026-08-29.md
+
+## 12. Active durable-store state
 
 Active application durable store:
 - Neon PostgreSQL 18
@@ -247,19 +271,45 @@ Rollback store:
 
 The isolated Render MEDIA BETA application remains the same application/runtime contract; only its protected KRC_MEDIA_DATABASE_URL target changed.
 
-## 12. Observation-window rules
+## 13. First later read-only observation checkpoint - completed
+
+Temporary observation workflow:
+- KRC MEDIA Neon Read-Only Observation
+- successful run ID: 33249015989
+- workflow commit: 929985720dcb448fc6cba0d1a2326e672bbe2d14
+- result: SUCCESS
+
+Verified without provider-consuming work, redeploy, environment mutation, or database mutation:
+- isolated Render service still targets protected Neon direct TLS: PASS
+- managed capability after inactivity/resume: PASS
+- PostgreSQL major 18: PASS
+- current managed-job rows: 1
+- non-terminal managed jobs: 0
+- accepted post-cutover regression job remains COMPLETED: PASS
+- regression segment count remains 321: PASS
+- regression job API read: PASS
+- regression segments API read: PASS
+- rollback trigger observed: NO
+
+The first observation harness run 33248936436 stopped because it assumed at least two historical managed-job rows would still exist. The actual current count is 1. The required accepted regression row remained present and readable; the invalid count assumption was removed and the corrected read-only workflow passed. No provider work was repeated.
+
+Historical checkpoints:
+- docs/history/KRC_MEDIA_NEON_OBSERVATION_WINDOW_2026-08-29.md
+- docs/history/KRC_MEDIA_NEON_OBSERVATION_CHECKPOINT_2026-08-29.md
+
+## 14. Observation-window rules
 
 During the rollback observation window:
 1. Keep RELEASE_HOLD_OWNER_TESTING active.
 2. Do not merge PR #28 or touch VoiceBridge main.
 3. Do not delete the original Render PostgreSQL database.
 4. Keep Neon as the active durable store unless a rollback trigger occurs.
-5. Run only owner-authorized regressions.
-6. If a controlled live media job is used, record provider route, durable write/read behavior, restart behavior, and idempotency.
+5. Prefer read-only capability, durable-state, connectivity, and CI checks.
+6. Do not run provider-consuming tests merely to prove observation stability.
 7. Do not activate paid Facebook fallback or ScrapeCreators.
-8. Do not expose connection strings, passwords, bearer tokens, or provider credentials.
+8. Do not expose connection strings, passwords, bearer tokens, provider credentials, or transcript payloads.
 
-## 13. Rollback triggers
+## 15. Rollback triggers
 
 Rollback immediately if any of these are observed:
 - managed capability is not configured
@@ -272,7 +322,9 @@ Rollback immediately if any of these are observed:
 - database connectivity is materially unstable
 - a verified persistence regression attributable to Neon is found
 
-## 14. Rollback procedure
+A provider-specific retrieval/STT failure is not by itself a database rollback trigger unless persistence behavior is also implicated.
+
+## 16. Rollback procedure
 
 1. Stop new owner test activity.
 2. Recover the protected original Render PostgreSQL connection value without printing it.
@@ -282,7 +334,7 @@ Rollback immediately if any of these are observed:
 6. Keep Neon intact for diagnosis.
 7. If writes occurred on Neon after cutover, do not automatically merge them back; reconcile explicitly.
 
-## 15. Security and release boundaries
+## 17. Security and release boundaries
 
 - Never print Render or Neon database URLs.
 - Never commit database credentials.
@@ -295,7 +347,20 @@ Rollback immediately if any of these are observed:
 - PR #28 remains draft/open/unmerged unless separately authorized.
 - Public sharing, GPT Store publication, external testers, and production promotion remain HOLD.
 
-## 16. Current gate
+## 18. Observation exit criteria
+
+The rollback observation window may be proposed for closure only after:
+- at least one later read-only checkpoint confirms Render still targets Neon and managed capability is healthy;
+- the accepted regression job and persisted segments remain readable after normal inactivity/resume behavior;
+- no verified Neon-attributable persistence rollback trigger has appeared;
+- exact-head feature-branch CI is green;
+- the original Render PostgreSQL rollback source is still available when the owner considers ending rollback protection.
+
+The first four conditions are currently satisfied. Availability of the original Render PostgreSQL rollback source must be re-confirmed immediately before any proposal to end rollback protection.
+
+Closing the observation window is not authorization to delete the original Render database, merge PR #28, promote production, onboard external testers, or publish the GPT.
+
+## 19. Current gate
 
 NEON_MIGRATION_PLAN: PASS
 POSTGRESQL_18_DRY_RUN: PASS
@@ -310,9 +375,18 @@ DATABASE_CUTOVER: PASS
 ACTIVE_DURABLE_STORE: NEON_POSTGRESQL_18
 MANAGED_CAPABILITY_AFTER_CUTOVER: PASS
 RESTART_RESILIENCE_AFTER_CUTOVER: PASS
-TEMP_EXPORT_RUNTIME_REMOVED: VERIFIED
+POST_CUTOVER_LIVE_MEDIA_JOB: PASS
+IDEMPOTENT_REPLAY: PASS
+READ_ONLY_OBSERVATION_CHECKPOINT: PASS
+MANAGED_CAPABILITY_OBSERVATION: PASS
+PRIOR_REGRESSION_JOB_READ: PASS
+PRIOR_REGRESSION_SEGMENT_READ: PASS
+NON_TERMINAL_MANAGED_JOBS: 0
+ROLLBACK_TRIGGER_OBSERVED: NO
+TEMP_OBSERVATION_WORKFLOW_REMOVED: VERIFIED
 ORIGINAL_RENDER_POSTGRESQL: RETAINED_FOR_ROLLBACK
 SOURCE_DATABASE_DELETION: NOT_AUTHORIZED
+ROLLBACK_OBSERVATION_WINDOW: ACTIVE
 RELEASE_HOLD_OWNER_TESTING: PRESERVED
 
-Next gate: owner-only post-cutover regression and observation. A controlled live media job is separate from the completed database cutover because it can invoke retrieval/STT providers and may consume provider resources.
+Next migration-stream action: continue the rollback observation window. Before proposing closure, re-confirm exact-head feature-branch CI and the availability of the original Render PostgreSQL rollback source. No additional provider-consuming media job is required.
