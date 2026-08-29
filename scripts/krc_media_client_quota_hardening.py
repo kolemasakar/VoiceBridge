@@ -240,4 +240,34 @@ replace_once(
   });"""
 )
 
+# Both managed and legacy client stores may initialize on the same process boot.
+# PostgreSQL CREATE TABLE IF NOT EXISTS can still race in separate sessions, so
+# serialize the shared schema DDL with one session advisory lock.
+for schema_path in (
+    "src/cloud/src/managed_media_persistence.ts",
+    "src/cloud/src/media_client_persistence.ts",
+):
+    replace_once(
+        schema_path,
+        """  private async initialize(): Promise<void> {
+    await this.run(`
+CREATE TABLE IF NOT EXISTS""",
+        """  private async initialize(): Promise<void> {
+    await this.run(`
+SELECT pg_advisory_lock(hashtext('krc_media_schema_init'));
+CREATE TABLE IF NOT EXISTS"""
+    )
+    replace_once(
+        schema_path,
+        """CREATE INDEX IF NOT EXISTS krc_media_stt_charges_day_idx
+  ON krc_media_stt_charges (day_utc);
+`);
+  }""",
+        """CREATE INDEX IF NOT EXISTS krc_media_stt_charges_day_idx
+  ON krc_media_stt_charges (day_utc);
+SELECT pg_advisory_unlock(hashtext('krc_media_schema_init'));
+`);
+  }"""
+    )
+
 print("legacy client-assisted shared quota hardening prepared")
