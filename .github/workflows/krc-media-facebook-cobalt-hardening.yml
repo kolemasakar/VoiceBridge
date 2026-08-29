@@ -18,13 +18,13 @@ jobs:
       - name: Checkout trigger head
         uses: actions/checkout@v4
         with:
-          fetch-depth: 2
+          fetch-depth: 0
 
-      - name: Verify expected closure baseline
+      - name: Verify closure baseline is an ancestor
         shell: bash
         run: |
           set -euo pipefail
-          [[ "$(git rev-parse HEAD^)" == "21127f86ae35625421d0257c59c689407ccdb2ab" ]]
+          git merge-base --is-ancestor 21127f86ae35625421d0257c59c689407ccdb2ab HEAD
 
       - name: Apply active Facebook route hardening
         shell: bash
@@ -59,7 +59,7 @@ jobs:
           );
         }
         const quote = await service.preflight(input);
-'''
+          '''
           preflight_new = '''        if (!input) {
           throw new MediaTranscriptError(
             "INVALID_REQUEST",
@@ -77,7 +77,7 @@ jobs:
           );
         }
         const quote = await service.preflight(input);
-'''
+          '''
           assert text.count(preflight_anchor) == 1
           text = text.replace(preflight_anchor, preflight_new, 1)
 
@@ -90,7 +90,7 @@ jobs:
           );
         }
         const job = await service.startNative(input);
-'''
+          '''
           start_new = '''        if (!input) {
           throw new MediaTranscriptError(
             "MEDIA_CREDIT_CONSENT_REQUIRED",
@@ -108,7 +108,7 @@ jobs:
           );
         }
         const job = await service.startNative(input);
-'''
+          '''
           assert text.count(start_anchor) == 1
           text = text.replace(start_anchor, start_new, 1)
           http.write_text(text)
@@ -119,63 +119,67 @@ jobs:
   transcriptCalls = 0;
 
   async quoteNative() {
-'''
+          '''
           class_new = '''class FakeManagedProvider implements ManagedNativeTranscriptProvider {
   quoteCalls = 0;
   transcriptCalls = 0;
 
   async quoteNative() {
     this.quoteCalls += 1;
-'''
+          '''
           assert tests.count(class_anchor) == 1
           tests = tests.replace(class_anchor, class_new, 1)
 
           new_test = r'''
 
-test("active HTTP boundary rejects Facebook on generic Supadata native routes", async () => {
-  const provider = new FakeManagedProvider();
-  const service = new ManagedMediaService(
-    new MediaBetaGate([ACCESS_CODE]),
-    null,
-    provider
-  );
-  const handler = createManagedMediaHttpHandler(CONFIG, service);
-  const server = createServer(async (request, response) => {
-    if (await handler.handle(request, response)) return;
-    response.statusCode = 404;
-    response.end();
-  });
-  const baseUrl = await listen(server);
-  try {
-    const facebookUrl = "https://www.facebook.com/reel/1114235920664408/";
-    const preflight = await fetch(`${baseUrl}/api/v1/media/managed/preflight`, {
-      method: "POST",
-      headers: actionHeaders(),
-      body: JSON.stringify({ url: facebookUrl, language_hint: "auto" })
-    });
-    assert.equal(preflight.status, 400);
-    const preflightBody = await preflight.json() as { error?: { code?: string } };
-    assert.equal(preflightBody.error?.code, "FACEBOOK_FREE_RETRIEVAL_REQUIRED");
+          test("active HTTP boundary rejects Facebook on generic Supadata native routes", async () => {
+            const provider = new FakeManagedProvider();
+            const service = new ManagedMediaService(
+              new MediaBetaGate([ACCESS_CODE]),
+              null,
+              provider
+            );
+            const handler = createManagedMediaHttpHandler(CONFIG, service);
+            const server = createServer(async (request, response) => {
+              if (await handler.handle(request, response)) return;
+              response.statusCode = 404;
+              response.end();
+            });
+            const baseUrl = await listen(server);
+            try {
+              const facebookUrl = "https://www.facebook.com/reel/1114235920664408/";
+              const preflight = await fetch(`${baseUrl}/api/v1/media/managed/preflight`, {
+                method: "POST",
+                headers: actionHeaders(),
+                body: JSON.stringify({ url: facebookUrl, language_hint: "auto" })
+              });
+              assert.equal(preflight.status, 400);
+              const preflightBody = await preflight.json() as { error?: { code?: string } };
+              assert.equal(preflightBody.error?.code, "FACEBOOK_FREE_RETRIEVAL_REQUIRED");
 
-    const start = await fetch(`${baseUrl}/api/v1/media/managed/transcriptions`, {
-      method: "POST",
-      headers: actionHeaders(),
-      body: JSON.stringify({
-        url: facebookUrl,
-        language_hint: "auto",
-        credit_consent: { provider: "supadata", mode: "native", max_credits: 1 }
-      })
-    });
-    assert.equal(start.status, 409);
-    const startBody = await start.json() as { error?: { code?: string } };
-    assert.equal(startBody.error?.code, "FACEBOOK_FREE_RETRIEVAL_REQUIRED");
-    assert.equal(provider.quoteCalls, 0);
-    assert.equal(provider.transcriptCalls, 0);
-  } finally {
-    await close(server);
-  }
-});
-'''
+              const start = await fetch(`${baseUrl}/api/v1/media/managed/transcriptions`, {
+                method: "POST",
+                headers: actionHeaders(),
+                body: JSON.stringify({
+                  url: facebookUrl,
+                  language_hint: "auto",
+                  credit_consent: { provider: "supadata", mode: "native", max_credits: 1 }
+                })
+              });
+              assert.equal(start.status, 409);
+              const startBody = await start.json() as { error?: { code?: string } };
+              assert.equal(startBody.error?.code, "FACEBOOK_FREE_RETRIEVAL_REQUIRED");
+              assert.equal(provider.quoteCalls, 0);
+              assert.equal(provider.transcriptCalls, 0);
+            } finally {
+              await close(server);
+            }
+          });
+          '''
+          new_test = '\n'.join(
+              line[10:] if line.startswith('          ') else line
+              for line in new_test.splitlines()
+          )
           assert 'active HTTP boundary rejects Facebook on generic Supadata native routes' not in tests
           test_path.write_text(tests.rstrip() + new_test + '\n')
 
@@ -185,7 +189,8 @@ test("active HTTP boundary rejects Facebook on generic Supadata native routes", 
           new = '''  assert.equal(capability.facebook_ai_fallback, false);
   assert.equal(capability.facebook_ai_requires_duration_metadata, false);
   assert.equal(capability.facebook_ai_metadata_credits, 0);
-'''
+          '''
+          new = '\n'.join(line[10:] if line.startswith('          ') else line for line in new.splitlines()) + '\n'
           assert itext.count(old) == 1
           instagram.write_text(itext.replace(old, new, 1))
           PY
