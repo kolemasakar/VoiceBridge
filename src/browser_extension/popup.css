@@ -116,7 +116,8 @@ label.field span {
   margin-bottom: 4px;
 }
 
-label.field input {
+label.field input,
+label.field select {
   box-sizing: border-box;
   width: 100%;
   padding: 8px;
@@ -126,16 +127,27 @@ label.field input {
   background: #ffffff;
 }
 
+label.field select:disabled {
+  color: #64748b;
+  background: #f1f5f9;
+}
+
 #save-cloud {
   width: 100%;
   margin-top: 10px;
 }
 
-#cloud-detail {
+#cloud-detail,
+#language-detail {
   min-height: 15px;
   margin: 7px 0 0;
   color: #64748b;
   font-size: 11px;
+}
+
+.language-card .section-title strong {
+  color: #64748b;
+  font-size: 10px;
 }
 
 .status-card {
