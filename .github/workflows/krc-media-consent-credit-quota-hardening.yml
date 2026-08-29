@@ -1,0 +1,847 @@
+name: KRC MEDIA Consent Credit Quota Hardening
+on:
+  push:
+    branches:
+      - agent/krc-media-transcript
+    paths:
+      - .github/workflows/krc-media-consent-credit-quota-hardening.yml
+permissions:
+  contents: write
+jobs:
+  harden:
+    runs-on: ubuntu-24.04
+    services:
+      postgres:
+        image: postgres:18
+        env:
+          POSTGRES_PASSWORD: postgres
+          POSTGRES_DB: krc_media_quota_test
+        ports:
+          - 5432:5432
+        options: >-
+          --health-cmd "pg_isready -U postgres -d krc_media_quota_test"
+          --health-interval 5s
+          --health-timeout 5s
+          --health-retries 20
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+      - name: Verify baseline
+        shell: bash
+        run: |
+          set -euo pipefail
+          test "$(git branch --show-current)" = "agent/krc-media-transcript"
+          git merge-base --is-ancestor ea65c5f7c7b4d079500601af07bace920ad7eb80 HEAD
+      - name: Patch durable quota and service consent guards
+        shell: bash
+        run: |
+          set -euo pipefail
+          python - <<'PY'
+          from pathlib import Path
+
+          def replace_once(path: str, old: str, new: str) -> None:
+              p = Path(path)
+              s = p.read_text()
+              count = s.count(old)
+              if count != 1:
+                  raise SystemExit(f'{path}: expected one replacement, found {count}: {old[:80]!r}')
+              p.write_text(s.replace(old, new, 1))
+
+          # Pipeline quota callbacks become awaitable so a durable quota reservation
+          # is committed before AssemblyAI work starts.
+          for path in [
+              'src/cloud/src/facebook_managed_pipeline.ts',
+              'src/cloud/src/telegram_managed_pipeline.ts',
+              'src/cloud/src/attachment_managed_pipeline.ts',
+          ]:
+              p = Path(path)
+              s = p.read_text()
+              old = 'reserveSttSeconds: (seconds: number) => void'
+              if old not in s:
+                  raise SystemExit(f'{path}: callback signature baseline missing')
+              s = s.replace(old, 'reserveSttSeconds: (seconds: number) => void | Promise<void>')
+              p.write_text(s)
+
+          replace_once(
+              'src/cloud/src/facebook_managed_pipeline.ts',
+              '      reserveSttSeconds(duration);',
+              '      await reserveSttSeconds(duration);'
+          )
+          replace_once(
+              'src/cloud/src/telegram_managed_pipeline.ts',
+              '    reserveSttSeconds(duration);',
+              '    await reserveSttSeconds(duration);'
+          )
+          replace_once(
+              'src/cloud/src/attachment_managed_pipeline.ts',
+              '      reserveSttSeconds(durationSeconds);',
+              '      await reserveSttSeconds(durationSeconds);'
+          )
+
+          # Fail closed on invalid internal quota duration input.
+          replace_once(
+              'src/cloud/src/media_beta.ts',
+              '''  ): MediaBetaReserveResult {
+    const seconds = Math.max(1, Math.ceil(requestedSeconds));
+    const day = utcDay(now);''',
+              '''  ): MediaBetaReserveResult {
+    if (!Number.isFinite(requestedSeconds) || requestedSeconds <= 0) {
+      return { allowed: false, usage: this.usage(now) };
+    }
+    const seconds = Math.ceil(requestedSeconds);
+    const day = utcDay(now);'''
+          )
+
+          # Extend managed store with an optional durable, atomic STT quota ledger.
+          replace_once(
+              'src/cloud/src/managed_media_service.ts',
+              '''export interface ManagedMediaStoreReservation {
+  created: boolean;
+  record: ManagedMediaStoredRecord;
+}
+
+export interface ManagedMediaJobStore {''',
+              '''export interface ManagedMediaStoreReservation {
+  created: boolean;
+  record: ManagedMediaStoredRecord;
+}
+
+export interface ManagedMediaSttReservation {
+  allowed: boolean;
+  used_seconds: number;
+  remaining_seconds: number;
+}
+
+export interface ManagedMediaJobStore {'''
+          )
+          replace_once(
+              'src/cloud/src/managed_media_service.ts',
+              '''  reserve(record: ManagedMediaStoredRecord): Promise<ManagedMediaStoreReservation>;
+  put(record: ManagedMediaStoredRecord): Promise<void>;
+  get(jobId: string): Promise<ManagedMediaStoredRecord | null>;
+}''',
+              '''  reserve(record: ManagedMediaStoredRecord): Promise<ManagedMediaStoreReservation>;
+  put(record: ManagedMediaStoredRecord): Promise<void>;
+  get(jobId: string): Promise<ManagedMediaStoredRecord | null>;
+  reserveSttSeconds?(
+    jobId: string,
+    dayUtc: string,
+    requestedSeconds: number,
+    dailyLimitSeconds: number
+  ): Promise<ManagedMediaSttReservation>;
+}'''
+          )
+
+          # Add one service-level quota reservation helper. Persistent stores are
+          # authoritative; memory stores retain the existing in-process gate.
+          replace_once(
+              'src/cloud/src/managed_media_service.ts',
+              '''  async preflight(
+    input: ManagedMediaPreflightInput
+  ): Promise<ManagedMediaCreditPreflight> {''',
+              '''  private async reserveSttQuota(jobId: string, requestedSeconds: number): Promise<void> {
+    if (!Number.isFinite(requestedSeconds) || requestedSeconds <= 0) {
+      throw new MediaTranscriptError(
+        "MEDIA_STT_DURATION_INVALID",
+        "The media duration is invalid for STT quota reservation.",
+        422,
+        false
+      );
+    }
+    const now = new Date();
+    const usage = this.betaGate.usage(now);
+    if (this.store.reserveSttSeconds) {
+      let reservation: ManagedMediaSttReservation;
+      try {
+        reservation = await this.store.reserveSttSeconds(
+          jobId,
+          usage.day_utc,
+          requestedSeconds,
+          usage.daily_limit_seconds
+        );
+      } catch {
+        throw new MediaTranscriptError(
+          "MANAGED_DURABLE_STORE_UNAVAILABLE",
+          "The managed media durable quota ledger is temporarily unavailable.",
+          503,
+          true
+        );
+      }
+      if (!reservation.allowed) {
+        throw new MediaTranscriptError(
+          "MEDIA_BETA_STT_QUOTA_EXHAUSTED",
+          "The closed MEDIA BETA daily STT quota is exhausted.",
+          429,
+          false
+        );
+      }
+      this.betaGate.restoreUsage(usage.day_utc, reservation.used_seconds);
+      return;
+    }
+    const reservation = this.betaGate.reserveSttSeconds(requestedSeconds, now);
+    if (!reservation.allowed) {
+      throw new MediaTranscriptError(
+        "MEDIA_BETA_STT_QUOTA_EXHAUSTED",
+        "The closed MEDIA BETA daily STT quota is exhausted.",
+        429,
+        false
+      );
+    }
+  }
+
+  async preflight(
+    input: ManagedMediaPreflightInput
+  ): Promise<ManagedMediaCreditPreflight> {'''
+          )
+
+          # Native consent is enforced again inside the service, before quote/store work.
+          replace_once(
+              'src/cloud/src/managed_media_service.ts',
+              '''  async startNative(input: ManagedMediaNativeInput): Promise<ManagedMediaJobView> {
+    this.authorize(input.beta_access_code);
+    await this.ensureStore();''',
+              '''  async startNative(input: ManagedMediaNativeInput): Promise<ManagedMediaJobView> {
+    this.authorize(input.beta_access_code);
+    if (
+      input.credit_consent?.provider !== "supadata" ||
+      input.credit_consent?.mode !== "native" ||
+      input.credit_consent?.max_credits !== 1
+    ) {
+      throw new MediaTranscriptError(
+        "MEDIA_CREDIT_CONSENT_REQUIRED",
+        "Exact one-credit Supadata native consent is required before processing.",
+        409,
+        false
+      );
+    }
+    await this.ensureStore();'''
+          )
+
+          # Metadata consent is enforced before provider quote or state mutation.
+          replace_once(
+              'src/cloud/src/managed_media_service.ts',
+              '''  ): Promise<ManagedMediaJobView> {
+    const record = await this.authorizedRecord(jobId, input.beta_access_code);
+    this.authorizeFacebookMetadataProvider();
+    if ((record.job.media_duration_seconds ?? null) !== null) {''',
+              '''  ): Promise<ManagedMediaJobView> {
+    const record = await this.authorizedRecord(jobId, input.beta_access_code);
+    if (
+      input.credit_consent?.provider !== "supadata" ||
+      input.credit_consent?.mode !== "metadata" ||
+      input.credit_consent?.max_credits !== 1
+    ) {
+      throw new MediaTranscriptError(
+        "MEDIA_METADATA_CREDIT_CONSENT_REQUIRED",
+        "Exact one-credit Supadata metadata consent is required before duration lookup.",
+        409,
+        false
+      );
+    }
+    this.authorizeFacebookMetadataProvider();
+    if ((record.job.media_duration_seconds ?? null) !== null) {'''
+          )
+
+          # Paid Facebook continuation validates consent before any PROCESSING mutation.
+          replace_once(
+              'src/cloud/src/managed_media_service.ts',
+              '''    const record = await this.authorizedRecord(jobId, input.beta_access_code);
+    this.authorizeFacebookPipeline(input.beta_access_code);
+    if (record.job.provider_mode === "facebook_retrieval_stt" && record.job.status === "COMPLETED") {''',
+              '''    const record = await this.authorizedRecord(jobId, input.beta_access_code);
+    this.authorizeFacebookPipeline(input.beta_access_code);
+    if (!parseFacebookRetrievalCreditConsent(input.credit_consent)) {
+      throw new MediaTranscriptError(
+        "FACEBOOK_RETRIEVAL_CREDIT_CONSENT_REQUIRED",
+        "Exact one-credit ScrapeCreators consent is required before paid Facebook retrieval.",
+        409,
+        false
+      );
+    }
+    if (record.job.provider_mode === "facebook_retrieval_stt" && record.job.status === "COMPLETED") {'''
+          )
+
+          # Generated AI consent shape is enforced before provider authorization/quote.
+          replace_once(
+              'src/cloud/src/managed_media_service.ts',
+              '''  ): Promise<ManagedMediaJobView> {
+    const record = await this.authorizedRecord(jobId, input.beta_access_code);
+    this.authorizeAiProvider();
+
+    if (record.job.provider_mode === "generate") {''',
+              '''  ): Promise<ManagedMediaJobView> {
+    const record = await this.authorizedRecord(jobId, input.beta_access_code);
+    if (
+      input.credit_consent?.provider !== "supadata" ||
+      input.credit_consent?.mode !== "generate" ||
+      !Number.isInteger(input.credit_consent?.max_credits) ||
+      input.credit_consent.max_credits < 2 ||
+      input.credit_consent.max_credits > 10000
+    ) {
+      throw new MediaTranscriptError(
+        "MEDIA_AI_CREDIT_CONSENT_REQUIRED",
+        "A valid explicit Supadata AI credit consent is required before generated transcription.",
+        409,
+        false
+      );
+    }
+    this.authorizeAiProvider();
+
+    if (record.job.provider_mode === "generate") {'''
+          )
+
+          # Replace all three managed STT callbacks with the durable helper.
+          service = Path('src/cloud/src/managed_media_service.ts')
+          s = service.read_text()
+          blocks = [
+              ('''        (seconds) => {
+          const quota = this.betaGate.reserveSttSeconds(seconds);
+          if (!quota.allowed) {
+            throw new MediaTranscriptError(
+              "MEDIA_BETA_STT_QUOTA_EXHAUSTED",
+              "The closed MEDIA BETA daily STT quota is exhausted.",
+              429,
+              false
+            );
+          }
+        }
+''', '''        (seconds) => this.reserveSttQuota(job.job_id, seconds)
+'''),
+              ('''        (seconds) => {
+          const quota = this.betaGate.reserveSttSeconds(seconds);
+          if (!quota.allowed) {
+            throw new MediaTranscriptError(
+              "MEDIA_BETA_STT_QUOTA_EXHAUSTED",
+              "The closed MEDIA BETA daily STT quota is exhausted.",
+              429,
+              false
+            );
+          }
+        }
+''', '''        (seconds) => this.reserveSttQuota(job.job_id, seconds)
+'''),
+              ('''    const stt = await this.facebookPipeline!.transcribe(asset, languageHint, (seconds) => {
+      const reservation = this.betaGate.reserveSttSeconds(seconds);
+      if (!reservation.allowed) {
+        throw new MediaTranscriptError(
+          "MEDIA_BETA_STT_QUOTA_EXHAUSTED",
+          "The closed MEDIA BETA daily STT quota is exhausted.",
+          429,
+          false
+        );
+      }
+    });''', '''    const stt = await this.facebookPipeline!.transcribe(
+      asset,
+      languageHint,
+      (seconds) => this.reserveSttQuota(record.job.job_id, seconds)
+    );'''),
+          ]
+          # The first two blocks are text-identical (attachment, Telegram); replace sequentially.
+          old = blocks[0][0]
+          if s.count(old) != 2:
+              raise SystemExit(f'expected 2 attachment/telegram quota blocks, found {s.count(old)}')
+          s = s.replace(old, blocks[0][1], 1)
+          s = s.replace(old, blocks[1][1], 1)
+          old_fb, new_fb = blocks[2]
+          if s.count(old_fb) != 1:
+              raise SystemExit('Facebook quota callback baseline missing')
+          s = s.replace(old_fb, new_fb, 1)
+          service.write_text(s)
+
+          # Durable store: atomic per-day ledger shared with the existing client STT charge table.
+          replace_once(
+              'src/cloud/src/managed_media_persistence.ts',
+              '''  ManagedMediaJobStore,
+  ManagedMediaStoredRecord,
+  ManagedMediaStoreReservation,
+  ManagedMediaStatus''',
+              '''  ManagedMediaJobStore,
+  ManagedMediaStoredRecord,
+  ManagedMediaStoreReservation,
+  ManagedMediaSttReservation,
+  ManagedMediaStatus'''
+          )
+          replace_once(
+              'src/cloud/src/managed_media_persistence.ts',
+              '''  async purgeExpired(): Promise<void> {
+    await this.ready();''',
+              '''  async reserveSttSeconds(
+    jobId: string,
+    dayUtc: string,
+    requestedSeconds: number,
+    dailyLimitSeconds: number
+  ): Promise<ManagedMediaSttReservation> {
+    if (!JOB_ID.test(jobId)) throw new Error("Invalid managed quota job id.");
+    if (!/^\\d{4}-\\d{2}-\\d{2}$/.test(dayUtc)) {
+      throw new Error("Invalid managed quota day.");
+    }
+    if (!Number.isFinite(requestedSeconds) || requestedSeconds <= 0) {
+      throw new Error("Invalid managed quota seconds.");
+    }
+    if (!Number.isInteger(dailyLimitSeconds) || dailyLimitSeconds < 60 || dailyLimitSeconds > 86400) {
+      throw new Error("Invalid managed daily quota limit.");
+    }
+    const seconds = Math.ceil(requestedSeconds);
+    await this.ready();
+    const output = await this.run(`
+WITH quota_lock AS MATERIALIZED (
+  SELECT pg_advisory_xact_lock(hashtext('krc_media_stt_quota|${dayUtc}'))
+),
+existing AS MATERIALIZED (
+  SELECT day_utc, seconds
+  FROM krc_media_stt_charges
+  WHERE job_id='${jobId}'
+),
+usage_before AS MATERIALIZED (
+  SELECT COALESCE(SUM(charges.seconds), 0)::bigint AS used_seconds
+  FROM quota_lock
+  LEFT JOIN krc_media_stt_charges charges
+    ON charges.day_utc='${dayUtc}'::date
+),
+inserted AS (
+  INSERT INTO krc_media_stt_charges (job_id, day_utc, seconds)
+  SELECT '${jobId}', '${dayUtc}'::date, ${seconds}
+  FROM usage_before
+  WHERE NOT EXISTS (SELECT 1 FROM existing)
+    AND usage_before.used_seconds + ${seconds} <= ${dailyLimitSeconds}
+  ON CONFLICT (job_id) DO NOTHING
+  RETURNING seconds
+)
+SELECT
+  CASE
+    WHEN EXISTS (
+      SELECT 1 FROM existing
+      WHERE day_utc='${dayUtc}'::date AND seconds >= ${seconds}
+    ) THEN 1
+    WHEN EXISTS (SELECT 1 FROM inserted) THEN 1
+    ELSE 0
+  END,
+  usage_before.used_seconds + COALESCE((SELECT SUM(seconds) FROM inserted), 0),
+  GREATEST(
+    0,
+    ${dailyLimitSeconds} - (
+      usage_before.used_seconds + COALESCE((SELECT SUM(seconds) FROM inserted), 0)
+    )
+  )
+FROM usage_before;
+`);
+    const line = output
+      .split(/\\r?\\n/)
+      .filter((item) => item.split("\\t").length === 3)
+      .at(-1);
+    if (!line) throw new Error("Managed media quota reservation returned no row.");
+    const [allowedRaw, usedRaw, remainingRaw] = line.split("\\t");
+    const used = Number(usedRaw);
+    const remaining = Number(remainingRaw);
+    if ((allowedRaw !== "0" && allowedRaw !== "1") || !Number.isFinite(used) || !Number.isFinite(remaining)) {
+      throw new Error("Managed media quota reservation row is malformed.");
+    }
+    return {
+      allowed: allowedRaw === "1",
+      used_seconds: Math.max(0, Math.floor(used)),
+      remaining_seconds: Math.max(0, Math.floor(remaining))
+    };
+  }
+
+  async purgeExpired(): Promise<void> {
+    await this.ready();'''
+          )
+          replace_once(
+              'src/cloud/src/managed_media_persistence.ts',
+              '''CREATE INDEX IF NOT EXISTS krc_managed_media_jobs_updated_idx
+  ON krc_managed_media_jobs (updated_at DESC);
+`);''',
+              '''CREATE INDEX IF NOT EXISTS krc_managed_media_jobs_updated_idx
+  ON krc_managed_media_jobs (updated_at DESC);
+CREATE TABLE IF NOT EXISTS krc_media_stt_charges (
+  job_id text PRIMARY KEY,
+  day_utc date NOT NULL,
+  seconds integer NOT NULL CHECK (seconds >= 0),
+  created_at timestamptz NOT NULL DEFAULT now()
+);
+CREATE INDEX IF NOT EXISTS krc_media_stt_charges_day_idx
+  ON krc_media_stt_charges (day_utc);
+`);'''
+          )
+          PY
+      - name: Add consent credit quota regression matrix
+        shell: bash
+        run: |
+          set -euo pipefail
+          cat > src/cloud/tests/managed_media_consent_credit_quota.test.ts <<'EOF'
+          import assert from "node:assert/strict";
+          import { test } from "node:test";
+          import type { ManagedAttachmentPipeline } from "../src/attachment_managed_pipeline.js";
+          import type { ManagedFacebookPipeline } from "../src/facebook_managed_pipeline.js";
+          import { MediaBetaGate } from "../src/media_beta.js";
+          import {
+            ManagedMediaService,
+            managedMediaAccessDigest,
+            parseManagedMediaAiInput,
+            parseManagedMediaFacebookFallbackConsentInput,
+            parseManagedMediaFacebookMetadataInput,
+            parseManagedMediaNativeInput,
+            type ManagedMediaJobStore,
+            type ManagedMediaJobView,
+            type ManagedMediaStoredRecord,
+            type ManagedMediaStoreReservation,
+            type ManagedMediaSttReservation,
+            type ManagedNativeTranscriptProvider
+          } from "../src/managed_media_service.js";
+
+          const ACCESS_CODE = "consent-credit-owner-2026";
+
+          class FixtureStore implements ManagedMediaJobStore {
+            readonly durable = true;
+            readonly kind = "postgres" as const;
+            protected readonly records = new Map<string, ManagedMediaStoredRecord>();
+            add(record: ManagedMediaStoredRecord): void { this.records.set(record.job.job_id, structuredClone(record)); }
+            async ready(): Promise<void> {}
+            async purgeExpired(): Promise<void> {}
+            async findByRequestKey(key: string): Promise<ManagedMediaStoredRecord | null> {
+              for (const record of this.records.values()) if (record.requestKey === key) return structuredClone(record);
+              return null;
+            }
+            async reserve(record: ManagedMediaStoredRecord): Promise<ManagedMediaStoreReservation> {
+              const existing = await this.findByRequestKey(record.requestKey);
+              if (existing) return { created: false, record: existing };
+              this.add(record);
+              return { created: true, record: structuredClone(record) };
+            }
+            async put(record: ManagedMediaStoredRecord): Promise<void> { this.add(record); }
+            async get(jobId: string): Promise<ManagedMediaStoredRecord | null> {
+              const record = this.records.get(jobId);
+              return record ? structuredClone(record) : null;
+            }
+          }
+
+          class QuotaStore extends FixtureStore {
+            quotaCalls = 0;
+            constructor(private readonly reservation: ManagedMediaSttReservation) { super(); }
+            async reserveSttSeconds(): Promise<ManagedMediaSttReservation> {
+              this.quotaCalls += 1;
+              return { ...this.reservation };
+            }
+          }
+
+          function record(
+            id: string,
+            sourceUrl: string,
+            status: ManagedMediaJobView["status"],
+            providerMode: ManagedMediaJobView["provider_mode"]
+          ): ManagedMediaStoredRecord {
+            const now = new Date().toISOString();
+            return {
+              job: {
+                job_id: id,
+                status,
+                created_at: now,
+                updated_at: now,
+                source_url: sourceUrl,
+                language_hint: "auto",
+                provider: providerMode === "facebook_retrieval_stt" ? "assemblyai" : "supadata",
+                provider_mode: providerMode,
+                detected_language: null,
+                available_languages: [],
+                credits_charged: 0,
+                credits_remaining_estimate: 100,
+                credit_charge_uncertain: false,
+                reused: false,
+                segment_count: 0,
+                transcript_characters: 0,
+                ai_fallback_requires_new_consent: status === "AWAITING_AI_CONSENT",
+                media_duration_seconds: null,
+                ai_credit_ceiling: null,
+                metadata_credits_charged: 0,
+                error: null
+              },
+              requestKey: "a".repeat(64 - id.length % 20) + id.slice(-Math.min(id.length, 20)).padEnd(Math.min(id.length, 20), "a"),
+              accessCodeDigest: managedMediaAccessDigest(ACCESS_CODE),
+              segments: [],
+              expiresAt: new Date(Date.now() + 60_000).toISOString()
+            };
+          }
+
+          function safeRecord(
+            id: string,
+            sourceUrl: string,
+            status: ManagedMediaJobView["status"],
+            providerMode: ManagedMediaJobView["provider_mode"]
+          ): ManagedMediaStoredRecord {
+            const value = record(id, sourceUrl, status, providerMode);
+            value.requestKey = managedMediaAccessDigest(`request-${id}`);
+            return value;
+          }
+
+          function errorCode(error: unknown): string | undefined {
+            return (error as { code?: string }).code;
+          }
+
+          test("consent parsers reject provider mode and credit-cap substitutions", () => {
+            const nativeBase = { url: "https://youtu.be/consent", beta_access_code: ACCESS_CODE };
+            for (const credit_consent of [
+              undefined,
+              { provider: "other", mode: "native", max_credits: 1 },
+              { provider: "supadata", mode: "generate", max_credits: 1 },
+              { provider: "supadata", mode: "native", max_credits: 0 },
+              { provider: "supadata", mode: "native", max_credits: 2 },
+              { provider: "supadata", mode: "native", max_credits: 1.5 }
+            ]) assert.equal(parseManagedMediaNativeInput({ ...nativeBase, credit_consent }), null);
+
+            for (const credit_consent of [
+              undefined,
+              { provider: "other", mode: "metadata", max_credits: 1 },
+              { provider: "supadata", mode: "generate", max_credits: 1 },
+              { provider: "supadata", mode: "metadata", max_credits: 2 }
+            ]) assert.equal(parseManagedMediaFacebookMetadataInput({ beta_access_code: ACCESS_CODE, credit_consent }), null);
+
+            for (const credit_consent of [
+              undefined,
+              { provider: "other", mode: "generate", max_credits: 40 },
+              { provider: "supadata", mode: "native", max_credits: 40 },
+              { provider: "supadata", mode: "generate", max_credits: 1 },
+              { provider: "supadata", mode: "generate", max_credits: 2.5 },
+              { provider: "supadata", mode: "generate", max_credits: 10001 }
+            ]) assert.equal(parseManagedMediaAiInput({ beta_access_code: ACCESS_CODE, credit_consent }), null);
+
+            for (const credit_consent of [
+              undefined,
+              { provider: "scrapecreators", mode: "facebook_post", max_credits: 2 },
+              { provider: "other", mode: "facebook_post", max_credits: 1 }
+            ]) assert.equal(parseManagedMediaFacebookFallbackConsentInput({ beta_access_code: ACCESS_CODE, credit_consent }), null);
+          });
+
+          test("service-level native consent guard stops forged typed input before quote or transcript work", async () => {
+            let quoteCalls = 0;
+            let nativeCalls = 0;
+            const provider: ManagedNativeTranscriptProvider = {
+              async quoteNative() {
+                quoteCalls += 1;
+                return { provider: "supadata", mode: "native", plan: "test", max_credits: 10, used_credits: 0, remaining_credits: 10, estimated_credits: 1, remaining_after_estimate: 9, consent_required: true, can_continue: true };
+              },
+              async getNativeTranscript() {
+                nativeCalls += 1;
+                return { status: "unavailable", billable_credits: 1 };
+              }
+            };
+            const service = new ManagedMediaService(new MediaBetaGate([ACCESS_CODE]), null, provider);
+            await assert.rejects(
+              () => service.startNative({
+                url: "https://youtu.be/forged",
+                language_hint: "auto",
+                beta_access_code: ACCESS_CODE,
+                credit_consent: { provider: "supadata", mode: "native", max_credits: 2 }
+              } as never),
+              (error: unknown) => errorCode(error) === "MEDIA_CREDIT_CONSENT_REQUIRED"
+            );
+            assert.equal(quoteCalls, 0);
+            assert.equal(nativeCalls, 0);
+          });
+
+          test("service-level metadata and AI consent guards stop forged input before provider work", async () => {
+            const store = new FixtureStore();
+            const counters = { metadataQuote: 0, metadataGet: 0, aiQuote: 0, aiGet: 0 };
+            const provider: ManagedNativeTranscriptProvider = {
+              async quoteNative() { throw new Error("unused"); },
+              async getNativeTranscript() { throw new Error("unused"); },
+              async quoteMetadata() {
+                counters.metadataQuote += 1;
+                return { provider: "supadata", mode: "metadata", plan: "test", max_credits: 10, used_credits: 0, remaining_credits: 10, estimated_credits: 1, remaining_after_estimate: 9, consent_required: true, can_continue: true };
+              },
+              async getMetadataDuration() {
+                counters.metadataGet += 1;
+                return { duration_seconds: 60, billable_credits: 1 };
+              },
+              async quoteGenerateForDuration() {
+                counters.aiQuote += 1;
+                return { provider: "supadata", mode: "generate", plan: "test", max_credits: 100, used_credits: 0, remaining_credits: 100, estimated_credits: 2, maximum_credits: 2, credits_per_minute: 2, maximum_duration_minutes: 20, remaining_after_estimate: 98, conservative_maximum: true, consent_required: true, can_continue: true };
+              },
+              async quoteGenerateInstagramReel() {
+                counters.aiQuote += 1;
+                return { provider: "supadata", mode: "generate", plan: "test", max_credits: 100, used_credits: 0, remaining_credits: 100, estimated_credits: 40, maximum_credits: 40, credits_per_minute: 2, maximum_duration_minutes: 20, remaining_after_estimate: 60, conservative_maximum: true, consent_required: true, can_continue: true };
+              },
+              async getGeneratedTranscript() {
+                counters.aiGet += 1;
+                return { status: "completed", language: "en", available_languages: ["en"], segments: [], transcript_text: "x", billable_credits: 1 };
+              }
+            };
+            const service = new ManagedMediaService(new MediaBetaGate([ACCESS_CODE]), null, provider, { store });
+            const metadataRecord = safeRecord("KRCM_metadata-consent", "https://www.facebook.com/reel/1234567890123456", "AWAITING_AI_CONSENT", "native");
+            store.add(metadataRecord);
+            await assert.rejects(
+              () => service.startFacebookMetadata(metadataRecord.job.job_id, {
+                beta_access_code: ACCESS_CODE,
+                credit_consent: { provider: "supadata", mode: "metadata", max_credits: 2 }
+              } as never),
+              (error: unknown) => errorCode(error) === "MEDIA_METADATA_CREDIT_CONSENT_REQUIRED"
+            );
+            assert.equal(counters.metadataQuote, 0);
+            assert.equal(counters.metadataGet, 0);
+
+            const aiRecord = safeRecord("KRCM_ai-consent", "https://www.instagram.com/reel/AI123/", "AWAITING_AI_CONSENT", "native");
+            store.add(aiRecord);
+            await assert.rejects(
+              () => service.startAi(aiRecord.job.job_id, {
+                beta_access_code: ACCESS_CODE,
+                credit_consent: { provider: "other", mode: "generate", max_credits: 40 }
+              } as never),
+              (error: unknown) => errorCode(error) === "MEDIA_AI_CREDIT_CONSENT_REQUIRED"
+            );
+            assert.equal(counters.aiQuote, 0);
+            assert.equal(counters.aiGet, 0);
+          });
+
+          test("stale AI maximum and exhausted provider balance stop before generated transcript work", async () => {
+            const store = new FixtureStore();
+            let quoteCalls = 0;
+            let aiCalls = 0;
+            let canContinue = true;
+            const provider: ManagedNativeTranscriptProvider = {
+              async quoteNative() { throw new Error("unused"); },
+              async getNativeTranscript() { throw new Error("unused"); },
+              async quoteGenerateInstagramReel() {
+                quoteCalls += 1;
+                return { provider: "supadata", mode: "generate", plan: "test", max_credits: 100, used_credits: 0, remaining_credits: canContinue ? 100 : 10, estimated_credits: 40, maximum_credits: 40, credits_per_minute: 2, maximum_duration_minutes: 20, remaining_after_estimate: canContinue ? 60 : 0, conservative_maximum: true, consent_required: true, can_continue: canContinue };
+              },
+              async getGeneratedTranscript() {
+                aiCalls += 1;
+                return { status: "completed", language: "en", available_languages: ["en"], segments: [], transcript_text: "x", billable_credits: 1 };
+              }
+            };
+            const service = new ManagedMediaService(new MediaBetaGate([ACCESS_CODE]), null, provider, { store });
+            const first = safeRecord("KRCM_ai-stale", "https://www.instagram.com/reel/STALE1/", "AWAITING_AI_CONSENT", "native");
+            store.add(first);
+            await assert.rejects(
+              () => service.startAi(first.job.job_id, { beta_access_code: ACCESS_CODE, credit_consent: { provider: "supadata", mode: "generate", max_credits: 39 } }),
+              (error: unknown) => errorCode(error) === "MEDIA_AI_CREDIT_CONSENT_REQUIRED"
+            );
+            assert.equal(aiCalls, 0);
+            assert.equal(quoteCalls, 1);
+
+            canContinue = false;
+            const second = safeRecord("KRCM_ai-exhausted", "https://www.instagram.com/reel/STALE2/", "AWAITING_AI_CONSENT", "native");
+            store.add(second);
+            await assert.rejects(
+              () => service.startAi(second.job.job_id, { beta_access_code: ACCESS_CODE, credit_consent: { provider: "supadata", mode: "generate", max_credits: 40 } }),
+              (error: unknown) => errorCode(error) === "MANAGED_PROVIDER_CREDITS_EXHAUSTED"
+            );
+            assert.equal(aiCalls, 0);
+            assert.equal(quoteCalls, 2);
+          });
+
+          test("Facebook retrieval invalid typed consent is rejected before paid retrieval or state mutation", async () => {
+            const store = new FixtureStore();
+            const calls = { paid: 0, stt: 0 };
+            const pipeline: ManagedFacebookPipeline = {
+              configured: true,
+              async freeRetrieve() { return null; },
+              async paidRetrieve() { calls.paid += 1; throw new Error("must not run"); },
+              async transcribe() { calls.stt += 1; throw new Error("must not run"); }
+            };
+            const service = new ManagedMediaService(new MediaBetaGate([ACCESS_CODE]), null, null as never, { store, facebookPipeline: pipeline });
+            const waiting = safeRecord("KRCM_fb-consent", "https://www.facebook.com/reel/1234567890123456", "AWAITING_RETRIEVAL_CONSENT", "facebook_retrieval_stt");
+            store.add(waiting);
+            await assert.rejects(
+              () => service.continueFacebookFallback(waiting.job.job_id, {
+                beta_access_code: ACCESS_CODE,
+                credit_consent: { provider: "scrapecreators", mode: "facebook_post", max_credits: 2 }
+              } as never),
+              (error: unknown) => errorCode(error) === "FACEBOOK_RETRIEVAL_CREDIT_CONSENT_REQUIRED"
+            );
+            assert.equal(calls.paid, 0);
+            assert.equal(calls.stt, 0);
+            assert.equal((await store.get(waiting.job.job_id))?.job.status, "AWAITING_RETRIEVAL_CONSENT");
+          });
+
+          test("durable STT quota rejection happens before attachment provider work", async () => {
+            const store = new QuotaStore({ allowed: false, used_seconds: 60, remaining_seconds: 0 });
+            let providerStarts = 0;
+            const attachment: ManagedAttachmentPipeline = {
+              configured: true,
+              async transcribe(_file, _language, reserve) {
+                await reserve(30);
+                providerStarts += 1;
+                return { provider: "assemblyai", provider_model: "universal-2", provider_data_deleted: true, detected_language: "en", language_confidence: 1, duration_seconds: 30, transcript_text: "x", segments: [{ index: 0, start_ms: 0, end_ms: 1000, text: "x", confidence: null }] };
+              }
+            };
+            const service = new ManagedMediaService(new MediaBetaGate([ACCESS_CODE], 60), null, null as never, { store, attachmentPipeline: attachment });
+            const job = await service.startAttachment({
+              openaiFileIdRefs: [{ id: "file-quota", name: "quota.mp3", mime_type: "audio/mpeg", download_url: "https://example.oaiusercontent.com/file-quota" }],
+              language_hint: "auto",
+              beta_access_code: ACCESS_CODE
+            });
+            assert.equal(job.status, "FAILED");
+            assert.equal(job.error?.code, "MEDIA_BETA_STT_QUOTA_EXHAUSTED");
+            assert.equal(store.quotaCalls, 1);
+            assert.equal(providerStarts, 0);
+          });
+
+          test("invalid in-process quota durations fail closed without corrupting usage", () => {
+            const gate = new MediaBetaGate([ACCESS_CODE], 60);
+            for (const value of [Number.NaN, Number.POSITIVE_INFINITY, 0, -1]) {
+              const result = gate.reserveSttSeconds(value);
+              assert.equal(result.allowed, false);
+              assert.equal(result.usage.used_seconds, 0);
+              assert.equal(result.usage.remaining_seconds, 60);
+            }
+          });
+          EOF
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 24
+      - name: Run full cloud validation
+        working-directory: src/cloud
+        shell: bash
+        run: |
+          set -euo pipefail
+          npm ci
+          npm run check
+      - name: Validate PostgreSQL 18 durable quota ledger
+        working-directory: src/cloud
+        env:
+          KRC_QUOTA_TEST_DATABASE_URL: postgresql://postgres:postgres@127.0.0.1:5432/krc_media_quota_test?sslmode=disable
+        shell: bash
+        run: |
+          set -euo pipefail
+          psql --version
+          test "$(psql "$KRC_QUOTA_TEST_DATABASE_URL" -Atc 'show server_version_num')" -ge 180000
+          node --input-type=module <<'NODE'
+          import assert from 'node:assert/strict';
+          import { ManagedMediaPersistentStore } from './dist/src/managed_media_persistence.js';
+          const url = process.env.KRC_QUOTA_TEST_DATABASE_URL;
+          const store = new ManagedMediaPersistentStore(url);
+          await store.ready();
+          const day = '2026-08-29';
+          const first = await store.reserveSttSeconds('KRCM_quota-a', day, 40, 60);
+          assert.deepEqual(first, { allowed: true, used_seconds: 40, remaining_seconds: 20 });
+          const replay = await store.reserveSttSeconds('KRCM_quota-a', day, 40, 60);
+          assert.deepEqual(replay, { allowed: true, used_seconds: 40, remaining_seconds: 20 });
+          const blocked = await store.reserveSttSeconds('KRCM_quota-b', day, 21, 60);
+          assert.deepEqual(blocked, { allowed: false, used_seconds: 40, remaining_seconds: 20 });
+          const fill = await store.reserveSttSeconds('KRCM_quota-b', day, 20, 60);
+          assert.deepEqual(fill, { allowed: true, used_seconds: 60, remaining_seconds: 0 });
+          const nextDay = '2026-08-30';
+          const concurrent = await Promise.all([
+            store.reserveSttSeconds('KRCM_quota-c', nextDay, 40, 60),
+            store.reserveSttSeconds('KRCM_quota-d', nextDay, 40, 60)
+          ]);
+          assert.equal(concurrent.filter((item) => item.allowed).length, 1);
+          assert.equal(concurrent.filter((item) => !item.allowed).length, 1);
+          const used = await Promise.all([
+            store.reserveSttSeconds('KRCM_quota-c', nextDay, 40, 60),
+            store.reserveSttSeconds('KRCM_quota-d', nextDay, 40, 60)
+          ]);
+          assert.ok(used.every((item) => item.used_seconds === 40));
+          console.log('DURABLE_STT_QUOTA_LEDGER=PASS');
+          NODE
+      - name: Commit accepted hardening and remove temporary workflow
+        shell: bash
+        run: |
+          set -euo pipefail
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git rm .github/workflows/krc-media-consent-credit-quota-hardening.yml
+          git add src/cloud/src/media_beta.ts src/cloud/src/managed_media_service.ts src/cloud/src/managed_media_persistence.ts src/cloud/src/facebook_managed_pipeline.ts src/cloud/src/telegram_managed_pipeline.ts src/cloud/src/attachment_managed_pipeline.ts src/cloud/tests/managed_media_consent_credit_quota.test.ts
+          git commit -m "Harden managed media consent credit and durable quota boundaries"
+          git push origin HEAD:agent/krc-media-transcript
