@@ -12,10 +12,10 @@ Status:
 Approved
 
 Version:
-1.13.0
+1.14.0
 
 Last Updated:
-2026-07-22
+2026-08-29
 
 ## 1. Project Origin
 
@@ -116,39 +116,21 @@ The baseline is recorded in `docs/api/13_API_DESIGN.md`.
 
 ## 8. Current Repository State
 
+The authoritative application implementation is stored under:
+
 ```text
-docs/
-    adr/
-        ADR-001_CLOUD_FIRST_ARCHITECTURE.md
-    api/
-        13_API_DESIGN.md
-    architecture/
-        04_ARCHITECTURE.md
-        05_TECHNOLOGY_STACK.md
-    design/
-        10_SYSTEM_DESIGN.md
-    governance/
-        06_DEVELOPMENT_STANDARD.md
-        15_REPOSITORY_RULES.md
-        16_AI_DEVELOPMENT_RULES.md
-    history/
-        08_PROJECT_HISTORY.md
-        VOICEBRIDGE_DOCUMENTATION_AUTHOR_NOTES_UA.txt
-    overview/
-        01_PROJECT_OVERVIEW.md
-        07_PROJECT_DESCRIPTION.md
-    planning/
-        02_REPOSITORY_STRUCTURE.md
-        03_ROADMAP.md
-    requirements/
-        09_FUNCTIONAL_REQUIREMENTS.md
-        11_NON_FUNCTIONAL_REQUIREMENTS.md
-    security/
-        12_SECURITY_MODEL.md
+src/
+    browser_extension/
+    cloud/
 ```
 
-Documentation foundation status:
-Completed and synchronized with Cloud First.
+Canonical project documentation is stored under `docs/`, including architecture, planning, ADR, phase validation, history, governance, and bootstrap records.
+
+Current primary branch:
+
+`main`
+
+Current accepted Phase 1 runtime is documented in `README.md`, `docs/planning/03_ROADMAP.md`, `docs/architecture/04_ARCHITECTURE.md`, and `docs/architecture/05_TECHNOLOGY_STACK.md`.
 
 ## 9. Phase 1 Implementation Plan
 
@@ -164,7 +146,7 @@ The plan defines:
 - milestones, testing, validation, cost controls, and recovery.
 
 Phase 1 status:
-Active.
+Completed and validated.
 
 ## 10. Milestone 1 Browser Capture Validation
 
@@ -178,32 +160,7 @@ Validated extension:
 
 `src/browser_extension/`
 
-Validated version:
-
-`0.1.2`
-
-Test scenarios:
-
-- mixed film audio;
-- audiobook;
-- music track.
-
-Validation results:
-
-- capture started normally;
-- original audio remained audible;
-- original-volume control worked;
-- ducking worked;
-- visible `DUCKING` indication worked;
-- audio metadata worked;
-- continuous capture remained stable for 12 minutes;
-- stop and cleanup completed normally;
-- status returned to `IDLE`.
-
-Resolved defects:
-
-- unsupported `chrome.storage.local` access in the offscreen document;
-- missing visual ducking indication.
+Validated scenarios included mixed film audio, audiobook, and music. Capture, original-volume control, ducking, metadata, endurance, Stop, and cleanup passed the Phase 1 acceptance gate.
 
 Validation report:
 
@@ -211,13 +168,13 @@ Validation report:
 
 ## 11. Bootstrap and Author Notes
 
-The repository now stores cross-chat recovery packages under:
+The repository stores cross-chat recovery packages under:
 
 `docs/bootstrap/`
 
 The Documentation Foundation recovery package is archived because later Cloud First and Phase 1 work supersede its recorded Next Task.
 
-The user-provided Ukrainian documentation explanation is stored unchanged in meaning as:
+The user-provided Ukrainian documentation explanation is stored as:
 
 `docs/history/VOICEBRIDGE_DOCUMENTATION_AUTHOR_NOTES_UA.txt`
 
@@ -229,11 +186,7 @@ Implementation path:
 
 `src/cloud/`
 
-Runtime decision:
-
-`docs/adr/ADR-002_PHASE_1_CLOUD_SKELETON_RUNTIME.md`
-
-Implemented:
+Implemented and validated:
 
 - TypeScript and Node.js 24+ service;
 - public health endpoint;
@@ -246,111 +199,53 @@ Implemented:
 - request limiting;
 - environment configuration;
 - Docker packaging;
-- automated tests.
-
-Validation:
-
-- TypeScript compilation passed;
-- 8 automated tests passed;
-- HTTP smoke test passed: health, create, start, and stop;
-- ASCII validation passed;
-- secret-pattern check passed.
-
-Deployment and integration validation:
-
-- Render built the Docker image successfully;
-- the service reached `Live` state;
-- the public HTTPS health endpoint returned `status: ok`;
-- the shared test token remained in Render environment configuration;
-- browser extension 0.2.0 returned `READY` after an authenticated connection test;
-- capture and the cloud session reached `ACTIVE`;
-- browser-side ducking displayed and applied `DUCKING 15%`;
-- Stop returned capture to `IDLE` and the cloud session to `COMPLETED`.
-
-Test deployment:
-
-`https://voicebridge-cloud.onrender.com`
-
-Validation record:
-
-`docs/phases/PHASE_1_MILESTONE_2_CLOUD_SKELETON_VALIDATION.md`
+- automated tests;
+- Render deployment and authenticated browser lifecycle.
 
 Milestone 2 status:
 PASSED.
 
 ## 13. Next Engineering Action
 
-Phase 1 MVP work is complete.
+Phase 1 MVP work and the Gemini STT transition are complete.
 
 Do not reopen completed Phase 1 scope without a documented defect or approved change.
 
-The next project scope must be explicitly approved by the project owner. Candidate work belongs to Phase 2 Universal Cloud Audio or Phase 3 Cloud Service Hardening.
+The next functional project scope is Phase 2 Universal Cloud Audio. Phase 2 MUST begin with a documented source-adapter and session-contract design gate before implementation.
+
+Phase 3 Cloud Service Hardening remains a separate later scope.
+
 ## 14. Milestone 3 Streaming Transport
 
-Implemented:
+Implemented and validated:
 
 - standard WebSocket server through `ws`;
 - HTTP-authenticated one-time stream tickets;
-- ticket binding to one active session;
-- ticket expiration and one-use enforcement;
-- binary mono `pcm_s16le` audio upload;
+- ticket binding, expiration, and one-use enforcement;
+- binary mono PCM audio upload;
 - canonical transport event envelopes;
-- audio acknowledgements;
-- client and server frame limits;
-- client output-buffer limit;
-- excess-frame drop counters;
-- unexpected disconnect cleanup;
+- acknowledgements and bounded frame handling;
+- disconnect cleanup;
 - browser stream metrics;
-- 10 automated cloud tests.
-
-Implementation paths:
-
-- `src/cloud/src/stream_ticket_store.ts`;
-- `src/cloud/src/stream_transport.ts`;
-- `src/browser_extension/audio_processor.js`.
+- ten-minute live validation with zero dropped frames in the accepted run.
 
 Decision:
 
 `docs/adr/ADR-004_PHASE_1_STREAMING_TRANSPORT.md`
-
-Validation:
-
-- cloud service 0.2.0 reached `Live` on Render;
-- browser extension 0.3.0 was confirmed;
-- real YouTube audio streamed for 10 minutes and 3 seconds;
-- 30902 frames and 59331840 bytes were sent;
-- zero frames were dropped;
-- unacknowledged frames remained below the maximum of 50;
-- Stop returned capture to `IDLE` and both stream and session to `COMPLETED`.
-
-Validation record:
-
-`docs/phases/PHASE_1_MILESTONE_3_STREAMING_TRANSPORT_VALIDATION.md`
 
 Status:
 PASSED.
 
 ## 15. Milestone 4 Streaming STT
 
-Decision:
+Original Phase 1 decision:
 
-- AssemblyAI Universal-Streaming English on the free tier for Phase 1 STT;
-- provider binding remains behind the cloud-side `SttProvider` interface;
-- provider credentials remain in Render environment configuration;
-- browser clients continue to connect only to VoiceBridge Cloud.
+- AssemblyAI Universal-Streaming English on the free tier;
+- provider binding behind the cloud-side `SttProvider` interface;
+- provider credentials in cloud environment configuration;
+- browser clients connect only to VoiceBridge Cloud.
 
-Implemented:
-
-- cloud service 0.3.1;
-- AssemblyAI streaming adapter for raw PCM S16LE;
-- aggregation of five nominal 20 millisecond frames into 100 millisecond provider packets;
-- ordered partial and final transcript events;
-- recognition-latency and error measurements;
-- bounded provider output buffering;
-- clean provider stream completion;
-- extension 0.4.1 English transcript display;
-- bounded browser session transcript state;
-- 12 automated tests.
+This provider choice established the validated rollback baseline and was later superseded as the default by the accepted Gemini 3.5 Transcribe Live transition. The AssemblyAI path remains implemented.
 
 Decision record:
 
@@ -360,13 +255,9 @@ Validation record:
 
 `docs/phases/PHASE_1_MILESTONE_4_STT_INTEGRATION_VALIDATION.md`
 
-Status:
-Implementation complete; Render configuration and live browser validation pending.
-
 ## 15A. Phase 1 MVP Final Validation
 
 Date:
-
 2026-07-22.
 
 Final result:
@@ -376,10 +267,9 @@ Final result:
 Accepted versions:
 
 - cloud service `0.6.0`;
-- browser extension `0.6.2`;
-- implementation baseline commit `1d7e82ecb122ab953190f9b2fdc8e7fbea86840c`.
+- browser extension `0.6.2`.
 
-Accepted pipeline:
+Original accepted pipeline:
 
 ```text
 AssemblyAI English STT
@@ -388,19 +278,109 @@ AssemblyAI English STT
     -> Azure Speech Ukrainian TTS
 ```
 
-Final controlled test completed 28 English, Ukrainian, voiced, and played segments with zero translation retries, zero TTS retries, zero pending operations after completion, zero dropped audio frames, and one-press Stop returning the extension to `IDLE`.
+The controlled final run completed 28 English, Ukrainian, voiced, and played segments with zero translation retries, zero TTS retries, zero pending operations after completion, zero dropped audio frames, and one-press Stop returning the extension to `IDLE`.
 
 Observed final stage latency was 712 ms for STT, 81 ms for translation, and 190 ms for TTS.
-
-A prior Azure Speech endurance session exceeded 12 minutes and completed 108 English, translated, voiced, and played segments with zero TTS retries.
-
-The project owner confirmed understandable Ukrainian speech, automatic ducking, original-audio restoration, normal Azure pipeline operation, and correct one-press Stop behavior.
 
 Records:
 
 - `../phases/PHASE_1_MVP_VALIDATION.md`;
 - `2026-07-22_PHASE_1_MVP_VALIDATED.md`;
 - `../bootstrap/PHASE_1_MVP_VALIDATED_BOOTSTRAP.md`.
+
+## 15B. Gemini 3.5 Transcribe Live Transition
+
+Date:
+2026-08-29.
+
+Decision:
+Gemini 3.5 Transcribe Live is accepted as the default VoiceBridge streaming STT provider behind the existing `SttProvider` boundary.
+
+Exact model:
+
+`gemini-3.5-transcribe-live`
+
+Rollback:
+
+`AssemblyAI universal-streaming-english`
+
+The controlled same-duration A/B used approximately 59 seconds of the same English source fragment.
+
+Gemini evidence:
+
+- 2938 frames sent;
+- 1 dropped frame;
+- 6 final STT segments;
+- 363 ms reported recognition latency;
+- translation pending after Stop: 0;
+- TTS pending after Stop: 0;
+- queued playback after Stop: 0 ms.
+
+AssemblyAI rollback evidence:
+
+- 2945 frames sent;
+- 7 dropped frames;
+- 4 final STT segments;
+- 378 ms reported recognition latency;
+- translation pending after Stop: 0;
+- TTS pending after Stop: 0;
+- queued playback after Stop: 0 ms.
+
+The latency difference is treated as near parity. Qualitative transcript review favored Gemini, but no WER claim is made because no human reference transcript was available.
+
+The accepted downstream pipeline remains:
+
+```text
+Gemini 3.5 Transcribe Live
+    -> Azure Translator primary
+    -> Gemini translation fallback
+    -> Azure Speech Ukrainian TTS
+```
+
+Record:
+
+`2026-08-29_GEMINI_3_5_TRANSCRIBE_STT_ACCEPTED.md`
+
+ADR:
+
+`../adr/ADR-009_GEMINI_3_5_TRANSCRIBE_DEFAULT_STT.md`
+
+## 15C. Played-Segment Instrumentation Repair
+
+Date:
+2026-08-29.
+
+The non-blocking instrumentation defect found during Gemini STT acceptance was repaired on `main`.
+
+Current implementation tracks completed TTS playback by scheduled playback boundaries. Audio discarded by the bounded user Stop policy is excluded from the played-segment count.
+
+Accepted commit before the alignment work:
+
+`9a42c8ea3779ae603f8721cace3e74db07ced6d6`
+
+## 15D. Phase 1 Runtime Alignment
+
+Date:
+2026-08-29.
+
+The accepted provider defaults are synchronized so a missing provider-selection environment variable resolves to the validated Phase 1 provider matrix:
+
+```text
+STT_PROVIDER=gemini
+GEMINI_STT_MODEL=gemini-3.5-transcribe-live
+TRANSLATION_PROVIDER=azure
+TRANSLATION_FALLBACK_PROVIDER=gemini
+TTS_PROVIDER=azure
+AZURE_TTS_VOICE=uk-UA-OstapNeural
+```
+
+Gemini TTS remains explicitly selectable, and AssemblyAI remains the explicit STT rollback path.
+
+A regression test protects these accepted defaults.
+
+Alignment implementation commit:
+
+`2a755d7e3e902542a5589ebca2700df0fa51f6b1`
 
 ## 16. References
 
@@ -409,18 +389,15 @@ Records:
 - [04_ARCHITECTURE](../architecture/04_ARCHITECTURE.md)
 - [05_TECHNOLOGY_STACK](../architecture/05_TECHNOLOGY_STACK.md)
 - [ADR-001_CLOUD_FIRST_ARCHITECTURE](../adr/ADR-001_CLOUD_FIRST_ARCHITECTURE.md)
-- [09_FUNCTIONAL_REQUIREMENTS](../requirements/09_FUNCTIONAL_REQUIREMENTS.md)
-- [10_SYSTEM_DESIGN](../design/10_SYSTEM_DESIGN.md)
-- [11_NON_FUNCTIONAL_REQUIREMENTS](../requirements/11_NON_FUNCTIONAL_REQUIREMENTS.md)
-- [12_SECURITY_MODEL](../security/12_SECURITY_MODEL.md)
-- [13_API_DESIGN](../api/13_API_DESIGN.md)
-- [ADR-005_PHASE_1_STREAMING_STT_PROVIDER](../adr/ADR-005_PHASE_1_STREAMING_STT_PROVIDER.md)
-- [PHASE_1_MILESTONE_4_STT_INTEGRATION_VALIDATION](../phases/PHASE_1_MILESTONE_4_STT_INTEGRATION_VALIDATION.md)
+- [ADR-009_GEMINI_3_5_TRANSCRIBE_DEFAULT_STT](../adr/ADR-009_GEMINI_3_5_TRANSCRIBE_DEFAULT_STT.md)
+- [PHASE_1_MVP_VALIDATION](../phases/PHASE_1_MVP_VALIDATION.md)
+- [GEMINI_STT_ACCEPTANCE](2026-08-29_GEMINI_3_5_TRANSCRIBE_STT_ACCEPTED.md)
 
 ## 17. Version History
 
 | Version | Date | Description |
 |---------|------|-------------|
+| 1.14.0 | 2026-08-29 | Recorded Gemini default STT acceptance, played-segment repair, aligned provider defaults, and Phase 2 as the next functional scope |
 | 1.13.0 | 2026-07-22 | Validated the minimum Phase 1 MVP and recorded the Azure pipeline and one-press Stop acceptance |
 | 1.12.0 | 2026-07-19 | Replaced the initial Milestone 4 STT adapter with AssemblyAI Free |
 | 1.11.0 | 2026-07-19 | Added Milestone 4 provider-neutral STT implementation and pending live validation |
