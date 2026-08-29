@@ -124,3 +124,4 @@ jobs:
           git add src/cloud/src/media_client_ingest.ts src/cloud/src/media_client_http.ts src/cloud/src/media_client_persistence.ts
           git commit -m "Share durable media STT quota with client assisted path"
           git push origin HEAD:agent/krc-media-transcript
+# rerun: 2
