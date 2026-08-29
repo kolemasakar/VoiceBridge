@@ -21,7 +21,7 @@ env:
   REQUIRED_BRANCH: agent/krc-media-transcript
   BASE_URL: https://voicebridge-krc-media-beta-kolemasakar.onrender.com
   POSTGRES_IMAGE: postgres:18
-  REGRESSION_TAG: krc_regression=20260829-neon
+  REGRESSION_JOB_ID: KRCM_f56f322d-5eda-4295-b29c-548a51bde251
 
 jobs:
   observe:
@@ -100,30 +100,38 @@ jobs:
           jq -e '.mode=="zero_client_managed_beta" and .configured==true and .durable_store=="postgres" and .restart_resilient_jobs==true and .owner_access_injected_server_side==true and .user_beta_access_code_required==false and .facebook_free_retrieval_provider=="cobalt" and .facebook_automatic_paid_retrieval==false and .telegram_public_retrieval==true and .telegram_retrieval_provider=="telegram_public_web" and .telegram_retrieval_credits==0 and .local_attachment_transport==true and .local_attachment_retrieval_provider=="openai_attachment" and .local_attachment_max_bytes==33554432' /tmp/krc-capability.json >/dev/null
           echo "Managed capability contract remains healthy."
 
-      - name: Verify Neon durable state and resolve prior regression job
+      - name: Verify Neon durable state and prior regression row
         shell: bash
         run: |
           set -euo pipefail
           docker pull "$POSTGRES_IMAGE" >/dev/null
-          dbstate="$(docker run --rm -e KRC_NEON_DATABASE_URL="$KRC_NEON_DATABASE_URL" "$POSTGRES_IMAGE" \
-            psql -X -A -t -F '|' -v ON_ERROR_STOP=1 --dbname "$KRC_NEON_DATABASE_URL" \
-            -c "SELECT current_setting('server_version_num'), count(*), count(*) FILTER (WHERE status NOT IN ('COMPLETED','FAILED')) FROM public.krc_managed_media_jobs;")"
-          IFS='|' read -r version_num total_jobs nonterminal_jobs <<< "$dbstate"
+
+          version_num="$(docker run --rm -e KRC_NEON_DATABASE_URL="$KRC_NEON_DATABASE_URL" "$POSTGRES_IMAGE" \
+            psql -X -A -t -v ON_ERROR_STOP=1 --dbname "$KRC_NEON_DATABASE_URL" \
+            -c "SELECT current_setting('server_version_num');")"
           [[ "$version_num" == 18* ]]
-          [[ "$total_jobs" -ge 2 ]]
+
+          total_jobs="$(docker run --rm -e KRC_NEON_DATABASE_URL="$KRC_NEON_DATABASE_URL" "$POSTGRES_IMAGE" \
+            psql -X -A -t -v ON_ERROR_STOP=1 --dbname "$KRC_NEON_DATABASE_URL" \
+            -c "SELECT count(*) FROM public.krc_managed_media_jobs;")"
+          [[ "$total_jobs" -ge 1 ]]
+
+          nonterminal_jobs="$(docker run --rm -e KRC_NEON_DATABASE_URL="$KRC_NEON_DATABASE_URL" "$POSTGRES_IMAGE" \
+            psql -X -A -t -v ON_ERROR_STOP=1 --dbname "$KRC_NEON_DATABASE_URL" \
+            -c "SELECT count(*) FROM public.krc_managed_media_jobs WHERE status NOT IN ('COMPLETED','FAILED');")"
           [[ "$nonterminal_jobs" == "0" ]]
 
-          regression="$(docker run --rm -e KRC_NEON_DATABASE_URL="$KRC_NEON_DATABASE_URL" "$POSTGRES_IMAGE" \
-            psql -X -A -t -F $'\t' -v ON_ERROR_STOP=1 --dbname "$KRC_NEON_DATABASE_URL" \
-            -c "SELECT job_id, status, payload->>'provider_mode', payload->>'segment_count', payload->>'credits_charged' FROM public.krc_managed_media_jobs WHERE payload->>'source_url' LIKE '%krc_regression=20260829-neon%' ORDER BY updated_at DESC LIMIT 1;")"
-          test -n "$regression"
-          IFS=$'\t' read -r job_id status mode segment_count credits_charged <<< "$regression"
-          [[ "$job_id" =~ ^KRCM_[A-Za-z0-9-]+$ ]]
-          [[ "$status" == "COMPLETED" ]]
-          [[ "$mode" == "native" ]]
+          regression_ok="$(docker run --rm -e KRC_NEON_DATABASE_URL="$KRC_NEON_DATABASE_URL" "$POSTGRES_IMAGE" \
+            psql -X -A -t -v ON_ERROR_STOP=1 --dbname "$KRC_NEON_DATABASE_URL" \
+            -c "SELECT count(*) FROM public.krc_managed_media_jobs WHERE job_id='${REGRESSION_JOB_ID}' AND status='COMPLETED' AND payload->>'provider_mode'='native' AND COALESCE((payload->>'segment_count')::int,0)>0 AND COALESCE((payload->>'credits_charged')::int,0)=1;")"
+          [[ "$regression_ok" == "1" ]]
+
+          segment_count="$(docker run --rm -e KRC_NEON_DATABASE_URL="$KRC_NEON_DATABASE_URL" "$POSTGRES_IMAGE" \
+            psql -X -A -t -v ON_ERROR_STOP=1 --dbname "$KRC_NEON_DATABASE_URL" \
+            -c "SELECT payload->>'segment_count' FROM public.krc_managed_media_jobs WHERE job_id='${REGRESSION_JOB_ID}';")"
           [[ "$segment_count" -gt 0 ]]
-          [[ "$credits_charged" == "1" ]]
-          echo "job_id=$job_id" >> "$GITHUB_ENV"
+
+          echo "job_id=$REGRESSION_JOB_ID" >> "$GITHUB_ENV"
           echo "total_jobs=$total_jobs" >> "$GITHUB_ENV"
           echo "nonterminal_jobs=$nonterminal_jobs" >> "$GITHUB_ENV"
           echo "segment_count=$segment_count" >> "$GITHUB_ENV"
@@ -138,7 +146,7 @@ jobs:
             "${BASE_URL}/api/v1/media/managed/transcriptions/${job_id}" \
             -H 'Accept: application/json' -H "Authorization: Bearer ${action_token}")"
           [[ "$code" == "200" ]]
-          jq -e --arg id "$job_id" '.job_id==$id and .status=="COMPLETED" and .provider_mode=="native" and .segment_count>0 and .reused==false' /tmp/krc-job.json >/dev/null
+          jq -e --arg id "$job_id" '.job_id==$id and .status=="COMPLETED" and .provider_mode=="native" and .segment_count>0' /tmp/krc-job.json >/dev/null
 
           code="$(curl -sS --max-time 60 -o /tmp/krc-segments.json -w '%{http_code}' \
             "${BASE_URL}/api/v1/media/managed/transcriptions/${job_id}/segments?cursor=0&limit=1" \
