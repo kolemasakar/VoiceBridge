@@ -51,6 +51,22 @@
         <p id="cloud-detail">The test token stays in this browser profile.</p>
       </section>
 
+      <section class="cloud-card language-card">
+        <div class="section-title">
+          <h2>Languages</h2>
+          <strong>CLOUD VALIDATED</strong>
+        </div>
+        <label class="field" for="source-language">
+          <span>Source language</span>
+          <select id="source-language" disabled></select>
+        </label>
+        <label class="field" for="target-language">
+          <span>Target language</span>
+          <select id="target-language" disabled></select>
+        </label>
+        <p id="language-detail">Connect to VoiceBridge Cloud to load validated languages.</p>
+      </section>
+
       <section class="metrics stream-metrics">
         <div class="section-title">
           <h2>Audio stream</h2>
@@ -66,7 +82,7 @@
 
       <section class="transcript-card">
         <div class="section-title">
-          <h2>English transcript</h2>
+          <h2>Source transcript</h2>
           <strong id="stt-status">OFFLINE</strong>
         </div>
         <dl class="transcript-meta">
@@ -79,13 +95,13 @@
           <em id="transcript-partial"></em>
           <span id="transcript-empty">Waiting for speech...</span>
         </div>
-        <button id="copy-transcript" disabled>Copy English transcript</button>
+        <button id="copy-transcript" disabled>Copy transcript</button>
         <p id="stt-error" role="alert"></p>
       </section>
 
       <section class="transcript-card translation-card">
         <div class="section-title">
-          <h2>Ukrainian translation</h2>
+          <h2>Translation</h2>
           <strong id="translation-status">OFFLINE</strong>
         </div>
         <dl class="transcript-meta">
@@ -97,14 +113,14 @@
         </dl>
         <div id="translation-text" class="transcript-text" aria-live="polite">
           <span id="translation-final"></span>
-          <span id="translation-empty">Waiting for final English segments...</span>
+          <span id="translation-empty">Waiting for final source segments...</span>
         </div>
         <p id="translation-error" role="alert"></p>
       </section>
 
       <section class="metrics tts-card">
         <div class="section-title">
-          <h2>Ukrainian speech</h2>
+          <h2>Translated speech</h2>
           <strong id="tts-status">OFFLINE</strong>
         </div>
         <dl>
@@ -124,7 +140,7 @@
       </section>
 
       <section class="controls">
-        <button id="start" class="primary">Start capture</button>
+        <button id="start" class="primary" disabled>Start capture</button>
         <button id="stop" disabled>Stop</button>
       </section>
 
@@ -144,7 +160,7 @@
         </div>
 
         <label for="ukrainian-volume">
-          <span>Ukrainian volume</span>
+          <span>Translated volume</span>
           <output id="ukrainian-value">100%</output>
         </label>
         <input id="ukrainian-volume" type="range" min="0" max="100" value="100">
@@ -165,6 +181,7 @@
       <p id="error" role="alert"></p>
     </main>
     <script src="source_adapter.js"></script>
+    <script src="language_ui.js"></script>
     <script src="popup.js"></script>
     <script src="transcript_copy.js"></script>
   </body>
