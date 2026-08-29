@@ -348,6 +348,7 @@ export class GeminiSttProvider implements SttProvider {
 
     return new Promise((resolve, reject) => {
       let openedAt = Date.now();
+      let websocketOpened = false;
       const socket = new WebSocket(url, {
         perMessageDeflate: false,
         maxPayload: MAX_PROVIDER_MESSAGE_BYTES
@@ -361,10 +362,15 @@ export class GeminiSttProvider implements SttProvider {
         }
         settled = true;
         socket.terminate();
-        reject(new Error("STT provider connection timed out."));
+        reject(new Error(
+          websocketOpened
+            ? "STT provider setup acknowledgement timed out."
+            : "STT provider WebSocket connection timed out."
+        ));
       }, CONNECT_TIMEOUT_MS);
 
       socket.on("open", () => {
+        websocketOpened = true;
         openedAt = Date.now();
         connection = new GeminiSttConnection(
           socket,
@@ -378,8 +384,7 @@ export class GeminiSttProvider implements SttProvider {
               responseModalities: ["TEXT"]
             },
             inputAudioTranscription: {
-              languageCodes: [options.language],
-              mode: "VERBATIM"
+              languageCodes: []
             }
           }
         }));
@@ -467,12 +472,14 @@ export class GeminiSttProvider implements SttProvider {
         }
       });
 
-      socket.on("close", () => {
+      socket.on("close", (code) => {
         clearTimeout(timeout);
         if (!ready) {
           if (!settled) {
             settled = true;
-            reject(new Error("STT provider closed before becoming ready."));
+            reject(new Error(
+              `STT provider closed before becoming ready (code ${code}).`
+            ));
           }
           return;
         }
