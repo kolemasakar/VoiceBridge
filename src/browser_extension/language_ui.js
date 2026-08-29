@@ -103,6 +103,15 @@
     }
   }
 
+  function captureAllowsStart(status) {
+    return Boolean(status) && ![
+      "ACTIVE",
+      "PAUSED",
+      "STOPPING",
+      "DRAINING"
+    ].includes(status);
+  }
+
   function attach({ chromeApi = chrome, documentRef = document } = {}) {
     const sourceSelect = documentRef.querySelector("#source-language");
     const targetSelect = documentRef.querySelector("#target-language");
@@ -116,8 +125,13 @@
 
     let capabilities = null;
     let ready = false;
+    let captureStatus = null;
     sourceSelect.disabled = true;
     targetSelect.disabled = true;
+
+    function syncStart() {
+      start.disabled = !ready || !captureAllowsStart(captureStatus);
+    }
 
     function setReady(value, stateText) {
       ready = value;
@@ -125,7 +139,7 @@
       targetSelect.disabled = !value;
       status.textContent = stateText;
       status.className = value ? "ready" : "";
-      if (!value) start.disabled = true;
+      syncStart();
     }
 
     async function saveSelection() {
@@ -215,7 +229,21 @@
         (changes.test_access_token || changes.cloud_api_url)) {
         refresh().catch(() => undefined);
       }
+      if (areaName === "session" && changes.capture_state) {
+        captureStatus = changes.capture_state.newValue?.status || "IDLE";
+        syncStart();
+      }
     });
+
+    chromeApi.storage.session.get("capture_state")
+      .then(({ capture_state }) => {
+        captureStatus = capture_state?.status || "IDLE";
+        syncStart();
+      })
+      .catch(() => {
+        captureStatus = "IDLE";
+        syncStart();
+      });
 
     refresh().catch(() => undefined);
     return { refresh };
@@ -226,6 +254,7 @@
     chooseSelection,
     targetOptions,
     isValidatedPair,
+    captureAllowsStart,
     attach
   };
 });
