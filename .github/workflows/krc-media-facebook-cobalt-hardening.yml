@@ -1,0 +1,212 @@
+name: KRC MEDIA Facebook Cobalt Only Hardening
+
+on:
+  push:
+    branches:
+      - agent/krc-media-transcript
+    paths:
+      - .github/workflows/krc-media-facebook-cobalt-hardening.yml
+
+permissions:
+  contents: write
+
+jobs:
+  harden:
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    steps:
+      - name: Checkout trigger head
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 2
+
+      - name: Verify expected closure baseline
+        shell: bash
+        run: |
+          set -euo pipefail
+          [[ "$(git rev-parse HEAD^)" == "21127f86ae35625421d0257c59c689407ccdb2ab" ]]
+
+      - name: Apply active Facebook route hardening
+        shell: bash
+        run: |
+          set -euo pipefail
+          python3 - <<'PY'
+          from pathlib import Path
+
+          http = Path('src/cloud/src/managed_media_http.ts')
+          text = http.read_text()
+
+          anchor = 'import { MediaBetaGate } from "./media_beta.js";\n'
+          replacement = anchor + 'import { managedMediaPlatform } from "./managed_media_url.js";\n'
+          assert text.count(anchor) == 1
+          text = text.replace(anchor, replacement, 1)
+
+          replacements = {
+              '    facebook_ai_fallback: true,\n': '    facebook_ai_fallback: false,\n',
+              '    facebook_ai_requires_duration_metadata: true,\n': '    facebook_ai_requires_duration_metadata: false,\n',
+              '    facebook_ai_metadata_credits: 1,\n': '    facebook_ai_metadata_credits: 0,\n',
+          }
+          for old, new in replacements.items():
+              assert text.count(old) == 1, old
+              text = text.replace(old, new, 1)
+
+          preflight_anchor = '''        if (!input) {
+          throw new MediaTranscriptError(
+            "INVALID_REQUEST",
+            "The managed media preflight request is not valid.",
+            400,
+            false
+          );
+        }
+        const quote = await service.preflight(input);
+'''
+          preflight_new = '''        if (!input) {
+          throw new MediaTranscriptError(
+            "INVALID_REQUEST",
+            "The managed media preflight request is not valid.",
+            400,
+            false
+          );
+        }
+        if (managedMediaPlatform(input.url) === "facebook") {
+          throw new MediaTranscriptError(
+            "FACEBOOK_FREE_RETRIEVAL_REQUIRED",
+            "Active Facebook intake uses the free Cobalt route; generic Supadata native preflight is disabled.",
+            400,
+            false
+          );
+        }
+        const quote = await service.preflight(input);
+'''
+          assert text.count(preflight_anchor) == 1
+          text = text.replace(preflight_anchor, preflight_new, 1)
+
+          start_anchor = '''        if (!input) {
+          throw new MediaTranscriptError(
+            "MEDIA_CREDIT_CONSENT_REQUIRED",
+            "Explicit one-credit user consent is required before native transcript processing.",
+            409,
+            false
+          );
+        }
+        const job = await service.startNative(input);
+'''
+          start_new = '''        if (!input) {
+          throw new MediaTranscriptError(
+            "MEDIA_CREDIT_CONSENT_REQUIRED",
+            "Explicit one-credit user consent is required before native transcript processing.",
+            409,
+            false
+          );
+        }
+        if (managedMediaPlatform(input.url) === "facebook") {
+          throw new MediaTranscriptError(
+            "FACEBOOK_FREE_RETRIEVAL_REQUIRED",
+            "Active Facebook intake uses the free Cobalt route; generic Supadata native processing is disabled.",
+            409,
+            false
+          );
+        }
+        const job = await service.startNative(input);
+'''
+          assert text.count(start_anchor) == 1
+          text = text.replace(start_anchor, start_new, 1)
+          http.write_text(text)
+
+          test_path = Path('src/cloud/tests/managed_media_http.test.ts')
+          tests = test_path.read_text()
+          class_anchor = '''class FakeManagedProvider implements ManagedNativeTranscriptProvider {
+  transcriptCalls = 0;
+
+  async quoteNative() {
+'''
+          class_new = '''class FakeManagedProvider implements ManagedNativeTranscriptProvider {
+  quoteCalls = 0;
+  transcriptCalls = 0;
+
+  async quoteNative() {
+    this.quoteCalls += 1;
+'''
+          assert tests.count(class_anchor) == 1
+          tests = tests.replace(class_anchor, class_new, 1)
+
+          new_test = r'''
+
+test("active HTTP boundary rejects Facebook on generic Supadata native routes", async () => {
+  const provider = new FakeManagedProvider();
+  const service = new ManagedMediaService(
+    new MediaBetaGate([ACCESS_CODE]),
+    null,
+    provider
+  );
+  const handler = createManagedMediaHttpHandler(CONFIG, service);
+  const server = createServer(async (request, response) => {
+    if (await handler.handle(request, response)) return;
+    response.statusCode = 404;
+    response.end();
+  });
+  const baseUrl = await listen(server);
+  try {
+    const facebookUrl = "https://www.facebook.com/reel/1114235920664408/";
+    const preflight = await fetch(`${baseUrl}/api/v1/media/managed/preflight`, {
+      method: "POST",
+      headers: actionHeaders(),
+      body: JSON.stringify({ url: facebookUrl, language_hint: "auto" })
+    });
+    assert.equal(preflight.status, 400);
+    const preflightBody = await preflight.json() as { error?: { code?: string } };
+    assert.equal(preflightBody.error?.code, "FACEBOOK_FREE_RETRIEVAL_REQUIRED");
+
+    const start = await fetch(`${baseUrl}/api/v1/media/managed/transcriptions`, {
+      method: "POST",
+      headers: actionHeaders(),
+      body: JSON.stringify({
+        url: facebookUrl,
+        language_hint: "auto",
+        credit_consent: { provider: "supadata", mode: "native", max_credits: 1 }
+      })
+    });
+    assert.equal(start.status, 409);
+    const startBody = await start.json() as { error?: { code?: string } };
+    assert.equal(startBody.error?.code, "FACEBOOK_FREE_RETRIEVAL_REQUIRED");
+    assert.equal(provider.quoteCalls, 0);
+    assert.equal(provider.transcriptCalls, 0);
+  } finally {
+    await close(server);
+  }
+});
+'''
+          assert 'active HTTP boundary rejects Facebook on generic Supadata native routes' not in tests
+          test_path.write_text(tests.rstrip() + new_test + '\n')
+
+          instagram = Path('src/cloud/tests/managed_media_instagram.test.ts')
+          itext = instagram.read_text()
+          old = '  assert.equal(capability.facebook_ai_fallback, true);\n'
+          new = '''  assert.equal(capability.facebook_ai_fallback, false);
+  assert.equal(capability.facebook_ai_requires_duration_metadata, false);
+  assert.equal(capability.facebook_ai_metadata_credits, 0);
+'''
+          assert itext.count(old) == 1
+          instagram.write_text(itext.replace(old, new, 1))
+          PY
+
+      - name: Validate full cloud suite
+        working-directory: src/cloud
+        shell: bash
+        run: |
+          set -euo pipefail
+          npm ci
+          npm run check
+
+      - name: Commit hardened implementation and remove temporary workflow
+        shell: bash
+        run: |
+          set -euo pipefail
+          rm -f .github/workflows/krc-media-facebook-cobalt-hardening.yml
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git add -A
+          git diff --cached --check
+          git diff --cached --name-only
+          git commit -m "Harden active Facebook intake to Cobalt-only"
+          git push origin HEAD:agent/krc-media-transcript
