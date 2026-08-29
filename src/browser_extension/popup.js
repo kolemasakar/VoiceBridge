@@ -60,6 +60,8 @@ const elements = {
 };
 
 const DEFAULT_CLOUD_API_URL = "https://voicebridge-cloud-us.onrender.com";
+const phase1SourceAdapter =
+  VoiceBridgeSourceAdapters.createChromiumTabSourceAdapter(chrome);
 let stopInProgress = false;
 
 async function serviceWorkerMessage(type, data = undefined) {
@@ -266,17 +268,12 @@ async function startCapture() {
   try {
     await prepareOffscreen();
     await saveCloudSettings(false);
-    const [tab] = await chrome.tabs.query({ active: true, currentWindow: true });
-    if (!tab?.id || !tab.url?.startsWith("https://www.youtube.com/")) {
-      throw new Error("Open a YouTube tab before starting capture.");
-    }
+    const preparedSource = await phase1SourceAdapter.prepare();
     const cloudResponse = await serviceWorkerMessage("START_CLOUD_SESSION");
     renderCloudState(cloudResponse.state);
     const streamResponse = await serviceWorkerMessage("GET_STREAM_TICKET");
     try {
-      const streamId = await chrome.tabCapture.getMediaStreamId({
-        targetTabId: tab.id
-      });
+      const captureHandle = await phase1SourceAdapter.start(preparedSource);
       const config = {
         original_pause_volume: Number(elements.originalVolume.value) / 100,
         original_duck_volume: 0.15,
@@ -286,8 +283,8 @@ async function startCapture() {
         target: "offscreen",
         type: "START_CAPTURE",
         data: {
-          stream_id: streamId,
-          tab_id: tab.id,
+          stream_id: captureHandle.stream_id,
+          tab_id: captureHandle.tab_id,
           config,
           stream: streamResponse.stream
         }
