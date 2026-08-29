@@ -1,6 +1,6 @@
 # KRC MEDIA Neon Rollback Observation Window
 
-Status: ACTIVE - EXIT_READY_AWAITING_OWNER_DECISION
+Status: CLOSED - OWNER_APPROVED
 Date: 2026-08-29
 Repository: kolemasakar/VoiceBridge
 Branch: agent/krc-media-transcript
@@ -8,7 +8,7 @@ Release state: RELEASE_HOLD_OWNER_TESTING
 
 ## 1. Purpose
 
-Record the operational state after the accepted Render PostgreSQL -> Neon PostgreSQL 18 cutover, successful owner-only post-cutover live durability regression, later read-only observation, and final observation-exit readiness verification.
+Record the operational state after the accepted Render PostgreSQL -> Neon PostgreSQL 18 cutover, successful owner-only post-cutover live durability regression, later read-only observation, final observation-exit readiness verification, and owner-approved closure of the rollback observation window.
 
 This record does not authorize release, merge, production promotion, external testing, public sharing, paid Facebook fallback, ScrapeCreators activation, or deletion of the original Render PostgreSQL database.
 
@@ -60,6 +60,7 @@ Authoritative records:
 - docs/history/KRC_MEDIA_NEON_POSTCUTOVER_LIVE_REGRESSION_2026-08-29.md
 - docs/history/KRC_MEDIA_NEON_OBSERVATION_CHECKPOINT_2026-08-29.md
 - docs/history/KRC_MEDIA_NEON_OBSERVATION_EXIT_READINESS_2026-08-29.md
+- docs/history/KRC_MEDIA_NEON_OBSERVATION_CLOSURE_2026-08-29.md
 
 ## 3. Active durable-store state
 
@@ -73,10 +74,10 @@ Active durable store:
 - database: krc_media_beta
 - direct TLS connection through protected environment configuration
 
-Rollback store:
-- original Render PostgreSQL: voicebridge-krc-media-beta-db
+Original Render PostgreSQL:
+- voicebridge-krc-media-beta-db
 - retained intact
-- recoverability re-confirmed immediately before exit-readiness decision
+- recoverability re-confirmed immediately before closure decision
 - deletion not authorized
 
 ## 4. Observation exit criteria
@@ -91,11 +92,11 @@ Required criteria:
 Result:
 - OBSERVATION_EXIT_READINESS: PASS
 
-The observation window remains ACTIVE until the owner explicitly approves closure.
+## 5. Owner-approved closure
 
-## 5. Closure boundary
+The owner selected option 1 and explicitly approved closure of the rollback observation window.
 
-If the owner approves observation-window closure:
+Closure result:
 - Neon PostgreSQL 18 remains the active durable store;
 - original Render PostgreSQL remains retained and must not be deleted as part of closure;
 - RELEASE_HOLD_OWNER_TESTING remains active;
@@ -124,8 +125,9 @@ NON_TERMINAL_MANAGED_JOBS: 0
 ROLLBACK_TRIGGER_OBSERVED: NO
 ORIGINAL_RENDER_POSTGRESQL_RECOVERABLE: PASS
 OBSERVATION_EXIT_READINESS: PASS
-ROLLBACK_OBSERVATION_WINDOW: ACTIVE_AWAITING_OWNER_CLOSURE_DECISION
+ROLLBACK_OBSERVATION_WINDOW: CLOSED_OWNER_APPROVED
+ORIGINAL_RENDER_POSTGRESQL: RETAINED
 SOURCE_DATABASE_DELETION: NOT_AUTHORIZED
 RELEASE_HOLD_OWNER_TESTING: PRESERVED
 
-Next action requires an explicit owner decision to close or continue the rollback observation window. No additional provider-consuming media job is required.
+Next migration-stream action: none. Migration observation is closed. Any deletion of the original Render PostgreSQL database remains a separately gated irreversible operation.
