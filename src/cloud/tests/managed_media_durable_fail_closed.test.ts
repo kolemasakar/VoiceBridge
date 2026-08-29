@@ -164,7 +164,7 @@ test("managed durable quota-ledger outage fails job before AssemblyAI provider s
 });
 
 test("all managed AssemblyAI routes share the fail-closed durable STT reservation callback", async () => {
-  const source = await readFile(new URL("../src/managed_media_service.ts", import.meta.url), "utf8");
+  const source = await readFile("src/managed_media_service.ts", "utf8");
   const reserveCallback = "(seconds) => this.reserveSttQuota";
   assert.ok(source.split(reserveCallback).length - 1 >= 3);
   assert.match(source, /MANAGED_DURABLE_STORE_UNAVAILABLE/);
@@ -172,8 +172,8 @@ test("all managed AssemblyAI routes share the fail-closed durable STT reservatio
 });
 
 test("legacy KRCC path reserves durable quota before constructing AssemblyAI transcriber", async () => {
-  const ingestSource = await readFile(new URL("../src/media_client_ingest.ts", import.meta.url), "utf8");
-  const httpSource = await readFile(new URL("../src/media_client_http.ts", import.meta.url), "utf8");
+  const ingestSource = await readFile("src/media_client_ingest.ts", "utf8");
+  const httpSource = await readFile("src/media_client_http.ts", "utf8");
 
   const reservationIndex = ingestSource.indexOf("await this.options.reserveSttSeconds");
   const transcriberIndex = ingestSource.indexOf("new AssemblyAiAsyncTranscriber", reservationIndex);
@@ -189,7 +189,7 @@ test("legacy KRCC path reserves durable quota before constructing AssemblyAI tra
 test("durable quota records remain access-code scoped only through job ownership, not quota keys", async () => {
   const digest = managedMediaAccessDigest(ACCESS_CODE);
   assert.equal(digest.length, 64);
-  const source = await readFile(new URL("../src/managed_media_persistence.ts", import.meta.url), "utf8");
+  const source = await readFile("src/managed_media_persistence.ts", "utf8");
   assert.match(source, /krc_media_stt_charges/);
   assert.match(source, /job_id/);
   assert.match(source, /day_utc/);
