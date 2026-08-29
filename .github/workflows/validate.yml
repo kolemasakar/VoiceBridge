@@ -58,6 +58,7 @@ jobs:
           node --check src/browser_extension/offscreen.js
           node --check src/browser_extension/stop_policy.js
           node --check src/browser_extension/popup.js
+          node --check src/browser_extension/transcript_copy.js
           node --check src/browser_extension/service_worker.js
       - name: Test browser stop policy
         run: node --test src/browser_extension/tests/stop_policy.test.js
@@ -75,6 +76,7 @@ jobs:
           cp src/browser_extension/popup.css dist/extension/
           cp src/browser_extension/popup.html dist/extension/
           cp src/browser_extension/popup.js dist/extension/
+          cp src/browser_extension/transcript_copy.js dist/extension/
           cp src/browser_extension/service_worker.js dist/extension/
           cp src/browser_extension/README.md dist/extension/
           cd dist
