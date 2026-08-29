@@ -1,6 +1,6 @@
 # KRC MEDIA Facebook Cobalt-Only Server Hardening
 
-Status: PASS
+Status: LIVE_ACCEPTED
 Date: 2026-08-29
 Repository: kolemasakar/VoiceBridge
 Branch: agent/krc-media-transcript
@@ -52,7 +52,7 @@ Added `src/cloud/tests/active_facebook_route_policy.test.ts` to assert:
 
 Existing Facebook Cobalt terminal-unavailable and no-automatic-paid-fallback tests remain in place.
 
-## Validation
+## Source validation
 
 Temporary hardening workflow:
 - final successful run: 33257066138
@@ -70,12 +70,33 @@ Net implementation diff from the pre-hardening closure head contains only:
 
 The temporary hardening workflow is absent from the final tree.
 
+## Live isolated-runtime acceptance
+
+No-provider-spend smoke:
+- workflow: `KRC MEDIA Facebook Hardening Live Smoke`
+- run ID: 33257262574
+- result: SUCCESS
+- exact hardened runtime deployed to isolated service: PASS
+- active durable store remained protected Neon PostgreSQL: PASS
+- managed capability remained configured/restart-resilient: PASS
+- facebook_free_retrieval_provider = cobalt: PASS
+- facebook_ai_fallback = false: PASS
+- facebook_ai_requires_duration_metadata = false: PASS
+- facebook_ai_metadata_credits = 0: PASS
+- facebook_automatic_paid_retrieval = false: PASS
+- generic Facebook Supadata preflight rejected with `FACEBOOK_FREE_RETRIEVAL_REQUIRED`: PASS
+- generic Facebook Supadata transcription start rejected with `FACEBOOK_FREE_RETRIEVAL_REQUIRED`: PASS
+
+The smoke deliberately did not invoke the dedicated Facebook retrieval endpoint. Therefore it did not start Cobalt, Supadata transcript generation, or AssemblyAI STT work and did not consume provider credits.
+
+The temporary live-smoke workflow was removed immediately after the successful run.
+
 ## Resource and release boundary
 
-This code/test hardening did not:
+This hardening and acceptance did not:
 - start a live media/transcription job;
 - spend Supadata or AssemblyAI resources;
-- call Facebook retrieval providers;
+- call Facebook retrieval providers during the acceptance smoke;
 - change Render environment variables;
 - mutate Neon data;
 - delete the original Render PostgreSQL rollback database;
@@ -83,4 +104,13 @@ This code/test hardening did not:
 - touch VoiceBridge main;
 - authorize production/public rollout.
 
-Next runtime step: deploy only the isolated MEDIA BETA service at an exact hardened feature-branch head and perform a no-provider-spend policy smoke before accepting the hardening as live runtime state.
+## Accepted state
+
+FACEBOOK_COBALT_ONLY_SERVER_HARDENING: LIVE_ACCEPTED
+ACTIVE_FACEBOOK_GENERIC_SUPADATA_INGRESS: BLOCKED
+FACEBOOK_AI_FALLBACK_ADVERTISED: FALSE
+FACEBOOK_AUTOMATIC_PAID_RETRIEVAL: FALSE
+FACEBOOK_ACTIVE_ROUTE: COBALT_FREE_ONLY
+RELEASE_HOLD_OWNER_TESTING: PRESERVED
+
+No additional Builder update is required because the accepted Builder instructions already used only the dedicated Cobalt-first Facebook route and already forbade the blocked paths.
