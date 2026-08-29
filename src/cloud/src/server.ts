@@ -8,7 +8,8 @@ import {
   InvalidSessionStateError,
   SessionStore,
   type CreateSessionInput,
-  type Session
+  type Session,
+  type SessionSource
 } from "./session_store.js";
 import { StreamTicketStore } from "./stream_ticket_store.js";
 import { attachStreamTransport } from "./stream_transport.js";
@@ -130,6 +131,22 @@ function isNullableString(value: unknown): value is string | null {
   return value === null || typeof value === "string";
 }
 
+function parseSessionSource(value: unknown): SessionSource | null {
+  if (!value || typeof value !== "object") {
+    return null;
+  }
+
+  const source = value as Record<string, unknown>;
+  if (source.kind !== "BROWSER_TAB" || source.adapter !== "chromium_tab") {
+    return null;
+  }
+
+  return {
+    kind: "BROWSER_TAB",
+    adapter: "chromium_tab"
+  };
+}
+
 function parseCreateSessionInput(value: unknown): CreateSessionInput | null {
   if (!value || typeof value !== "object") {
     return null;
@@ -140,12 +157,20 @@ function parseCreateSessionInput(value: unknown): CreateSessionInput | null {
     | Record<string, unknown>
     | undefined;
   const voice = input.voice as Record<string, unknown> | undefined;
+  const runtimeMode = input.runtime_mode;
+  const source = input.source === undefined || input.source === null
+    ? null
+    : parseSessionSource(input.source);
+
   if (
     input.source_language !== "en" ||
     input.target_language !== "uk" ||
-    input.runtime_mode !== "YOUTUBE_MVP" ||
+    (runtimeMode !== "YOUTUBE_MVP" &&
+      runtimeMode !== "UNIVERSAL_BROWSER_AUDIO") ||
     input.input_type !== "BROWSER_AUDIO" ||
     input.output_type !== "BROWSER_PLAYBACK" ||
+    (input.source !== undefined && input.source !== null && !source) ||
+    (runtimeMode === "UNIVERSAL_BROWSER_AUDIO" && !source) ||
     !providers ||
     !isNullableString(providers.recognition) ||
     !isNullableString(providers.translation) ||
@@ -165,9 +190,10 @@ function parseCreateSessionInput(value: unknown): CreateSessionInput | null {
   return {
     source_language: "en",
     target_language: "uk",
-    runtime_mode: "YOUTUBE_MVP",
+    runtime_mode: runtimeMode,
     input_type: "BROWSER_AUDIO",
     output_type: "BROWSER_PLAYBACK",
+    source,
     provider_preferences: {
       recognition: providers.recognition,
       translation: providers.translation,

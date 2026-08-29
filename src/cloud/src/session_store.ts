@@ -9,6 +9,13 @@ export type SessionState =
   | "COMPLETED"
   | "FAILED";
 
+export type RuntimeMode = "YOUTUBE_MVP" | "UNIVERSAL_BROWSER_AUDIO";
+
+export interface SessionSource {
+  kind: "BROWSER_TAB";
+  adapter: "chromium_tab";
+}
+
 export interface ProviderPreferences {
   recognition: string | null;
   translation: string | null;
@@ -23,9 +30,10 @@ export interface VoicePreferences {
 export interface CreateSessionInput {
   source_language: "en";
   target_language: "uk";
-  runtime_mode: "YOUTUBE_MVP";
+  runtime_mode: RuntimeMode;
   input_type: "BROWSER_AUDIO";
   output_type: "BROWSER_PLAYBACK";
+  source: SessionSource | null;
   provider_preferences: ProviderPreferences;
   voice: VoicePreferences;
 }
@@ -35,9 +43,10 @@ export interface Session {
   state: SessionState;
   source_language: "en";
   target_language: "uk";
-  runtime_mode: "YOUTUBE_MVP";
+  runtime_mode: RuntimeMode;
   input_type: "BROWSER_AUDIO";
   output_type: "BROWSER_PLAYBACK";
+  source: SessionSource | null;
   provider_preferences: ProviderPreferences;
   voice: VoicePreferences;
   current_pipeline_stage: null;
@@ -81,6 +90,7 @@ export class SessionStore {
       runtime_mode: input.runtime_mode,
       input_type: input.input_type,
       output_type: input.output_type,
+      source: input.source,
       provider_preferences: input.provider_preferences,
       voice: input.voice,
       current_pipeline_stage: null,

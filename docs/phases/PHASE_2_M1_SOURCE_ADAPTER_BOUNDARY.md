@@ -1,6 +1,6 @@
 # VoiceBridge Phase 2 M1 Source Adapter Boundary
 
-Status: IMPLEMENTED - AUTOMATED VALIDATION PENDING - LIVE REGRESSION PENDING
+Status: COMPLETE - AUTOMATED VALIDATION PASSED - LIVE REGRESSION PASSED
 
 Date: 2026-08-29
 
@@ -34,13 +34,13 @@ The adapter owns:
 - normalized source metadata;
 - `chrome.tabCapture.getMediaStreamId` acquisition.
 
-The popup now consumes the adapter instead of directly querying tabs or calling the tab-capture API.
+The popup consumes the adapter instead of directly querying tabs or calling the tab-capture API.
 
 ## 3. Behavior Preserved
 
-This milestone intentionally does NOT enable generic tabs yet.
+P2-M1 intentionally does NOT enable generic tabs.
 
-The existing compatibility rule remains:
+The compatibility rule remains:
 
 - a YouTube tab must be active before capture starts;
 - the existing error remains `Open a YouTube tab before starting capture.`
@@ -58,9 +58,31 @@ Unchanged:
 - bounded Stop behavior;
 - no-content-persistence policy.
 
-## 4. Automated Contracts
+## 4. Automated Validation
 
-Added automated coverage for:
+Source PR:
+
+`#35 - Implement Phase 2 M1 source adapter boundary`
+
+PR Validate run:
+
+`33267280831 - SUCCESS`
+
+Merged main commit:
+
+`f5a1800deb87be8dbde4ed31e12d31d33ad20694`
+
+Post-merge Validate run:
+
+`33267949177 - SUCCESS`
+
+Post-merge jobs all passed:
+
+- browser-extension;
+- repository-docs;
+- cloud.
+
+Automated coverage includes:
 
 - YouTube compatibility acceptance;
 - non-YouTube compatibility rejection;
@@ -72,35 +94,91 @@ Added automated coverage for:
 - popup use of `prepare` and `start`;
 - absence of direct `chrome.tabs.query` and `chrome.tabCapture.getMediaStreamId` calls from popup orchestration.
 
-The CI packaging step includes `source_adapter.js` in the extension artifact.
+The packaged extension includes `source_adapter.js`.
 
-## 5. Acceptance Boundary
+Post-merge extension artifact:
 
-P2-M1 MUST NOT be marked `PASSED` solely from code review or automated CI.
+- name: `VoiceBridge_Extension_0.6.2`;
+- artifact ID: `9719212999`;
+- artifact digest: `sha256:c3c83fe0f27c5e37cfe8b082a495c6c902ae79788bae6f77a5596d1fc11da1e7`.
 
-A controlled browser regression is still required to confirm that the packaged extension preserves the accepted YouTube path end to end:
+## 5. Controlled Chromium Live Regression
+
+Tracked gate:
+
+`Issue #36 - P2-M1 live Chromium regression gate`
+
+Result:
+
+`PASS`
+
+Observed accepted path:
 
 ```text
 YouTube tab
  -> chromium_tab source adapter
  -> offscreen PCM capture
  -> VoiceBridge Cloud
- -> accepted STT / translation / TTS pipeline
- -> browser playback
+ -> Gemini STT
+ -> Ukrainian translation
+ -> Azure Speech TTS
+ -> browser playback and ducking
+ -> bounded Stop
 ```
 
-The live regression should confirm at minimum:
+Live evidence before Stop included:
 
-- Start succeeds on an active YouTube tab;
-- non-YouTube compatibility behavior remains blocked at this milestone;
-- audio frames reach cloud transport;
-- STT, translation, TTS, and playback operate normally;
-- one-press Stop completes with bounded queues;
-- no new source or provider regression is observed.
+- session and cloud connection `ACTIVE`;
+- audio frames and bytes increasing;
+- `Dropped = 0`;
+- Gemini STT final segments produced;
+- Ukrainian translation final segments produced;
+- Azure TTS voice `uk-UA-OstapNeural` produced voiced segments;
+- browser playback reached `PLAYING` and played segments increased;
+- Ukrainian speech was audibly confirmed;
+- original-audio ducking during Ukrainian speech was audibly confirmed.
 
-## 6. Next Gate
+Final evidence after Stop included:
 
-Do not start `P2-M2 - Universal Browser Session Contract` until:
+- session returned to `IDLE`;
+- cloud/audio state completed normally;
+- STT, translation, and TTS closed;
+- final STT segments: `19`;
+- final translation segments: `19`;
+- voiced TTS segments: `18`;
+- played segments: `15`;
+- TTS pending: `0`;
+- TTS buffered: `0`;
+- TTS retries: `0`;
+- queued audio: `0 ms`;
+- audio frames sent: `8666`;
+- audio bytes sent: `16638720`;
+- dropped frames: `0`.
 
-- P2-M1 automated CI passes; and
-- the controlled P2-M1 YouTube regression is accepted.
+Observation:
+
+- `Unacknowledged = 6` remained after the completed Stop.
+- This is recorded as non-blocking for P2-M1 because the session completed normally, no frames were dropped, and downstream queues drained to zero.
+- If future evidence shows this residual count represents data loss or a lifecycle leak, it must be promoted to a defect.
+
+## 6. Acceptance Result
+
+P2-M1 acceptance gates are satisfied:
+
+- automated CI passed;
+- packaged extension passed controlled YouTube live regression;
+- provider/cloud behavior remained compatible;
+- audible Ukrainian playback and ducking were confirmed;
+- bounded Stop completed with drained downstream queues.
+
+Final milestone state:
+
+`P2-M1 COMPLETE`
+
+## 7. Next Gate
+
+Authorized next milestone:
+
+`P2-M2 - Universal Browser Session Contract`
+
+P2-M2 may add the new cloud session contract and normalized source metadata, but MUST NOT use that contract to enable generic-tab UI behavior. Generic active-tab behavior remains P2-M3 scope.
