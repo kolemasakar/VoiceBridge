@@ -1,6 +1,6 @@
 # KRC MEDIA Neon Migration Plan
 
-Status: NEON_RESTORE_VERIFIED_AWAITING_CUTOVER_APPROVAL
+Status: PRE_CUTOVER_READY_AWAITING_CUTOVER_APPROVAL
 Updated: 2026-08-29
 Repository: kolemasakar/VoiceBridge
 Branch: agent/krc-media-transcript
@@ -10,7 +10,7 @@ Release state: RELEASE_HOLD_OWNER_TESTING
 
 Move the isolated KRC MEDIA BETA durable PostgreSQL store from Render PostgreSQL to Neon Free PostgreSQL without changing the application data model or MEDIA BETA behavior.
 
-This document now records the completed pre-provisioning audit, PostgreSQL 18 dry run, Neon provisioning, verified restore, and post-restore validation. It does not authorize a Render environment change, database cutover, PR merge, source database deletion, external rollout, or public promotion.
+This document records the completed pre-provisioning audit, PostgreSQL 18 dry run, Neon provisioning, verified restore, independent post-restore validation, and fresh pre-cutover verification. It does not authorize a Render environment change, database cutover, PR merge, source database deletion, external rollout, or public promotion.
 
 ## 2. Source authority and baseline
 
@@ -53,9 +53,6 @@ The source database is small and owner-only beta operation permits a controlled 
 Direct GitHub-hosted runner connections to the Render external PostgreSQL endpoint repeatedly failed with SSL connection closure and were rejected as an unreliable migration transport.
 
 The accepted transport uses a temporary owner-authenticated internal export handler on the isolated Render MEDIA BETA service. It uses the service-side PostgreSQL connection and enforces source-side read-only PostgreSQL sessions. The handler is removed immediately after use.
-
-Dry-run target:
-- ephemeral PostgreSQL 18 Docker container in GitHub Actions
 
 Authoritative dry run:
 - commit: 159bff89988f464a989d426f60628a2fa92ba41e
@@ -141,9 +138,7 @@ Restore evidence:
 - catalog structural fingerprint: 3ec31bd757e74b958c1a5a0226fab9bb
 - source combined fingerprint SHA256: dd6cfd92a6a667c6b8632ed3b2723179e56038599ace0dd3a1088bbb3931cbd5
 - Neon combined fingerprint SHA256: dd6cfd92a6a667c6b8632ed3b2723179e56038599ace0dd3a1088bbb3931cbd5
-- krc_managed_media_jobs rows: 1
-- krc_media_client_jobs rows: 0
-- krc_media_stt_charges rows: 0
+- row counts: 1 / 0 / 0
 
 Independent read-only post-restore verification:
 - workflow: KRC MEDIA Neon Post Restore Verify
@@ -158,13 +153,44 @@ Independent read-only post-restore verification:
 Historical checkpoint:
 - docs/history/KRC_MEDIA_NEON_RESTORE_VERIFY_2026-08-29.md
 
-## 9. Security and non-cutover guarantees
+## 9. Fresh pre-cutover verification - completed
 
-The verified restore did not change the active application database.
+Owner approved cutover preparation without authorizing the cutover itself.
+
+Verification workflow:
+- workflow: KRC MEDIA Neon Precutover Verify
+- run ID: 33247095949
+- workflow commit: 152a9ba9cf4fb1f743da7b4e03578ea3fc1aaa86
+- result: SUCCESS
+
+Fresh source evidence:
+- dump bytes: 8701
+- dump SHA256: a52547159e131d871aa1999414179698f6796b4ffc072601ea2e1f455b0e7fc5
+- source combined fingerprint SHA256: dd6cfd92a6a667c6b8632ed3b2723179e56038599ace0dd3a1088bbb3931cbd5
+- non-terminal managed jobs: 0
+- row counts managed/client/stt: 1 / 0 / 0
+
+Existing Neon copy:
+- combined fingerprint SHA256: dd6cfd92a6a667c6b8632ed3b2723179e56038599ace0dd3a1088bbb3931cbd5
+
+Result:
+- fresh source/Neon exact structural and logical equality: PASS
+- source baseline changed since verified restore: NO
+- Neon refresh required before cutover: NO
+- normal Render runtime restored after check: PASS
+- temporary export route removed: PASS
+- Render environment changed: NO
+- KRC_MEDIA_DATABASE_URL changed: NO
+- database cutover performed: NO
+
+Historical checkpoint:
+- docs/history/KRC_MEDIA_NEON_PRECUTOVER_VERIFY_2026-08-29.md
+
+## 10. Security and non-cutover guarantees
 
 Confirmed boundaries:
 - Render KRC_MEDIA_DATABASE_URL changed: NO
-- Render environment changed by migration workflow: NO
+- Render environment changed by migration/pre-cutover workflows: NO
 - database cutover performed: NO
 - source Render PostgreSQL writes requested: NO
 - raw pg_dump uploaded as Actions artifact: NO
@@ -174,43 +200,35 @@ Confirmed boundaries:
 - paid Facebook fallback activated: NO
 - ScrapeCreators activated: NO
 
-The normal isolated Render MEDIA BETA runtime was restored after the temporary export operation and the temporary export route was verified absent.
+The normal isolated Render MEDIA BETA runtime is active and the temporary export route is absent.
 
-## 10. Pre-cutover rule - fresh source state required
+## 11. Cutover readiness rule
 
-The Neon database is currently a verified copy of the captured source snapshot, but it is not automatically the final cutover snapshot.
+The fresh pre-cutover check passed and Neon still exactly matches the authoritative Render source.
 
-Before any future cutover:
+Before executing cutover:
 1. Keep RELEASE_HOLD_OWNER_TESTING active.
 2. Do not merge PR #28 or touch main.
-3. Pause owner activity that can create new MEDIA jobs.
-4. Confirm no active non-terminal jobs remain.
-5. Re-run the read-only source baseline check.
-6. Compare source row counts/fingerprint with the verified Neon copy.
-7. If the source changed after the 2026-08-29 snapshot, capture a fresh read-only pg_dump and refresh Neon.
-8. Require exact structural and durable-data equality again.
-9. Preserve the existing Render database and connection value for rollback.
-10. Obtain separate explicit owner authorization before changing KRC_MEDIA_DATABASE_URL.
+3. Keep owner MEDIA activity paused from the decision point through cutover verification.
+4. If any new MEDIA job is created before cutover, stop and repeat the fresh source/Neon equality check.
+5. Preserve the current Render database and protected Render KRC_MEDIA_DATABASE_URL for rollback.
+6. Obtain separate explicit owner authorization before changing KRC_MEDIA_DATABASE_URL.
 
-## 11. Planned cutover - not authorized
+## 12. Planned cutover - not authorized
 
-Only after the pre-cutover rule passes and explicit owner approval is given:
-1. Declare an owner-only migration window.
-2. Stop new MEDIA BETA job starts.
-3. Wait for active jobs to reach terminal states.
-4. Capture/confirm the final source snapshot.
-5. Restore or refresh Neon if required.
-6. Require exact source/Neon structural and logical match.
-7. Preserve the previous Render KRC_MEDIA_DATABASE_URL securely for rollback without printing it.
-8. Change only KRC_MEDIA_DATABASE_URL on the isolated KRC MEDIA BETA Render service.
-9. Restart/redeploy only that isolated service if required.
-10. Verify managed capability and durable store health.
-11. Verify existing durable state can be read.
-12. Execute a controlled owner-only live media job and verify create/process/status/segments/post-restart durability.
-13. Verify idempotency after restart/redeploy.
-14. Keep old Render PostgreSQL intact during the rollback observation window.
+Only after explicit owner approval:
+1. Declare the owner-only migration window.
+2. Confirm no new or non-terminal MEDIA BETA jobs exist.
+3. Preserve the previous Render KRC_MEDIA_DATABASE_URL securely without printing it.
+4. Change only KRC_MEDIA_DATABASE_URL on the isolated KRC MEDIA BETA Render service to the verified Neon direct TLS connection.
+5. Restart/redeploy only that isolated service if required.
+6. Verify managed capability and durable store health.
+7. Verify the existing durable state can still be read.
+8. Execute a controlled owner-only live media job and verify create/process/status/segments/post-restart durability.
+9. Verify idempotency after restart/redeploy.
+10. Keep old Render PostgreSQL intact during the rollback observation window.
 
-## 12. Rollback triggers
+## 13. Rollback triggers
 
 Rollback immediately if after cutover:
 - managed capability is not configured
@@ -223,7 +241,7 @@ Rollback immediately if after cutover:
 - idempotency behavior changes
 - database connectivity is materially unstable
 
-## 13. Rollback procedure
+## 14. Rollback procedure
 
 1. Stop new owner test activity.
 2. Restore the previous protected Render KRC_MEDIA_DATABASE_URL value.
@@ -232,7 +250,7 @@ Rollback immediately if after cutover:
 5. Keep Neon intact for diagnosis.
 6. If writes occurred on Neon after cutover, do not automatically merge them back; reconcile explicitly.
 
-## 14. Security and release boundaries
+## 15. Security and release boundaries
 
 - Never print Render or Neon database URLs.
 - Never commit database credentials.
@@ -243,15 +261,18 @@ Rollback immediately if after cutover:
 - Do not activate paid services without explicit approval.
 - Do not change MEDIA BETA retrieval behavior as part of this database migration.
 
-## 15. Current gate
+## 16. Current gate
 
 NEON_MIGRATION_PLAN: PASS
 POSTGRESQL_18_DRY_RUN: PASS
 NEON_PROVISIONING: COMPLETE
 NEON_TARGET_RESTORE: PASS
 NEON_POST_RESTORE_VERIFY: PASS
-STRUCTURAL_SCHEMA_MATCH: PASS
-LOGICAL_DATA_MATCH: PASS
+CUTOVER_PREPARATION: PASS
+FRESH_SOURCE_SNAPSHOT: PASS
+NON_TERMINAL_JOBS: 0
+SOURCE_NEON_EXACT_MATCH: PASS
+NEON_REFRESH_REQUIRED: NO
 TEMP_EXPORT_RUNTIME_REMOVED: VERIFIED
 RENDER_ENV_CHANGE: NONE
 KRC_MEDIA_DATABASE_URL_CHANGE: NONE
@@ -260,4 +281,4 @@ SOURCE_RENDER_DATABASE: AUTHORITATIVE
 SOURCE_DATABASE_DELETION: NOT_AUTHORIZED
 RELEASE_HOLD_OWNER_TESTING: PRESERVED
 
-Next authorized decision point: separately approve cutover preparation. Provisioning and restore verification are complete; they do not authorize cutover.
+Next authorized decision point: separately approve the database cutover. Cutover preparation is complete; it does not authorize changing KRC_MEDIA_DATABASE_URL.
