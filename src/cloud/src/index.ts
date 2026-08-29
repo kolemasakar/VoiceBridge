@@ -5,7 +5,7 @@ import { resolveGeminiSttModel } from "./gemini_stt_provider.js";
 
 try {
   const config = loadConfig();
-  const sttProvider = config.sttProvider ?? "assemblyai";
+  const sttProvider = config.sttProvider ?? "gemini";
   const sttModel = sttProvider === "gemini"
     ? resolveGeminiSttModel(config.geminiSttModel)
     : configuredAssemblyAiSpeechModel();
