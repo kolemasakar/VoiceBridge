@@ -29,8 +29,26 @@ test("live browser capture selects the universal runtime with normalized source 
   );
 });
 
-test("cloud connection test remains backward compatible without universal source metadata", () => {
-  assert.match(source, /created\s*=\s*await createCloudSession\(\);/);
+test("session languages come from the cloud registry rather than a browser support list", () => {
+  assert.match(source, /GET_LANGUAGE_CAPABILITIES/);
+  assert.match(source, /cloudRequest\(["']\/api\/v1\/health["']\)/);
+  assert.match(
+    source,
+    /source_language:\s*languageSelection\.source_language/
+  );
+  assert.match(
+    source,
+    /target_language:\s*languageSelection\.target_language/
+  );
+  assert.doesNotMatch(source, /source_language:\s*["']en["']/);
+  assert.doesNotMatch(source, /target_language:\s*["']uk["']/);
+});
+
+test("cloud connection test uses cloud registry defaults", () => {
+  assert.match(
+    source,
+    /created\s*=\s*await createCloudSession\(null,\s*capabilities\.defaults\);/
+  );
 });
 
 test("service worker rejects unexpected browser source metadata", () => {
@@ -43,4 +61,16 @@ test("service worker rejects unexpected browser source metadata", () => {
     /value\.source_adapter\s*!==\s*["']chromium_tab["']/
   );
   assert.match(source, /The browser source metadata is not valid\./);
+});
+
+test("stale saved language selections cannot silently start a session", () => {
+  assert.match(source, /isValidatedLanguagePair\(capabilities, selection\)/);
+  assert.match(
+    source,
+    /The saved language pair is no longer validated by VoiceBridge Cloud\./
+  );
+  assert.match(
+    source,
+    /const languageSelection = await selectedLanguagePair\(capabilities\);/
+  );
 });
