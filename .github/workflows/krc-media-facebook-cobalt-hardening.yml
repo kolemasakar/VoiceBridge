@@ -61,6 +61,13 @@ jobs:
           new = '  assert.equal(capability.facebook_ai_fallback, false);\n  assert.equal(capability.facebook_ai_requires_duration_metadata, false);\n  assert.equal(capability.facebook_ai_metadata_credits, 0);\n'
           assert s.count(old) == 1
           p.write_text(s.replace(old, new, 1))
+
+          p = Path("src/cloud/tests/managed_media_http.test.ts")
+          s = p.read_text()
+          old = '    assert.equal(capabilityBody.facebook_ai_fallback, true);\n    assert.equal(capabilityBody.facebook_ai_requires_duration_metadata, true);\n    assert.equal(capabilityBody.facebook_ai_metadata_credits, 1);\n'
+          new = '    assert.equal(capabilityBody.facebook_ai_fallback, false);\n    assert.equal(capabilityBody.facebook_ai_requires_duration_metadata, false);\n    assert.equal(capabilityBody.facebook_ai_metadata_credits, 0);\n'
+          assert s.count(old) == 1
+          p.write_text(s.replace(old, new, 1))
           PY
 
       - name: Add active Facebook route regression
