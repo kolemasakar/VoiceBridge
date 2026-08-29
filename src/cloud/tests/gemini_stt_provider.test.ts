@@ -115,7 +115,7 @@ test("Gemini Live setup and FIR resampling preserve the STT contract", async () 
       const message = JSON.parse(data.toString()) as Record<string, unknown>;
       if (message.setup) {
         setup = message.setup as Record<string, unknown>;
-        socket.send(JSON.stringify({ setupComplete: {} }));
+        socket.send(Buffer.from(JSON.stringify({ setupComplete: {} })));
         return;
       }
 
@@ -129,19 +129,19 @@ test("Gemini Live setup and FIR resampling preserve the STT contract", async () 
         providerAudio.push(Buffer.from(String(audio.data), "base64"));
         providerMimeTypes.push(String(audio.mimeType));
         if (providerAudio.length === 1) {
-          socket.send(JSON.stringify({
+          socket.send(Buffer.from(JSON.stringify({
             serverContent: {
               interimInputTranscription: { text: "Hello wor" }
             }
-          }));
+          })));
         }
       }
       if (realtimeInput?.audioStreamEnd === true) {
-        socket.send(JSON.stringify({
+        socket.send(Buffer.from(JSON.stringify({
           serverContent: {
             inputTranscription: { text: "Hello world." }
           }
-        }));
+        })));
         socket.close(1000);
       }
     });
