@@ -2,10 +2,25 @@
 
 Version:
 
-`0.6.2`
+`0.7.0`
 
-The extension captures YouTube tab audio, displays English and Ukrainian text,
-plays Ukrainian PCM, and automatically ducks the original audio.
+The extension captures audio that is actively playing in the current HTTP or
+HTTPS browser tab, displays English and Ukrainian text, plays Ukrainian PCM,
+and automatically ducks the original audio.
+
+Before pressing Start, begin audio playback in the source tab. Restricted
+browser pages and tabs that are not currently audible are rejected with an
+actionable error before a cloud streaming session is started.
+
+YouTube remains a supported regression case, but is no longer the only browser
+source accepted by the extension.
+
+## Permission Boundary
+
+The universal active-tab path continues to use `activeTab` and `tabCapture`.
+It does not require `<all_urls>` or a broad website host permission. Existing
+host permissions remain limited to the VoiceBridge Cloud endpoint and local
+development endpoints.
 
 ## Stop State
 
