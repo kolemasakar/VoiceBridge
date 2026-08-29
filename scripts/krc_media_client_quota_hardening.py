@@ -28,10 +28,10 @@ replace_once(
     """export interface MediaClientIngestServiceOptions {
   assemblyAiApiKey: string | null;
   betaGate: MediaBetaGate;
-  reserveSttSeconds?: (
+  reserveSttSeconds?: ((
     jobId: string,
     requestedSeconds: number
-  ) => Promise<MediaBetaReserveResult>;
+  ) => Promise<MediaBetaReserveResult>) | undefined;
   maxDurationSeconds: number;
   jobTtlSeconds: number;
   maxConcurrentJobs: number;
