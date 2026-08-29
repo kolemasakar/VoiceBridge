@@ -1,0 +1,126 @@
+name: KRC MEDIA Client Shared Quota Hardening
+on:
+  push:
+    branches:
+      - agent/krc-media-transcript
+    paths:
+      - .github/workflows/krc-media-client-shared-quota-hardening.yml
+permissions:
+  contents: write
+jobs:
+  harden:
+    runs-on: ubuntu-24.04
+    services:
+      postgres:
+        image: postgres:18
+        env:
+          POSTGRES_PASSWORD: postgres
+          POSTGRES_DB: krc_media_shared_quota_test
+        ports:
+          - 5432:5432
+        options: >-
+          --health-cmd "pg_isready -U postgres -d krc_media_shared_quota_test"
+          --health-interval 5s
+          --health-timeout 5s
+          --health-retries 20
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+      - name: Verify baseline
+        shell: bash
+        run: |
+          set -euo pipefail
+          test "$(git branch --show-current)" = "agent/krc-media-transcript"
+          git merge-base --is-ancestor 2f0f02769dbdf2e8240e6b08867ecef2faaede16 HEAD
+          test -f scripts/krc_media_client_quota_hardening.py
+      - name: Apply legacy client shared quota hardening
+        shell: bash
+        run: |
+          set -euo pipefail
+          python scripts/krc_media_client_quota_hardening.py
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 24
+      - name: Run full cloud validation
+        working-directory: src/cloud
+        shell: bash
+        run: |
+          set -euo pipefail
+          npm ci
+          npm run check
+      - name: Validate one shared PostgreSQL 18 quota across KRCM and KRCC
+        working-directory: src/cloud
+        env:
+          KRC_SHARED_QUOTA_DATABASE_URL: postgresql://postgres:postgres@127.0.0.1:5432/krc_media_shared_quota_test?sslmode=disable
+        shell: bash
+        run: |
+          set -euo pipefail
+          server_version="$(psql "$KRC_SHARED_QUOTA_DATABASE_URL" -Atc 'show server_version_num')"
+          test "$server_version" -ge 180000
+          node --input-type=module <<'NODE'
+          import assert from 'node:assert/strict';
+          import { ManagedMediaPersistentStore } from './dist/src/managed_media_persistence.js';
+          import { MediaClientPersistentStore } from './dist/src/media_client_persistence.js';
+
+          const url = process.env.KRC_SHARED_QUOTA_DATABASE_URL;
+          const managed = new ManagedMediaPersistentStore(url);
+          const client = new MediaClientPersistentStore(url);
+          await Promise.all([managed.ready(), client.ready()]);
+
+          const firstDay = '2026-08-29';
+          const race = await Promise.all([
+            managed.reserveSttSeconds('KRCM_shared-managed-a', firstDay, 40, 60),
+            client.reserveSttSeconds('KRCC_shared-client-a', firstDay, 40, 60)
+          ]);
+          assert.equal(race.filter((item) => item.allowed).length, 1);
+          assert.equal(race.filter((item) => !item.allowed).length, 1);
+          assert.ok(race.every((item) => item.used_seconds === 40));
+
+          const usedFirst = Number((await import('node:child_process')).execFileSync(
+            'psql',
+            [url, '-Atc', `select coalesce(sum(seconds),0) from krc_media_stt_charges where day_utc='${firstDay}'::date`],
+            { encoding: 'utf8' }
+          ).trim());
+          assert.equal(usedFirst, 40);
+
+          const secondDay = '2026-08-30';
+          assert.deepEqual(
+            await client.reserveSttSeconds('KRCC_shared-client-b', secondDay, 30, 60),
+            { allowed: true, used_seconds: 30, remaining_seconds: 30 }
+          );
+          assert.deepEqual(
+            await client.reserveSttSeconds('KRCC_shared-client-b', secondDay, 30, 60),
+            { allowed: true, used_seconds: 30, remaining_seconds: 30 }
+          );
+          assert.deepEqual(
+            await managed.reserveSttSeconds('KRCM_shared-managed-b', secondDay, 31, 60),
+            { allowed: false, used_seconds: 30, remaining_seconds: 30 }
+          );
+          assert.deepEqual(
+            await managed.reserveSttSeconds('KRCM_shared-managed-b', secondDay, 30, 60),
+            { allowed: true, used_seconds: 60, remaining_seconds: 0 }
+          );
+
+          const thirdDay = '2026-08-31';
+          const oppositeRace = await Promise.all([
+            client.reserveSttSeconds('KRCC_shared-client-c', thirdDay, 40, 60),
+            managed.reserveSttSeconds('KRCM_shared-managed-c', thirdDay, 40, 60)
+          ]);
+          assert.equal(oppositeRace.filter((item) => item.allowed).length, 1);
+          assert.equal(oppositeRace.filter((item) => !item.allowed).length, 1);
+          assert.ok(oppositeRace.every((item) => item.used_seconds === 40));
+
+          console.log('SHARED_KRCM_KRCC_DURABLE_STT_QUOTA=PASS');
+          NODE
+      - name: Commit accepted client quota hardening and remove harness
+        shell: bash
+        run: |
+          set -euo pipefail
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git rm .github/workflows/krc-media-client-shared-quota-hardening.yml
+          git rm scripts/krc_media_client_quota_hardening.py
+          git add src/cloud/src/media_client_ingest.ts src/cloud/src/media_client_http.ts src/cloud/src/media_client_persistence.ts
+          git commit -m "Share durable media STT quota with client assisted path"
+          git push origin HEAD:agent/krc-media-transcript
