@@ -1,0 +1,176 @@
+name: KRC MEDIA Neon Read-Only Observation
+
+on:
+  push:
+    branches:
+      - agent/krc-media-transcript
+    paths:
+      - .github/workflows/krc-media-neon-observation-readonly.yml
+
+permissions:
+  contents: read
+
+concurrency:
+  group: krc-media-neon-observation-readonly
+  cancel-in-progress: false
+
+env:
+  RENDER_API_BASE: https://api.render.com/v1
+  SERVICE_ID: srv-da1kic5bedkc73d6fk60
+  SERVICE_NAME: voicebridge-krc-media-beta-kolemasakar
+  REQUIRED_BRANCH: agent/krc-media-transcript
+  BASE_URL: https://voicebridge-krc-media-beta-kolemasakar.onrender.com
+  POSTGRES_IMAGE: postgres:18
+  REGRESSION_TAG: krc_regression=20260829-neon
+
+jobs:
+  observe:
+    name: Read-only Neon observation checkpoint
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    env:
+      RENDER_API_KEY: ${{ secrets.RENDER_API_KEY }}
+      KRC_NEON_DATABASE_URL: ${{ secrets.KRC_NEON_DATABASE_URL }}
+    steps:
+      - name: Checkout exact head
+        uses: actions/checkout@v4
+
+      - name: Verify isolated Render and active Neon target
+        shell: bash
+        run: |
+          set -euo pipefail
+          test -n "${RENDER_API_KEY:-}"
+          test -n "${KRC_NEON_DATABASE_URL:-}"
+          echo "::add-mask::$RENDER_API_KEY"
+          echo "::add-mask::$KRC_NEON_DATABASE_URL"
+          [[ "$KRC_NEON_DATABASE_URL" == *".neon.tech"* ]]
+          [[ "$KRC_NEON_DATABASE_URL" != *"-pooler."* ]]
+          [[ "$KRC_NEON_DATABASE_URL" == *"sslmode=require"* ]]
+
+          tmp="$(mktemp)"
+          code="$(curl -sS -o "$tmp" -w '%{http_code}' \
+            "${RENDER_API_BASE}/services/${SERVICE_ID}" \
+            -H 'Accept: application/json' \
+            -H "Authorization: Bearer ${RENDER_API_KEY}")"
+          [[ "$code" == "200" ]]
+          [[ "$(jq -r '.name // empty' "$tmp")" == "$SERVICE_NAME" ]]
+          [[ "$(jq -r '.branch // empty' "$tmp")" == "$REQUIRED_BRANCH" ]]
+          rm -f "$tmp"
+
+          tmp="$(mktemp)"
+          code="$(curl -sS -o "$tmp" -w '%{http_code}' \
+            "${RENDER_API_BASE}/services/${SERVICE_ID}/env-vars/KRC_MEDIA_DATABASE_URL" \
+            -H 'Accept: application/json' \
+            -H "Authorization: Bearer ${RENDER_API_KEY}")"
+          [[ "$code" == "200" ]]
+          current_db="$(jq -r '(.envVar.value // .value // empty)' "$tmp")"
+          rm -f "$tmp"
+          test -n "$current_db"
+          echo "::add-mask::$current_db"
+          [[ "$current_db" == "$KRC_NEON_DATABASE_URL" ]]
+          echo "Isolated Render service still targets the protected Neon direct TLS URL."
+
+      - name: Load masked Action bearer
+        shell: bash
+        run: |
+          set -euo pipefail
+          tmp="$(mktemp)"
+          code="$(curl -sS -o "$tmp" -w '%{http_code}' \
+            "${RENDER_API_BASE}/services/${SERVICE_ID}/env-vars/KRC_MEDIA_ACTION_TOKEN" \
+            -H 'Accept: application/json' \
+            -H "Authorization: Bearer ${RENDER_API_KEY}")"
+          [[ "$code" == "200" ]]
+          action_token="$(jq -r '(.envVar.value // .value // empty)' "$tmp")"
+          rm -f "$tmp"
+          test -n "$action_token"
+          echo "::add-mask::$action_token"
+          umask 077
+          printf '%s' "$action_token" > /tmp/krc-media-action-token
+
+      - name: Verify managed capability after observation delay
+        shell: bash
+        run: |
+          set -euo pipefail
+          action_token="$(cat /tmp/krc-media-action-token)"
+          code="$(curl -sS --max-time 60 -o /tmp/krc-capability.json -w '%{http_code}' \
+            "${BASE_URL}/api/v1/media/managed" \
+            -H 'Accept: application/json' \
+            -H "Authorization: Bearer ${action_token}")"
+          [[ "$code" == "200" ]]
+          jq -e '.mode=="zero_client_managed_beta" and .configured==true and .durable_store=="postgres" and .restart_resilient_jobs==true and .owner_access_injected_server_side==true and .user_beta_access_code_required==false and .facebook_free_retrieval_provider=="cobalt" and .facebook_automatic_paid_retrieval==false and .telegram_public_retrieval==true and .telegram_retrieval_provider=="telegram_public_web" and .telegram_retrieval_credits==0 and .local_attachment_transport==true and .local_attachment_retrieval_provider=="openai_attachment" and .local_attachment_max_bytes==33554432' /tmp/krc-capability.json >/dev/null
+          echo "Managed capability contract remains healthy."
+
+      - name: Verify Neon durable state and resolve prior regression job
+        shell: bash
+        run: |
+          set -euo pipefail
+          docker pull "$POSTGRES_IMAGE" >/dev/null
+          dbstate="$(docker run --rm -e KRC_NEON_DATABASE_URL="$KRC_NEON_DATABASE_URL" "$POSTGRES_IMAGE" \
+            psql -X -A -t -F '|' -v ON_ERROR_STOP=1 --dbname "$KRC_NEON_DATABASE_URL" \
+            -c "SELECT current_setting('server_version_num'), count(*), count(*) FILTER (WHERE status NOT IN ('COMPLETED','FAILED')) FROM public.krc_managed_media_jobs;")"
+          IFS='|' read -r version_num total_jobs nonterminal_jobs <<< "$dbstate"
+          [[ "$version_num" == 18* ]]
+          [[ "$total_jobs" -ge 2 ]]
+          [[ "$nonterminal_jobs" == "0" ]]
+
+          regression="$(docker run --rm -e KRC_NEON_DATABASE_URL="$KRC_NEON_DATABASE_URL" "$POSTGRES_IMAGE" \
+            psql -X -A -t -F $'\t' -v ON_ERROR_STOP=1 --dbname "$KRC_NEON_DATABASE_URL" \
+            -c "SELECT job_id, status, payload->>'provider_mode', payload->>'segment_count', payload->>'credits_charged' FROM public.krc_managed_media_jobs WHERE payload->>'source_url' LIKE '%krc_regression=20260829-neon%' ORDER BY updated_at DESC LIMIT 1;")"
+          test -n "$regression"
+          IFS=$'\t' read -r job_id status mode segment_count credits_charged <<< "$regression"
+          [[ "$job_id" =~ ^KRCM_[A-Za-z0-9-]+$ ]]
+          [[ "$status" == "COMPLETED" ]]
+          [[ "$mode" == "native" ]]
+          [[ "$segment_count" -gt 0 ]]
+          [[ "$credits_charged" == "1" ]]
+          echo "job_id=$job_id" >> "$GITHUB_ENV"
+          echo "total_jobs=$total_jobs" >> "$GITHUB_ENV"
+          echo "nonterminal_jobs=$nonterminal_jobs" >> "$GITHUB_ENV"
+          echo "segment_count=$segment_count" >> "$GITHUB_ENV"
+          echo "Neon durable state is readable; prior regression row remains intact."
+
+      - name: Verify prior regression job and segments through runtime API
+        shell: bash
+        run: |
+          set -euo pipefail
+          action_token="$(cat /tmp/krc-media-action-token)"
+          code="$(curl -sS --max-time 60 -o /tmp/krc-job.json -w '%{http_code}' \
+            "${BASE_URL}/api/v1/media/managed/transcriptions/${job_id}" \
+            -H 'Accept: application/json' -H "Authorization: Bearer ${action_token}")"
+          [[ "$code" == "200" ]]
+          jq -e --arg id "$job_id" '.job_id==$id and .status=="COMPLETED" and .provider_mode=="native" and .segment_count>0 and .reused==false' /tmp/krc-job.json >/dev/null
+
+          code="$(curl -sS --max-time 60 -o /tmp/krc-segments.json -w '%{http_code}' \
+            "${BASE_URL}/api/v1/media/managed/transcriptions/${job_id}/segments?cursor=0&limit=1" \
+            -H 'Accept: application/json' -H "Authorization: Bearer ${action_token}")"
+          [[ "$code" == "200" ]]
+          jq -e --arg id "$job_id" '.job_id==$id and (.segments|length)>0' /tmp/krc-segments.json >/dev/null
+          echo "Prior completed job and segment remain readable through the managed API."
+
+      - name: Publish sanitized observation summary
+        shell: bash
+        run: |
+          {
+            echo '# KRC MEDIA Neon read-only observation checkpoint'
+            echo
+            echo '- Release state: `RELEASE_HOLD_OWNER_TESTING`'
+            echo '- Active durable store: `Neon PostgreSQL 18`'
+            echo '- Render still targets protected Neon direct TLS URL: `PASS`'
+            echo '- Managed capability: `PASS`'
+            echo '- Restart resilient jobs: `PASS`'
+            echo '- Facebook automatic paid retrieval: `false`'
+            echo '- Telegram retrieval credits: `0`'
+            echo '- Local attachment retrieval provider: `openai_attachment`'
+            echo '- Neon total managed jobs: `'$total_jobs'`'
+            echo '- Neon non-terminal managed jobs: `'$nonterminal_jobs'`'
+            echo '- Prior regression job readable: `PASS`'
+            echo '- Prior regression segment readable: `PASS`'
+            echo '- Provider-consuming work requested: `NO`'
+            echo '- Render environment mutation: `NONE`'
+            echo '- Database mutation: `NONE`'
+          } >> "$GITHUB_STEP_SUMMARY"
+
+      - name: Remove temporary runner material
+        if: always()
+        shell: bash
+        run: sudo rm -f /tmp/krc-* >/dev/null 2>&1 || true
