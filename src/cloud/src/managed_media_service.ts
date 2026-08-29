@@ -1500,6 +1500,7 @@ export class ManagedMediaService {
     const record = await this.authorizedRecord(jobId, accessCode);
     this.authorizeFacebookPipeline(accessCode);
     if (
+      managedMediaPlatform(record.job.source_url) !== "facebook" ||
       record.job.provider_mode !== "facebook_retrieval_stt" ||
       record.job.status !== "AWAITING_RETRIEVAL_CONSENT"
     ) {
@@ -1523,6 +1524,7 @@ export class ManagedMediaService {
       return this.publicJob(record.job, true);
     }
     if (
+      managedMediaPlatform(record.job.source_url) !== "facebook" ||
       record.job.provider_mode !== "facebook_retrieval_stt" ||
       record.job.status !== "AWAITING_RETRIEVAL_CONSENT"
     ) {
@@ -1671,6 +1673,7 @@ export class ManagedMediaService {
       );
       if (
         retryTarget.job.status !== "FAILED" ||
+        retryTarget.job.provider_mode !== "native" ||
         retryTarget.job.source_url !== sourceUrl ||
         retryTarget.job.language_hint !== input.language_hint
       ) {

@@ -358,7 +358,7 @@ test("fresh native retry cannot use a FAILED record from a foreign provider mode
   const provider = new CountingProvider();
   const service = new ManagedMediaService(new MediaBetaGate([ACCESS_CODE]), null, provider, { store });
   const target = fixtureRecord(
-    "KRCM_foreign_retry",
+    "KRCM_foreign-retry",
     "FAILED",
     "https://youtu.be/retry-guard",
     "telegram_public_retrieval_stt"
