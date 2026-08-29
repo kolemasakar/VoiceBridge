@@ -18,11 +18,80 @@ function normalizeSessionSource(value) {
   };
 }
 
-function sessionRequestBody(sourceMetadata = null) {
-  const source = normalizeSessionSource(sourceMetadata);
+function normalizeLanguageCapabilities(value) {
+  const languages = value?.capabilities?.languages;
+  if (!languages || typeof languages !== "object") {
+    throw new Error("Cloud language capabilities are not available.");
+  }
+  const sourceLanguages = Array.isArray(languages.source_languages)
+    ? languages.source_languages.filter((item) =>
+      item && typeof item.tag === "string" && typeof item.label === "string"
+    ).map((item) => ({ tag: item.tag, label: item.label }))
+    : [];
+  const targetLanguages = Array.isArray(languages.target_languages)
+    ? languages.target_languages.filter((item) =>
+      item && typeof item.tag === "string" && typeof item.label === "string"
+    ).map((item) => ({ tag: item.tag, label: item.label }))
+    : [];
+  const pairs = Array.isArray(languages.pairs)
+    ? languages.pairs.filter((pair) =>
+      pair &&
+      typeof pair.source_language === "string" &&
+      typeof pair.target_language === "string"
+    ).map((pair) => ({
+      source_language: pair.source_language,
+      target_language: pair.target_language
+    }))
+    : [];
+  const defaults = languages.defaults;
+  if (
+    !sourceLanguages.length ||
+    !targetLanguages.length ||
+    !pairs.length ||
+    !defaults ||
+    typeof defaults.source_language !== "string" ||
+    typeof defaults.target_language !== "string" ||
+    !pairs.some((pair) =>
+      pair.source_language === defaults.source_language &&
+      pair.target_language === defaults.target_language
+    )
+  ) {
+    throw new Error("Cloud returned invalid language capabilities.");
+  }
   return {
-    source_language: "en",
-    target_language: "uk",
+    registry_version: typeof languages.registry_version === "string"
+      ? languages.registry_version
+      : "unknown",
+    validation_policy: languages.validation_policy,
+    source_languages: sourceLanguages,
+    target_languages: targetLanguages,
+    pairs,
+    defaults: {
+      source_language: defaults.source_language,
+      target_language: defaults.target_language
+    }
+  };
+}
+
+function isValidatedLanguagePair(capabilities, selection) {
+  return Boolean(selection) && capabilities.pairs.some((pair) =>
+    pair.source_language === selection.source_language &&
+    pair.target_language === selection.target_language
+  );
+}
+
+function sessionRequestBody(sourceMetadata, languageSelection) {
+  const source = normalizeSessionSource(sourceMetadata);
+  if (
+    !languageSelection ||
+    typeof languageSelection.source_language !== "string" ||
+    typeof languageSelection.target_language !== "string"
+  ) {
+    throw new Error("A validated language selection is required.");
+  }
+  return {
+    source_language: languageSelection.source_language,
+    target_language: languageSelection.target_language,
     runtime_mode: source ? "UNIVERSAL_BROWSER_AUDIO" : "YOUTUBE_MVP",
     input_type: "BROWSER_AUDIO",
     output_type: "BROWSER_PLAYBACK",
@@ -33,7 +102,7 @@ function sessionRequestBody(sourceMetadata = null) {
       synthesis: null
     },
     voice: {
-      voice_id: "uk-UA-OstapNeural",
+      voice_id: null,
       speaking_rate: null
     }
   };
@@ -108,6 +177,34 @@ async function cloudRequest(path, options = {}) {
   }
 }
 
+async function getLanguageCapabilities() {
+  const health = await cloudRequest("/api/v1/health");
+  return normalizeLanguageCapabilities(health);
+}
+
+async function selectedLanguagePair(capabilities) {
+  const settings = await chrome.storage.local.get([
+    "source_language",
+    "target_language"
+  ]);
+  const hasSavedSelection =
+    settings.source_language !== undefined ||
+    settings.target_language !== undefined;
+  if (!hasSavedSelection) {
+    return { ...capabilities.defaults };
+  }
+  const selection = {
+    source_language: settings.source_language,
+    target_language: settings.target_language
+  };
+  if (!isValidatedLanguagePair(capabilities, selection)) {
+    throw new Error(
+      "The saved language pair is no longer validated by VoiceBridge Cloud."
+    );
+  }
+  return selection;
+}
+
 async function setCloudState(state) {
   await chrome.storage.session.set({ cloud_state: state });
   return state;
@@ -122,10 +219,10 @@ async function getCloudState() {
   };
 }
 
-async function createCloudSession(sourceMetadata = null) {
+async function createCloudSession(sourceMetadata, languageSelection) {
   return cloudRequest("/api/v1/sessions", {
     method: "POST",
-    body: JSON.stringify(sessionRequestBody(sourceMetadata))
+    body: JSON.stringify(sessionRequestBody(sourceMetadata, languageSelection))
   });
 }
 
@@ -147,12 +244,13 @@ async function testCloudConnection() {
   });
   let created = null;
   try {
-    created = await createCloudSession();
+    const capabilities = await getLanguageCapabilities();
+    created = await createCloudSession(null, capabilities.defaults);
     await stopSessionById(created.session_id);
     return setCloudState({
       status: "READY",
       session_id: null,
-      message: "Cloud API and token are valid."
+      message: "Cloud API, token, and language registry are valid."
     });
   } catch (error) {
     if (created?.session_id) {
@@ -177,7 +275,9 @@ async function startCloudSession(sourceMetadata = null) {
   });
   let created = null;
   try {
-    created = await createCloudSession(sourceMetadata);
+    const capabilities = await getLanguageCapabilities();
+    const languageSelection = await selectedLanguagePair(capabilities);
+    created = await createCloudSession(sourceMetadata, languageSelection);
     await setCloudState({
       status: "STARTING",
       session_id: created.session_id,
@@ -341,6 +441,11 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
       }));
   } else if (message.type === "GET_CLOUD_STATE") {
     operation = getCloudState().then((state) => ({ ok: true, state }));
+  } else if (message.type === "GET_LANGUAGE_CAPABILITIES") {
+    operation = getLanguageCapabilities().then((capabilities) => ({
+      ok: true,
+      capabilities
+    }));
   } else if (message.type === "TEST_CLOUD_CONNECTION") {
     operation = testCloudConnection().then((state) => ({ ok: true, state }));
   } else if (message.type === "START_CLOUD_SESSION") {
