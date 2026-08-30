@@ -8,78 +8,20 @@ Define the approved technology stack for VoiceBridge, including runtime platform
 Scope:
 Technology selection, implementation boundaries, development tools, validation tools, provider choices, and future stack evolution.
 
-Out of Scope:
-Detailed implementation tasks, provider credentials, deployment secrets, pricing decisions, and private environment values.
-
-Audience:
-Developers, contributors, maintainers, and AI development assistants.
-
 Status:
-Approved
+Approved - Phase 2 Validated
 
 Version:
-1.3.0
+1.4.0
 
 Last Updated:
-2026-08-29
-
-## Table of Contents
-
-1. Stack Vision
-   UA: Bachennia steku
-
-2. Stack Principles
-   UA: Pryntsypy steku
-
-3. Application Runtime
-   UA: Seredovyshche vykonannia dodatku
-
-4. Programming Languages
-   UA: Movy prohramuvannia
-
-5. User Interface Layer
-   UA: Shar interfeisu korystuvacha
-
-6. Audio Layer
-   UA: Audio shar
-
-7. AI Provider Layer
-   UA: Shar AI provideriv
-
-8. Configuration and Secrets
-   UA: Konfiguratsiia ta sekrety
-
-9. Testing and Quality Tools
-   UA: Instrumenty testuvannia ta yakosti
-
-10. Documentation Tooling
-    UA: Instrumenty dokumentatsii
-
-11. Dependency Rules
-    UA: Pravyla zalezhnostei
-
-12. Evolution Rules
-    UA: Pravyla rozvytku
-
-13. References
-    UA: Posylannia
-
-14. Version History
-    UA: Istoriia versii
+2026-08-30
 
 ## 1. Stack Vision
 
-VoiceBridge uses a pragmatic, modular technology stack that supports fast validation and long-term evolution into a universal real-time translation platform.
+VoiceBridge uses a pragmatic, modular Cloud First stack that supports browser audio capture, cloud AI processing, capability-aware language selection, and local translated speech playback.
 
-The stack MUST support:
-
-- browser audio capture;
-- streaming-oriented speech processing;
-- replaceable speech recognition providers;
-- replaceable translation providers;
-- replaceable speech synthesis providers;
-- local browser playback of translated speech;
-- clear separation between application logic and vendor integrations.
+The stack MUST keep source capture, recognition, translation, synthesis, playback, language capability policy, and provider integrations as separate concerns.
 
 ## 2. Stack Principles
 
@@ -87,33 +29,37 @@ The technology stack MUST:
 
 - prefer simple, maintainable tools over premature complexity;
 - keep provider-specific code behind adapter interfaces;
+- keep source-specific capture behind source adapters;
 - avoid hard dependency on one AI vendor in core pipeline logic;
 - keep secrets outside source code;
 - make accepted provider defaults explicit and testable;
+- keep language capability knowledge authoritative in the cloud;
 - retain documented rollback paths where approved;
+- keep content non-persistent by default;
 - document major stack changes before implementation;
-- keep repository documentation ASCII-only and Markdown-based.
+- keep repository documentation ASCII-only and Markdown-based except approved exceptions.
 
 ## 3. Application Runtime
 
-The approved runtime direction is Cloud First.
-
 | Category | Approved Direction | Status |
 |----------|--------------------|--------|
-| Primary client | Chromium browser extension / browser application | In use |
+| Primary client | Chromium browser extension | In use - validated |
+| Browser runtime | Extension `0.8.0` | Accepted Phase 2 runtime |
+| Source adapter | `chromium_tab` | In use - validated |
 | API runtime | Cloud-hosted TypeScript service | In use |
 | STT runtime | Cloud service behind `SttProvider` | In use |
-| Translation runtime | Cloud service behind provider adapter | In use |
-| TTS runtime | Cloud service behind provider adapter | In use |
+| Translation runtime | Cloud provider adapter | In use |
+| TTS runtime | Cloud provider adapter | In use |
+| Language registry | Cloud-owned capability registry | In use - validated |
 | Session orchestration | Cloud-hosted service | In use |
 | Authoritative state | Cloud-managed transient session state | In use |
 | Local Agent | Minimal cross-platform edge adapter only if browser capture is insufficient | Future |
 
-The browser is the primary client for Phases 1 through 4.
+The browser remains the primary client for Phases 1 through 4.
 
-The Phase 1 cloud service is deployed as a Render Web Service using the provider-neutral Dockerfile in `src/cloud/`. Render is the accepted test-hosting platform and does not define the final production hosting contract.
+The current cloud service is deployed as a Render Web Service using the provider-neutral Dockerfile in `src/cloud/`. Render is the accepted controlled-test hosting platform and does not define the final production hosting contract.
 
-## 4. Programming Languages
+## 4. Programming Languages and Core Dependencies
 
 Approved language choices:
 
@@ -123,63 +69,65 @@ Approved language choices:
 | Cloud API and orchestration | TypeScript on Node.js 24+ | In use |
 | Local service or automation | Python | Approved when needed |
 | Build and repository scripts | Bash, JavaScript, or Python | Approved |
-| Configuration | JSON, YAML, TOML, or environment variables | Approved |
+| Configuration | JSON, YAML, TOML, environment variables | Approved |
 
-The cloud package currently uses:
+Current cloud package baseline includes:
 
 - Node.js 24+;
 - TypeScript 7.0.2;
 - `ws` 8.21.1 for WebSocket transport;
 - Node.js built-in test runner;
-- no provider SDK dependency in the core cloud package.
+- direct HTTP/WebSocket provider adapters rather than mandatory provider SDKs in the core package.
 
-Provider integrations use explicit HTTP or WebSocket adapters so provider-specific SDKs do not become mandatory core dependencies.
+## 5. Browser and UI Layer
 
-## 5. User Interface Layer
+Current accepted browser client:
 
-The Phase 1 user interface is the Chromium browser extension under `src/browser_extension/`.
+`VoiceBridge Extension 0.8.0`
 
 Responsibilities include:
 
-- explicit user-controlled capture;
-- session state display;
-- English and Ukrainian transcript presentation;
-- original and Ukrainian volume controls;
-- automatic original-audio ducking;
-- ordered Ukrainian PCM playback;
+- explicit user-controlled current-tab capture;
+- source-adapter orchestration;
+- cloud connection/token validation;
+- cloud language-registry loading;
+- source and target language selectors populated only from accepted registry capabilities;
+- session state and transport metrics;
+- source transcript and translated text display;
+- original and translated volume controls;
+- automatic ducking/restoration;
+- ordered translated PCM playback;
 - bounded Stop behavior;
+- source-tab-ended cleanup;
 - transcript-copy support.
 
-UI code MUST NOT contain direct provider secrets.
+Current validated language UI exposes only:
+
+- Source: English (`en`);
+- Target: Ukrainian (`uk`).
+
+The browser MUST NOT maintain an independent broader provider/language support matrix.
 
 ## 6. Audio Layer
 
-The audio layer handles capture, normalization, buffering, transport, and playback.
+Current audio path:
 
-Current Phase 1 audio path:
+- Chromium current-tab capture;
+- Web Audio and AudioWorklet APIs;
+- browser input PCM16 mono at 48 kHz;
+- secure WebSocket transport of bounded PCM frames to VoiceBridge Cloud;
+- Gemini STT adapter conversion to PCM16 mono at 16 kHz;
+- Azure Speech raw 24 kHz 16-bit mono PCM output;
+- ordered browser playback with bounded queueing;
+- automatic original-audio ducking and restoration.
 
-- browser capture uses Web Audio and AudioWorklet APIs;
-- browser input is PCM16 mono at 48 kHz;
-- secure WebSocket transports bounded PCM frames to VoiceBridge Cloud;
-- the Gemini STT adapter performs bounded stateful FIR conversion to PCM16 mono at 16 kHz;
-- Azure Speech returns raw 24 kHz 16-bit mono PCM for browser playback.
+Audio implementation remains separate from recognition, translation, and synthesis logic.
 
-Audio implementation MUST remain separate from recognition, translation, and synthesis logic.
+Phase 2 lifecycle acceptance validated both user Stop and unexpected source-tab termination with non-zero playback backlog.
 
 ## 7. AI Provider Layer
 
-The AI provider layer contains integrations for speech recognition, translation, and text-to-speech.
-
-Approved provider rules:
-
-- providers MUST be wrapped by service adapters;
-- provider credentials MUST be loaded from approved environment configuration;
-- provider responses SHOULD be normalized before entering core pipeline logic;
-- provider-specific errors SHOULD be mapped to common application errors;
-- fallback and rollback behavior MUST be explicit;
-- provider model identifiers MUST be guarded when silent upstream model changes could alter behavior.
-
-Current accepted Phase 1 provider matrix:
+Current accepted provider matrix:
 
 | Capability | Default | Fallback / Rollback | Status |
 |------------|---------|---------------------|--------|
@@ -187,22 +135,41 @@ Current accepted Phase 1 provider matrix:
 | Translation | Azure Translator | Gemini `gemini-3.1-flash-lite` | Validated |
 | Ukrainian TTS | Azure Speech `uk-UA-OstapNeural` | Gemini TTS selectable by explicit configuration | Validated primary |
 
-Gemini STT was accepted after controlled same-duration A/B validation on 2026-08-29. AssemblyAI remains implemented and testable as the rollback provider.
+Provider rules:
 
-No automatic paid provider fallback is approved for the accepted Phase 1 runtime.
+- providers MUST remain behind adapters;
+- provider credentials remain cloud-side;
+- provider responses are normalized before core orchestration consumes them;
+- fallback and rollback behavior is explicit;
+- model identifiers are guarded when silent upstream changes could alter behavior;
+- no automatic paid provider fallback is approved.
 
-## 8. Configuration and Secrets
+## 8. Language Capability Registry
 
-Configuration MUST be explicit and environment-aware.
+Phase 2 introduced a cloud-owned language capability registry.
 
-Approved configuration sources:
+Current validated registry version:
 
-- deployment environment variables for secrets and runtime selection;
-- local ignored configuration files for developer machines;
-- checked-in example configuration without real secrets;
-- documented defaults for non-sensitive settings.
+`1.0.0`
 
-Accepted provider-selection defaults:
+Responsibilities:
+
+- centralized BCP 47 validation;
+- source-language STT capability validation;
+- translation pair validation;
+- target-language TTS/voice validation;
+- sanitized browser-facing capability metadata;
+- fail-closed browser behavior when capabilities cannot be loaded.
+
+Current validated pair:
+
+`en -> uk`
+
+Additional languages MUST NOT be advertised until their end-to-end combination is accepted by the registry and supported by evidence.
+
+## 9. Configuration and Secrets
+
+Accepted provider defaults:
 
 ```text
 STT_PROVIDER=gemini
@@ -222,86 +189,98 @@ ASSEMBLYAI_SPEECH_MODEL=universal-streaming-english
 
 Secrets MUST NOT be committed to the repository.
 
-## 9. Testing and Quality Tools
+The browser uses only the controlled VoiceBridge access token and MUST NOT receive upstream provider credentials.
 
-Testing and quality tooling MUST match the implemented stack.
+## 10. Testing and Quality Tools
 
 Current checks include:
 
 - TypeScript compilation;
-- Node.js automated cloud tests;
-- Gemini STT adapter tests;
-- AssemblyAI model guard and adapter regression tests;
-- provider factory tests;
+- Node.js cloud tests;
+- Gemini and AssemblyAI STT regression tests;
+- provider factory and provider-default tests;
 - Azure translation tests;
 - Azure TTS tests;
-- browser JavaScript validation;
-- browser Stop-policy tests;
+- language capability registry tests;
+- universal session contract tests;
+- browser source-adapter tests;
+- browser session-request contract tests;
+- browser language UI/readiness tests;
+- browser Stop/playback tests;
+- browser JavaScript syntax validation;
 - browser manifest validation;
-- extension packaging;
+- Extension `0.8.0` packaging;
 - Markdown ASCII validation.
 
-Tests SHOULD avoid calling paid or external AI providers by default.
+Automated tests SHOULD avoid calling paid or external AI providers by default.
 
 Provider integrations SHOULD support mocks or test doubles.
 
-## 10. Documentation Tooling
+## 11. Phase 2 Live Acceptance Evidence
 
-Documentation MUST use Markdown unless another format is technically required.
+Controlled live validation passed:
 
-Documentation checks SHOULD verify:
+- YouTube regression;
+- Vimeo non-YouTube video;
+- TED speech-heavy source;
+- Stop during active speech;
+- Stop with `45,469 ms` queued playback, drained to `0 ms`;
+- unexpected source-tab closure with `55,386 ms` queued playback, automatically drained to `0 ms` and returned to `IDLE`.
 
-- ASCII-only content;
-- valid relative references;
-- required document metadata;
-- consistent version history.
+Canonical record:
 
-## 11. Dependency Rules
+`../phases/PHASE_2_M6_CONTROLLED_E2E_ACCEPTANCE.md`
+
+## 12. Dependency and Evolution Rules
 
 Dependencies MUST be added intentionally.
 
-Dependency rules:
-
-- add dependencies only when they support an approved capability;
-- prefer actively maintained packages;
-- avoid dependencies that require secrets at install time;
-- avoid committing generated dependency directories;
-- document major runtime dependencies when introduced;
-- remove unused dependencies promptly;
-- keep provider-specific dependencies out of core architecture when direct protocol integration is sufficient.
-
-## 12. Evolution Rules
-
-Technology stack changes MUST follow repository governance.
-
 A documented decision is required before introducing:
 
-- a new production language;
-- a required cloud runtime;
+- a new production language/runtime;
 - a persistent VoiceBridge content database;
 - a new UI framework with long-term maintenance impact;
 - a provider-specific dependency in core pipeline logic;
 - storage of audio, transcripts, translations, or generated speech;
-- a new default provider that changes accepted runtime behavior.
+- a new default provider;
+- a broader language capability claim;
+- a new authentication model;
+- an automatic paid fallback path.
 
-Phase 2 SHOULD reuse the current provider-neutral cloud pipeline and add source adapters rather than create source-specific AI stacks.
+Phase 1 and Phase 2 accepted runtime boundaries MUST remain regression baselines during Phase 3 hardening.
 
-## 13. References
+## 13. Next Stack Scope
+
+Phase 3 Cloud Service Hardening is next.
+
+Likely stack work includes:
+
+- production authentication/authorization design;
+- reconnect/recovery hardening;
+- multi-session readiness;
+- metrics and alerting;
+- provider/quota/cost observability;
+- deployment resilience;
+- operational metadata that does not introduce user-content persistence.
+
+## 14. References
 
 - ../../README.md
 - 04_ARCHITECTURE.md
-- ../planning/02_REPOSITORY_STRUCTURE.md
 - ../planning/03_ROADMAP.md
 - ../governance/15_REPOSITORY_RULES.md
 - ../governance/16_AI_DEVELOPMENT_RULES.md
-- ../history/2026-08-29_GEMINI_3_5_TRANSCRIBE_STT_ACCEPTED.md
+- ../phases/PHASE_2_UNIVERSAL_CLOUD_AUDIO_DESIGN.md
+- ../phases/PHASE_2_M6_CONTROLLED_E2E_ACCEPTANCE.md
+- ../bootstrap/PHASE_2_UNIVERSAL_CLOUD_AUDIO_COMPLETE_BOOTSTRAP.md
 - ../adr/ADR-009_GEMINI_3_5_TRANSCRIBE_DEFAULT_STT.md
 
-## 14. Version History
+## 15. Version History
 
 | Version | Date | Description |
 |---------|------|-------------|
-| 1.3.0 | 2026-08-29 | Synchronized the technology stack with the accepted Gemini STT, Azure translation, Azure TTS runtime and explicit rollback paths |
-| 1.2.0 | 2026-07-18 | Added the Phase 1 WebSocket server dependency and browser streaming APIs |
+| 1.4.0 | 2026-08-30 | Added validated Extension 0.8.0, chromium_tab source adapter, universal session mode, cloud language registry, configurable language UI, and Phase 2 E2E acceptance |
+| 1.3.0 | 2026-08-29 | Synchronized the technology stack with accepted Gemini STT, Azure translation, Azure TTS runtime and rollback paths |
+| 1.2.0 | 2026-07-18 | Added Phase 1 WebSocket server dependency and browser streaming APIs |
 | 1.1.0 | 2026-07-18 | Recorded Render as the Phase 1 test deployment platform |
 | 1.0.0 | 2026-07-18 | Initial approved technology stack definition |
