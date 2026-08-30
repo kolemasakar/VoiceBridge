@@ -1,4 +1,7 @@
+import { parseMediaBetaCodes } from "./media_beta.js";
+
 export type SttProviderName = "assemblyai" | "gemini";
+export type KrcMediaSttProviderName = "assemblyai";
 export type TranslationProviderName = "gemini" | "azure";
 export type TranslationFallbackProviderName = "gemini" | "none";
 export type TtsProviderName = "gemini" | "azure";
@@ -7,9 +10,19 @@ export interface AppConfig {
   host: string;
   port: number;
   testAccessToken: string;
+  mediaActionToken?: string | null;
+  mediaBetaCodes?: string[];
+  mediaDailySttSeconds?: number;
   assemblyAiApiKey: string | null;
   sttProvider?: SttProviderName;
   geminiSttModel?: string;
+  krcMediaSttProvider?: KrcMediaSttProviderName;
+  supadataApiKey?: string | null;
+  cobaltEndpoint?: string | null;
+  cobaltApiKey?: string | null;
+  scrapeCreatorsApiKey?: string | null;
+  scrapeCreatorsEndpoint?: string;
+  scrapeCreatorsCacheMaxAge?: string;
   geminiApiKey: string | null;
   geminiTranslationModel: string;
   translationProvider?: TranslationProviderName;
@@ -26,6 +39,9 @@ export interface AppConfig {
   corsAllowedOrigin: string;
   maxRequestBodyBytes: number;
   rateLimitRequestsPerMinute: number;
+  mediaMaxDurationSeconds?: number;
+  mediaJobTtlSeconds?: number;
+  mediaMaxConcurrentJobs?: number;
 }
 
 function parseInteger(
@@ -38,9 +54,7 @@ function parseInteger(
   if (value === undefined || value === "") return fallback;
   const parsed = Number(value);
   if (!Number.isInteger(parsed) || parsed < minimum || parsed > maximum) {
-    throw new Error(
-      `${name} must be an integer between ${minimum} and ${maximum}.`
-    );
+    throw new Error(`${name} must be an integer between ${minimum} and ${maximum}.`);
   }
   return parsed;
 }
@@ -52,9 +66,7 @@ function parseIdentifier(
 ): string {
   const identifier = value || fallback;
   if (!/^[A-Za-z0-9._-]{1,100}$/.test(identifier)) {
-    throw new Error(
-      `${name} must contain only letters, numbers, dots, underscores, or hyphens.`
-    );
+    throw new Error(`${name} must contain only letters, numbers, dots, underscores, or hyphens.`);
   }
   return identifier;
 }
@@ -92,13 +104,36 @@ function parseHttpsEndpoint(
   return raw.replace(/\/+$/, "");
 }
 
+function parseOptionalHttpsEndpoint(
+  value: string | undefined,
+  name: string
+): string | null {
+  if (!value || !value.trim()) return null;
+  return parseHttpsEndpoint(value.trim(), value.trim(), name);
+}
+
+function parseCacheMaxAge(value: string | undefined): string {
+  const normalized = (value || "30d").trim().toLowerCase();
+  if (!/^\d{1,4}[smhdw]$/.test(normalized)) {
+    throw new Error(
+      "SCRAPECREATORS_CACHE_MAX_AGE must be an integer followed by s, m, h, d, or w."
+    );
+  }
+  return normalized;
+}
+
 export function loadConfig(
   environment: NodeJS.ProcessEnv = process.env
 ): AppConfig {
   const testAccessToken = environment.TEST_ACCESS_TOKEN;
   if (!testAccessToken || testAccessToken.length < 16) {
+    throw new Error("TEST_ACCESS_TOKEN must contain at least 16 characters.");
+  }
+
+  const mediaActionToken = environment.KRC_MEDIA_ACTION_TOKEN || null;
+  if (mediaActionToken !== null && mediaActionToken.length < 24) {
     throw new Error(
-      "TEST_ACCESS_TOKEN must contain at least 16 characters."
+      "KRC_MEDIA_ACTION_TOKEN must contain at least 24 characters when configured."
     );
   }
 
@@ -106,6 +141,15 @@ export function loadConfig(
     host: environment.HOST || "0.0.0.0",
     port: parseInteger(environment.PORT, 8080, "PORT", 1, 65535),
     testAccessToken,
+    mediaActionToken,
+    mediaBetaCodes: parseMediaBetaCodes(environment.KRC_MEDIA_BETA_CODES),
+    mediaDailySttSeconds: parseInteger(
+      environment.MEDIA_DAILY_STT_SECONDS,
+      7200,
+      "MEDIA_DAILY_STT_SECONDS",
+      60,
+      86400
+    ),
     assemblyAiApiKey: environment.ASSEMBLYAI_API_KEY || null,
     sttProvider: parseProvider(
       environment.STT_PROVIDER,
@@ -117,6 +161,27 @@ export function loadConfig(
       environment.GEMINI_STT_MODEL,
       "gemini-3.5-transcribe-live",
       "GEMINI_STT_MODEL"
+    ),
+    krcMediaSttProvider: parseProvider(
+      environment.KRC_MEDIA_STT_PROVIDER,
+      "assemblyai",
+      ["assemblyai"] as const,
+      "KRC_MEDIA_STT_PROVIDER"
+    ),
+    supadataApiKey: environment.SUPADATA_API_KEY || null,
+    cobaltEndpoint: parseOptionalHttpsEndpoint(
+      environment.KRC_MEDIA_COBALT_ENDPOINT,
+      "KRC_MEDIA_COBALT_ENDPOINT"
+    ),
+    cobaltApiKey: environment.KRC_MEDIA_COBALT_API_KEY || null,
+    scrapeCreatorsApiKey: environment.SCRAPECREATORS_API_KEY || null,
+    scrapeCreatorsEndpoint: parseHttpsEndpoint(
+      environment.SCRAPECREATORS_ENDPOINT,
+      "https://api.scrapecreators.com",
+      "SCRAPECREATORS_ENDPOINT"
+    ),
+    scrapeCreatorsCacheMaxAge: parseCacheMaxAge(
+      environment.SCRAPECREATORS_CACHE_MAX_AGE
     ),
     geminiApiKey: environment.GEMINI_API_KEY || null,
     geminiTranslationModel: parseIdentifier(
@@ -188,6 +253,27 @@ export function loadConfig(
       "RATE_LIMIT_REQUESTS_PER_MINUTE",
       1,
       100000
+    ),
+    mediaMaxDurationSeconds: parseInteger(
+      environment.MEDIA_MAX_DURATION_SECONDS,
+      3600,
+      "MEDIA_MAX_DURATION_SECONDS",
+      60,
+      21600
+    ),
+    mediaJobTtlSeconds: parseInteger(
+      environment.MEDIA_JOB_TTL_SECONDS,
+      3600,
+      "MEDIA_JOB_TTL_SECONDS",
+      300,
+      86400
+    ),
+    mediaMaxConcurrentJobs: parseInteger(
+      environment.MEDIA_MAX_CONCURRENT_JOBS,
+      1,
+      "MEDIA_MAX_CONCURRENT_JOBS",
+      1,
+      20
     )
   };
 }
