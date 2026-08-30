@@ -52,9 +52,11 @@ export function createGeminiTranscribeCandidate(
   config: AppConfig,
   fetchImpl: typeof fetch = fetch
 ): GeminiTranscribeProvider {
+  const model = (config.krcMediaTranscribeModel ?? KRC_GEMINI_TRANSCRIBE_MODEL) as
+    typeof KRC_GEMINI_TRANSCRIBE_MODEL;
   return new GeminiTranscribeProvider(
     config.geminiApiKey,
-    config.krcMediaTranscribeModel ?? KRC_GEMINI_TRANSCRIBE_MODEL,
+    model,
     fetchImpl
   );
 }
