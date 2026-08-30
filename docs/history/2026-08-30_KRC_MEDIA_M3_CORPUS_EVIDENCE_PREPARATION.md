@@ -27,11 +27,19 @@ Independent review cannot be recorded when no reference transcript evidence exis
 
 ## Validation
 
-Exact implementation/documentation head before this acceptance note:
+Implementation/documentation validation:
 
-- `5330afd2bf3a2b0217b84ccc697c56e0de727872`
+- implementation/documentation head `5330afd2bf3a2b0217b84ccc697c56e0de727872`
 - Validate run `33290550441`: SUCCESS
 - cloud: 224/224 tests PASS
+- browser-extension: PASS
+- repository-docs: PASS
+
+Final corpus-plan checkpoint before this note:
+
+- head `95dd599da0749346a5dd01c83e3735f068dc0879`
+- Validate run `33290632093`: SUCCESS
+- cloud: PASS
 - browser-extension: PASS
 - repository-docs: PASS
 
