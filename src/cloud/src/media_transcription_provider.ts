@@ -4,6 +4,10 @@ import {
   type ManagedAttachmentPipeline
 } from "./attachment_managed_pipeline.js";
 import { AssemblyAiFacebookMediaStt } from "./facebook_managed_pipeline.js";
+import {
+  GeminiTranscribeProvider,
+  KRC_GEMINI_TRANSCRIBE_MODEL
+} from "./gemini_media_transcription_provider.js";
 import { AssemblyAiTelegramMediaStt } from "./telegram_managed_pipeline.js";
 
 export const KRC_MEDIA_ASSEMBLYAI_MODEL = "universal-2" as const;
@@ -23,7 +27,7 @@ export function createMediaTranscriptionProvider(
   const selected = config.krcMediaSttProvider ?? "assemblyai";
   if (selected !== "assemblyai") {
     throw new Error(
-      "KRC_MEDIA_STT_PROVIDER must remain assemblyai during M1 provider abstraction."
+      "KRC_MEDIA_STT_PROVIDER must remain assemblyai until the Gemini adapter activation gate."
     );
   }
 
@@ -42,4 +46,15 @@ export function createMediaTranscriptionProvider(
     facebookStt,
     telegramStt
   };
+}
+
+export function createGeminiTranscribeCandidate(
+  config: AppConfig,
+  fetchImpl: typeof fetch = fetch
+): GeminiTranscribeProvider {
+  return new GeminiTranscribeProvider(
+    config.geminiApiKey,
+    config.krcMediaTranscribeModel ?? KRC_GEMINI_TRANSCRIBE_MODEL,
+    fetchImpl
+  );
 }

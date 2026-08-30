@@ -17,6 +17,7 @@ export interface AppConfig {
   sttProvider?: SttProviderName;
   geminiSttModel?: string;
   krcMediaSttProvider?: KrcMediaSttProviderName;
+  krcMediaTranscribeModel?: string;
   supadataApiKey?: string | null;
   cobaltEndpoint?: string | null;
   cobaltApiKey?: string | null;
@@ -167,6 +168,11 @@ export function loadConfig(
       "assemblyai",
       ["assemblyai"] as const,
       "KRC_MEDIA_STT_PROVIDER"
+    ),
+    krcMediaTranscribeModel: parseIdentifier(
+      environment.KRC_MEDIA_TRANSCRIBE_MODEL,
+      "gemini-3.5-transcribe",
+      "KRC_MEDIA_TRANSCRIBE_MODEL"
     ),
     supadataApiKey: environment.SUPADATA_API_KEY || null,
     cobaltEndpoint: parseOptionalHttpsEndpoint(
