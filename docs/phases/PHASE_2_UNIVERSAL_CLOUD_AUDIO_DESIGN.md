@@ -2,23 +2,21 @@
 
 UA: Dyzain fazy 2 Universal Cloud Audio.
 
-Status: ACTIVE DESIGN GATE
+Status: COMPLETE - IMPLEMENTED AND VALIDATED
 
-Version: 1.0.0
+Version: 1.1.0
 
-Date: 2026-08-29
+Date: 2026-08-30
 
 ## 1. Purpose
 
-Define the approved design boundary, compatibility rules, milestone sequence, and acceptance criteria for Phase 2 Universal Cloud Audio before functional implementation begins.
+Define the approved design boundary, compatibility rules, milestone sequence, and acceptance criteria for Phase 2 Universal Cloud Audio.
 
-Phase 2 generalizes the validated YouTube browser path without replacing the working cloud speech pipeline.
+This design was implemented and validated. Phase 2 generalized the validated YouTube browser path without replacing the working cloud speech pipeline.
 
-## 2. Entry Baseline
+## 2. Accepted Entry Baseline
 
-Phase 2 starts from the validated Phase 1 baseline on `main`.
-
-Accepted processing path:
+Phase 2 started from the validated Phase 1 cloud pipeline:
 
 ```text
 browser PCM audio
@@ -34,59 +32,13 @@ Accepted STT rollback:
 
 `AssemblyAI universal-streaming-english`
 
-The Phase 1 browser capture path, streaming transport, Stop policy, provider adapters, and playback behavior are regression baselines and MUST remain functional during Phase 2.
+Phase 1 browser capture, secure streaming transport, Stop policy, provider adapters, playback, privacy, and no-persistence rules remained regression baselines throughout Phase 2.
 
-## 3. Current Boundary Findings
+## 3. Final Phase 2 Architecture Decision
 
-The existing implementation is already partially source-neutral.
+Source capture is separated from cloud speech processing.
 
-Cloud streaming boundary:
-
-- WebSocket transport accepts bounded PCM audio rather than YouTube-specific data;
-- STT, translation, and TTS execute behind cloud provider boundaries;
-- provider credentials remain cloud-side;
-- audio and derived content remain session-only by default.
-
-Browser capture boundary:
-
-- the offscreen capture runtime receives a Chrome tab-capture stream identifier;
-- capture is converted to PCM frames before cloud transport;
-- playback and ducking operate on the captured tab audio graph;
-- the low-level PCM path does not require YouTube-specific media metadata.
-
-Current hard constraints that must be generalized deliberately:
-
-- session creation accepts only `source_language=en`;
-- session creation accepts only `target_language=uk`;
-- session creation accepts only `runtime_mode=YOUTUBE_MVP`;
-- `SessionStore` types encode the same fixed language and runtime-mode values;
-- browser session creation currently supplies fixed `en`, `uk`, and `YOUTUBE_MVP` values;
-- browser orchestration and user-facing text still describe the validated YouTube scenario.
-
-## 4. Phase 2 Goal
-
-Phase 2 MUST allow VoiceBridge to translate supported browser-tab audio sources through the same cloud pipeline without duplicating provider logic per source.
-
-The first Phase 2 target is generic active-tab audio in Chromium-compatible browsers.
-
-Phase 2 does NOT initially require:
-
-- operating-system-wide audio capture;
-- microphone or two-way interpreter mode;
-- native desktop Agent;
-- mobile applications;
-- public multi-user production authentication;
-- persistent transcript history;
-- automatic provider purchasing or paid fallback;
-- KRC Media integration.
-
-These remain separate future scopes.
-
-## 5. Architecture Decision
-
-Source capture MUST be separated from cloud speech processing.
-
-Canonical Phase 2 boundary:
+Canonical boundary:
 
 ```text
 Browser Source Adapter
@@ -97,369 +49,218 @@ Browser Source Adapter
     -> existing browser playback adapter
 ```
 
-A source adapter is responsible only for obtaining an authorized browser audio source and describing that source to the session controller.
-
-A source adapter MUST NOT:
-
-- call STT, translation, or TTS providers directly;
-- own provider credentials;
-- duplicate the cloud pipeline;
-- persist audio or transcript content;
-- bypass normal VoiceBridge session lifecycle or Stop behavior.
-
-## 6. Source Adapter Contract
-
-The browser source-adapter interface SHOULD expose the following logical operations:
-
-```text
-can_capture(context) -> capability
-prepare(context) -> prepared_source
-start(prepared_source) -> capture_handle
-stop(capture_handle) -> void
-```
-
-A prepared source SHOULD provide metadata equivalent to:
-
-```json
-{
-  "source_kind": "BROWSER_TAB",
-  "source_adapter": "chromium_tab",
-  "display_label": "Current tab",
-  "capture_scope": "CURRENT_TAB",
-  "audio_available": true
-}
-```
-
-The display label is user-interface metadata and MUST NOT become a security authority.
-
-The initial Phase 2 source adapter is:
+The initial source adapter is:
 
 `chromium_tab`
 
-It generalizes the existing current-tab capture behavior rather than introducing a new capture technology.
+The source adapter owns source acquisition and capture metadata only. It does not own AI provider credentials, cloud provider selection, content persistence, or a separate website-specific speech pipeline.
 
-## 7. Session Contract Evolution
+## 4. Final Session Contract
 
-The existing `/api/v1/sessions` endpoint SHOULD remain backward compatible.
-
-Phase 1 request remains valid:
-
-```json
-{
-  "source_language": "en",
-  "target_language": "uk",
-  "runtime_mode": "YOUTUBE_MVP",
-  "input_type": "BROWSER_AUDIO",
-  "output_type": "BROWSER_PLAYBACK",
-  "provider_preferences": {
-    "recognition": null,
-    "translation": null,
-    "synthesis": null
-  },
-  "voice": {
-    "voice_id": "uk-UA-OstapNeural",
-    "speaking_rate": null
-  }
-}
-```
-
-Phase 2 SHOULD introduce a new runtime mode without removing the old one:
+Phase 2 introduced:
 
 `UNIVERSAL_BROWSER_AUDIO`
 
-Proposed compatible Phase 2 request shape:
+while preserving backward compatibility with:
 
-```json
-{
-  "source_language": "en",
-  "target_language": "uk",
-  "runtime_mode": "UNIVERSAL_BROWSER_AUDIO",
-  "input_type": "BROWSER_AUDIO",
-  "output_type": "BROWSER_PLAYBACK",
-  "source": {
-    "kind": "BROWSER_TAB",
-    "adapter": "chromium_tab"
-  },
-  "provider_preferences": {
-    "recognition": null,
-    "translation": null,
-    "synthesis": null
-  },
-  "voice": {
-    "voice_id": null,
-    "speaking_rate": null
-  }
-}
-```
+`YOUTUBE_MVP`
 
-The server MAY initially treat `source` as optional for `YOUTUBE_MVP` and required for `UNIVERSAL_BROWSER_AUDIO`.
+Universal browser sessions use normalized browser-tab source metadata and the `chromium_tab` adapter.
 
-Provider preferences remain advisory metadata unless a separately approved provider-selection contract makes them operational. A client MUST NOT silently override cloud provider policy merely by writing provider names into session metadata.
+Provider preferences remain non-authoritative browser metadata. Cloud provider policy remains authoritative.
 
-## 8. Language Configuration Model
+## 5. Language Configuration Model
 
-Phase 2 MUST move from hard-coded language literals to validated language identifiers.
+Phase 2 moved language validation from hard-coded browser/server assumptions to a cloud-owned capability registry.
 
-Language configuration MUST follow these rules:
+Rules:
 
-- use documented BCP 47 tags at API boundaries;
-- validate the requested source language against the selected STT capability;
-- validate the language pair against the translation provider policy;
-- validate the target language and selected voice against TTS capability;
-- reject unsupported combinations before consuming streaming provider work where practical;
-- keep provider capability knowledge in cloud-owned configuration or capability registries, not browser hard-coded lists alone.
+- API language identifiers use BCP 47-compatible normalized values;
+- source language is validated against STT capability;
+- language pair is validated against translation policy;
+- target language/voice is validated against TTS capability;
+- unsupported combinations fail before provider work where practical;
+- the browser consumes sanitized cloud capability metadata;
+- the browser fails closed if the registry cannot validate its selected pair.
 
-Phase 2 implementation MUST NOT imply universal language support merely because one provider supports many languages.
+Current validated registry version:
 
-The initial implementation MAY preserve `en -> uk` while source generalization is validated. Configurable language support is a separate milestone inside Phase 2.
+`1.0.0`
 
-## 9. Provider Capability Mapping
+Current validated pair:
 
-A provider capability record SHOULD expose normalized fields equivalent to:
+`English (en) -> Ukrainian (uk)`
 
-```text
-provider
-capability
-supported_languages
-streaming
-input_formats
-output_formats
-model
-configured
-```
+Phase 2 does not claim support for every language available from upstream providers.
 
-Capability discovery MUST NOT expose:
+## 6. Streaming Compatibility
 
-- API keys;
-- account identifiers;
-- billing details;
-- secret endpoints;
-- raw provider error bodies.
+Phase 2 reused the existing secure WebSocket transport.
 
-The browser SHOULD consume a sanitized cloud capability surface rather than duplicating provider-specific support matrices.
-
-## 10. Streaming Compatibility
-
-Phase 2 MUST reuse the existing secure WebSocket transport unless a measured incompatibility requires a separate ADR.
-
-The following Phase 1 properties remain mandatory:
+Preserved properties:
 
 - one-time stream ticket;
-- no bearer token in WebSocket URL;
+- no bearer token in the WebSocket URL;
 - bounded binary PCM frames;
-- bounded client and server buffers;
-- acknowledgements and flow control;
-- explicit backpressure behavior;
+- bounded client/server buffers;
+- acknowledgements and backpressure;
 - one active stream per session;
 - ordered cloud events;
-- bounded disconnect and Stop cleanup;
+- bounded disconnect/Stop cleanup;
 - no raw-audio persistence.
 
-Generic browser source support MUST NOT create one WebSocket protocol per website.
+Generic browser-source support did not introduce per-site WebSocket protocols.
 
-## 11. Playback Compatibility
+## 7. Playback Compatibility
 
-Phase 2 MUST preserve the accepted browser playback behavior for sources where the browser can control the captured tab audio graph.
-
-Required behaviors:
+Phase 2 preserved:
 
 - ordered translated PCM playback;
 - independent original and translated volume controls;
-- smooth ducking and restoration;
+- smooth ducking/restoration;
 - bounded playback queue;
 - accurate played-segment instrumentation;
 - bounded Stop behavior.
 
-If a future source cannot support the existing ducking mechanism, that limitation MUST be exposed explicitly rather than simulated silently.
+The accepted runtime also performs bounded cleanup when the captured tab audio track ends unexpectedly.
 
-## 12. Privacy and Security
+## 8. Security and Privacy
 
-Phase 2 inherits all Phase 1 security and privacy rules.
+Phase 2 preserved Phase 1 security/privacy rules and added source-boundary rules:
 
-Additionally:
-
-- capture MUST begin only after explicit user action;
-- source adapters MUST request the minimum browser permission required;
-- tab or source identifiers MUST be treated as transient client metadata;
+- capture starts only after explicit user action;
+- only the approved browser permission boundary is used;
 - provider credentials remain cloud-side;
 - raw audio, transcripts, translations, and synthesized audio remain non-persistent by default;
-- source metadata MUST NOT be used as authentication;
-- arbitrary remote-media retrieval is outside this Phase 2 browser-capture scope;
-- KRC Media retrieval paths MUST remain isolated.
+- source metadata is not authentication;
+- arbitrary remote-media retrieval is outside Phase 2 browser capture;
+- KRC Media retrieval/transcription remains isolated.
 
-## 13. Failure Model
-
-Phase 2 MUST distinguish source failures from cloud pipeline failures.
-
-Source-side failure examples:
-
-- no capturable audio track;
-- user denied or ended capture;
-- selected tab closed;
-- browser permission unavailable;
-- unsupported browser source.
-
-Cloud-side failure examples remain:
-
-- provider not configured;
-- provider unavailable;
-- provider timeout or quota;
-- unsupported language;
-- stream disconnect;
-- bounded queue overflow.
-
-Source-specific failure text MUST NOT be misreported as an STT or translation provider failure.
-
-## 14. Milestone Plan
+## 9. Implemented Milestones
 
 ### P2-M1 - Source Adapter Boundary
 
-Objective:
-Extract the existing Chromium tab-capture behavior behind a small source-adapter contract without changing the validated YouTube user behavior.
+Status: PASS.
 
-Acceptance:
-
-- current YouTube test path still works;
-- source-adapter contract has automated tests;
-- no provider or cloud pipeline behavior changes;
-- Stop and ducking tests remain green.
+Implemented `chromium_tab` adapter and moved current-tab capture orchestration behind the adapter boundary while preserving YouTube behavior.
 
 ### P2-M2 - Universal Browser Session Contract
 
-Objective:
-Add `UNIVERSAL_BROWSER_AUDIO` and source metadata while preserving `YOUTUBE_MVP` compatibility.
+Status: PASS.
 
-Acceptance:
-
-- both runtime modes validate correctly;
-- old Phase 1 request remains accepted;
-- invalid source descriptors fail before streaming;
-- session state exposes normalized source metadata;
-- no provider preference becomes operational accidentally.
+Implemented `UNIVERSAL_BROWSER_AUDIO`, normalized source metadata, and compatibility with `YOUTUBE_MVP`.
 
 ### P2-M3 - Generic Active-Tab UI Path
 
-Objective:
-Allow the user to start VoiceBridge against a capturable current browser tab without YouTube-specific gating.
+Status: PASS.
 
-Acceptance:
-
-- generic supported tab can start and stop;
-- YouTube remains a regression case;
-- unsupported or silent tabs return actionable errors;
-- no new broad host permission is added unless technically required and documented.
+Validated ordinary HTTP/HTTPS current-tab media capture, YouTube regression, silent-tab guard, and restricted-page guard.
 
 ### P2-M4 - Language Capability Registry
 
-Objective:
-Replace hard-coded `en -> uk` server types with validated capability-aware language configuration.
+Status: PASS.
 
-Acceptance:
-
-- BCP 47 validation is centralized;
-- unsupported combinations fail before provider work;
-- browser receives sanitized supported options from cloud capability metadata;
-- existing `en -> uk` remains green.
+Centralized language validation and exposed sanitized browser-facing capability metadata. Initial advertised pair intentionally remained `en -> uk`.
 
 ### P2-M5 - Configurable Language UI
 
-Objective:
-Expose source and target language selection for combinations accepted by the cloud capability registry.
+Status: PASS.
 
-Acceptance:
-
-- browser does not invent unsupported provider capabilities;
-- session request and displayed state use the selected languages;
-- target voice selection is compatible with target language;
-- defaults preserve the Phase 1 English-to-Ukrainian experience.
+Extension `0.8.0` consumes cloud capabilities for Source/Target selectors, preserves cloud authority, and fails closed when capability readiness is absent.
 
 ### P2-M6 - Controlled End-to-End Acceptance
 
-Objective:
-Validate Universal Cloud Audio on multiple browser-accessible sources.
+Status: PASS.
 
-Minimum controlled matrix:
+Controlled matrix:
 
-- YouTube regression source;
-- one non-YouTube video source with capturable tab audio;
-- one speech-heavy non-YouTube source;
+- YouTube steady-state regression;
+- Vimeo non-YouTube video;
+- TED speech-heavy source;
 - Stop during active speech;
-- Stop with queued translated playback;
+- Stop with non-zero translated playback backlog;
 - source tab ending unexpectedly.
 
-Acceptance evidence MUST record:
+Canonical acceptance record:
 
-- source type;
-- duration;
-- frames sent and dropped;
-- final STT, translation, TTS, and played segment counts;
-- pending queues after Stop;
-- provider names and models;
-- observed errors;
-- qualitative translation/playback result;
-- known limitations.
+`PHASE_2_M6_CONTROLLED_E2E_ACCEPTANCE.md`
 
-## 15. Compatibility Gates
+## 10. Accepted Runtime
 
-Every Phase 2 implementation PR MUST preserve:
+Browser:
 
-- existing Phase 1 session request compatibility until a separately approved API version change;
-- current Gemini STT default and AssemblyAI rollback unless a separate provider decision is approved;
-- Azure Translator primary and Gemini fallback policy;
-- Azure Speech accepted TTS default;
-- current provider credential boundaries;
-- no intentional user-content persistence;
-- bounded Stop behavior;
-- browser extension packaging and current automated validation.
+`VoiceBridge Extension 0.8.0`
 
-## 16. Deferred Work
+Provider matrix:
 
-The following items are explicitly deferred from Phase 2 unless separately approved:
+- Gemini `gemini-3.5-transcribe-live` default STT;
+- AssemblyAI `universal-streaming-english` explicit STT rollback;
+- Azure Translator primary;
+- Gemini translation fallback;
+- Azure Speech `uk-UA-OstapNeural` default TTS.
+
+Current validated source class:
+
+- supported ordinary Chromium current tab with active audio.
+
+Current validated language pair:
+
+`en -> uk`
+
+## 11. Controlled E2E Evidence Summary
+
+Key accepted evidence includes:
+
+- YouTube and non-YouTube playback with audible Ukrainian speech and actual ducking;
+- TED speech-heavy run with Gemini finals, Azure translation, Azure TTS, played segments, and clean Stop;
+- Stop during active speech returned to `IDLE` in about `2-3 s` in the accepted run;
+- Stop with `45,469 ms` queued translated playback drained to `0 ms` and returned to `IDLE` in about `7 s`;
+- closing the captured source tab with `55,386 ms` queued translated playback required no second Stop, drained downstream work to `0 ms`, and returned VoiceBridge to `IDLE` in about `45 s`.
+
+Observed timings are acceptance evidence, not production SLA guarantees.
+
+## 12. Deferred Work
+
+Still outside Phase 2 unless separately approved:
 
 - production user identity;
-- durable session history;
-- cross-device accounts;
+- durable session/content history;
 - operating-system-wide capture;
 - microphone interpreter mode;
 - bidirectional conversation mode;
 - native desktop Agent;
 - mobile application capture;
-- KRC Media ingestion or transcription;
+- KRC Media ingestion/transcription;
 - automatic paid provider fallback;
+- universal language claims;
 - production SLA commitments.
 
-## 17. Implementation Order
+## 13. Completion Criteria
 
-Implementation MUST proceed in this order:
-
-```text
-P2-M1 source adapter boundary
-    -> P2-M2 universal session contract
-    -> P2-M3 generic active-tab path
-    -> P2-M4 language capability registry
-    -> P2-M5 configurable language UI
-    -> P2-M6 controlled live acceptance
-```
-
-A later milestone MUST NOT be used to hide a failed earlier compatibility gate.
-
-## 18. Phase 2 Completion Criteria
-
-Phase 2 is complete only when:
+All Phase 2 completion criteria are satisfied:
 
 - generic active-tab browser audio works through the existing cloud pipeline;
-- the validated YouTube path remains functional;
-- language selection is capability-aware rather than hard-coded;
-- source and language errors are explicit;
-- automated CI is green;
+- YouTube remains functional;
+- language selection is capability-aware rather than browser hard-coded;
+- source/language errors are explicit;
+- automated CI gates passed throughout implementation;
 - controlled live acceptance evidence is recorded;
-- architecture, roadmap, history, and recovery documentation are synchronized;
-- no unapproved persistence, provider purchase, or authentication expansion is introduced.
+- architecture, roadmap, technology stack, history, and recovery documentation are synchronized by the Phase 2 closure change;
+- no unapproved persistence, provider purchase, or authentication expansion was introduced.
 
-## 19. Next Task
+## 14. Next Task
 
-After this design gate is validated and merged, begin only:
+Phase 2 is closed.
 
-`P2-M1 - Source Adapter Boundary`
+Next functional roadmap scope:
 
-P2-M1 MUST be a behavior-preserving refactor before generic source UI behavior is enabled.
+`Phase 3 - Cloud Service Hardening`
+
+Phase 3 MUST begin with its own scoped design/acceptance plan and MUST preserve the accepted Phase 1/Phase 2 runtime as regression baseline.
+
+## 15. Version History
+
+| Version | Date | Description |
+|---------|------|-------------|
+| 1.1.0 | 2026-08-30 | Marked Phase 2 implemented and validated; recorded final M1-M6 state, accepted Extension 0.8.0 runtime, and Phase 3 handoff |
+| 1.0.0 | 2026-08-29 | Approved Phase 2 design gate and implementation order |
