@@ -108,13 +108,16 @@ Current Google Gemini Developer API pricing documents Free Tier input and output
 
 The same pricing documentation states that Free Tier data may be used to improve Google products, while the paid tier states that data is not used for that purpose.
 
-Therefore free-tier migration is NOT automatically acceptable for every KRC source class.
+Owner decision recorded on 2026-08-30: this Free Tier data-use condition is ACCEPTABLE for KRC Media owner testing, including local/private attachments intentionally submitted to KRC Media.
 
-Required policy split before canary:
+Therefore the previous private-attachment privacy HOLD is removed for the private owner-testing contour.
 
-- public web/social media sources: eligible for Gemini Free Tier evaluation subject to final privacy review;
-- local/private attachments: do not enable Gemini Free Tier by default until the owner explicitly accepts the data-use boundary or a non-training paid/enterprise path is approved;
-- AssemblyAI remains available as rollback during migration and observation.
+Accepted policy during owner testing:
+
+- public web/social media sources: eligible for Gemini Free Tier evaluation;
+- local/private attachments: eligible for Gemini Free Tier evaluation when intentionally submitted by the owner/user to KRC Media;
+- AssemblyAI remains available as rollback during migration and observation;
+- the acceptance of Free Tier data use does not authorize public rollout or change the release gate.
 
 No automatic paid fallback is authorized.
 
@@ -170,6 +173,7 @@ Acceptance:
 - current KRC legacy head confirmed;
 - active and legacy endpoints identified;
 - Gemini current official capabilities/pricing/data-use reviewed;
+- owner explicitly accepted the Gemini Free Tier data-use boundary for private owner testing, including local/private attachments;
 - migration strategy selected;
 - no runtime/environment mutation.
 
@@ -200,7 +204,8 @@ Checkpoint: `KRC_MEDIA_GEMINI_ADAPTER_UNIT_PASS`
 
 - run the same accepted public-media corpus through AssemblyAI and Gemini;
 - compare factual fidelity, names, numbers, omissions, hallucinations, language detection, timestamps, diarization where enabled, latency, failures, and quota use;
-- do not use private/local attachments in Gemini Free Tier A/B without an explicit privacy approval.
+- local/private attachments are eligible for controlled Gemini Free Tier A/B because the owner explicitly accepted the documented data-use boundary;
+- retain explicit source-class labeling in A/B evidence.
 
 Checkpoint: `KRC_MEDIA_GEMINI_AB_REVIEW`
 
@@ -232,9 +237,10 @@ Checkpoint: `KRC_MEDIA_NEW_INFRA_CUTOVER_APPROVAL_REQUIRED`
 FULL_RECOVER: NOT_REQUIRED
 CURRENT_STATE_REVALIDATION: COMPLETE
 FORWARD_MIGRATION_BRANCH: CREATED
+GEMINI_FREE_TIER_DATA_USE: OWNER_ACCEPTED
+GEMINI_FREE_TIER_PRIVATE_ATTACHMENTS: ALLOWED_IN_OWNER_TESTING
 PRODUCTION_CUTOVER: NOT_AUTHORIZED
 KRC_ACTION_URL_CHANGE: NOT_AUTHORIZED
-GEMINI_FREE_TIER_PRIVATE_ATTACHMENTS: HOLD
 PAID_PROVIDER_USE: NOT_AUTHORIZED
 LEGACY_ENDPOINT_DELETION: NOT_AUTHORIZED
 RELEASE_HOLD_OWNER_TESTING: PRESERVED
