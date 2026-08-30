@@ -1,6 +1,6 @@
 # KRC Media M3 Corpus Selection Plan
 
-Status: READY - ASSET SELECTION PENDING
+Status: READY - REAL EVIDENCE REQUIRED
 Date: 2026-08-30
 Release state: RELEASE_HOLD_OWNER_TESTING
 
@@ -33,10 +33,14 @@ A case becomes `READY_FOR_AB` only after a real asset is selected, its SHA-256 d
 
 Reference transcripts must not be derived from either candidate provider output and then treated as independent ground truth. Names, numbers, dates, and materially important wording should receive explicit manual review.
 
+The accepted offline helper `krc_media_ab_corpus_preparation.ts` now provides byte-exact hashing and emits only metadata plus SHA-256 digests. Raw media and reference transcript bytes remain outside GitHub.
+
 Current state:
 
 ```text
 CORPUS_SELECTION_PLAN: READY
+CORPUS_MANIFEST_CONTRACT: PASS
+CORPUS_EVIDENCE_PREPARATION: PASS
 REAL_ASSETS_SELECTED: FALSE
 REFERENCE_TRANSCRIPTS_READY: FALSE
 M3_LIVE_AB: NOT_RUN
@@ -46,4 +50,4 @@ RELEASE_HOLD_OWNER_TESTING: PRESERVED
 
 ## Next step
 
-Select real corpus assets and prepare independent reference transcripts. Provider execution remains a separate later step.
+The remaining M3 pre-execution dependency is real evidence, not additional provider code. Select actual corpus assets and independently prepare/review the reference transcript artifacts. Provider execution remains a separate later step.
