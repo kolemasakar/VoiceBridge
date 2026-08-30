@@ -46,6 +46,10 @@ M1 provider-abstraction commit:
 
 `bf0ae1696ced356e2c9e27ef52e86dcc16c52048`
 
+M1 acceptance record:
+
+`docs/history/2026-08-30_KRC_MEDIA_PROVIDER_ABSTRACTION_ACCEPTED.md`
+
 The forward-migration branch is based on current VoiceBridge main rather than on the legacy KRC branch. This avoids treating the old integration contour as authority for the evolved VoiceBridge mainline.
 
 ## VoiceBridge main runtime baseline
