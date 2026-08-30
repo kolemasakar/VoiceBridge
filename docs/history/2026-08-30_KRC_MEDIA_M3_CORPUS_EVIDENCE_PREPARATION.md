@@ -1,6 +1,6 @@
 # KRC Media M3 Corpus Evidence Preparation
 
-Status: IMPLEMENTED - PROVIDER EXECUTION NOT STARTED
+Status: ACCEPTED - PROVIDER EXECUTION NOT STARTED
 Date: 2026-08-30
 Release state: RELEASE_HOLD_OWNER_TESTING
 
@@ -24,6 +24,18 @@ The result is passed through the accepted M3 corpus-manifest parser, so readines
 - selected asset plus reference transcript plus `independent_reviewed` -> `READY_FOR_AB`.
 
 Independent review cannot be recorded when no reference transcript evidence exists. Empty media or empty reference artifacts fail closed.
+
+## Validation
+
+Exact implementation/documentation head before this acceptance note:
+
+- `5330afd2bf3a2b0217b84ccc697c56e0de727872`
+- Validate run `33290550441`: SUCCESS
+- cloud: 224/224 tests PASS
+- browser-extension: PASS
+- repository-docs: PASS
+
+The six new corpus-preparation regression tests all passed, including exact-byte hashing, raw-evidence non-return, review-state gating, empty-evidence failure, and byte-level digest distinction.
 
 ## Privacy and safety
 
