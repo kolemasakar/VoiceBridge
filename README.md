@@ -10,66 +10,67 @@ Slogan:
 
 VoiceBridge converts spoken source-language audio into translated target-language speech.
 
-The validated Phase 1 product is real-time English-to-Ukrainian AI voice translation for YouTube videos.
+The validated product now supports current-tab browser audio capture for ordinary HTTP/HTTPS media sources, not only YouTube, while keeping the speech pipeline in VoiceBridge Cloud.
 
 VoiceBridge uses a Cloud First architecture:
 
 - the browser is the primary client for Phases 1 through 4;
-- speech recognition, translation, speech synthesis, orchestration, and authoritative state run in the cloud;
+- speech recognition, translation, speech synthesis, orchestration, language capability validation, and authoritative session state run in the cloud;
 - users do not need a local programming environment;
 - a minimal local VoiceBridge Agent may be introduced only later if browser or operating-system security prevents required system-audio capture.
 
 ## Current Status
 
-Phase 1 minimum YouTube MVP:
+Phase 1 Cloud YouTube MVP:
 
-`VALIDATED`
+`COMPLETE - VALIDATED`
 
-Current accepted runtime after the 2026-08-29 STT transition:
+Phase 2 Universal Cloud Audio:
 
-- cloud service `0.6.0`;
-- browser extension `0.6.2`;
-- Gemini 3.5 Transcribe Live English streaming STT by default;
+`COMPLETE - CONTROLLED E2E VALIDATED`
+
+Current accepted browser runtime:
+
+`VoiceBridge Extension 0.8.0`
+
+Current accepted runtime capabilities:
+
+- generic current-tab capture for supported ordinary `http://` / `https://` browser tabs with active audio;
+- YouTube remains a validated regression source;
+- Chromium source-adapter boundary (`chromium_tab`);
+- `UNIVERSAL_BROWSER_AUDIO` session contract while preserving `YOUTUBE_MVP` compatibility;
+- cloud-owned language capability registry;
+- browser language selectors populated only from sanitized cloud capabilities;
+- current validated language pair: English -> Ukrainian (`en -> uk`);
+- Gemini 3.5 Transcribe Live streaming STT by default;
 - AssemblyAI `universal-streaming-english` retained as explicit rollback;
-- Azure Translator primary English-to-Ukrainian translation;
+- Azure Translator primary translation;
 - Gemini translation fallback;
-- Azure Speech Ukrainian TTS with `uk-UA-OstapNeural`;
+- Azure Speech TTS with `uk-UA-OstapNeural`;
 - ordered browser PCM playback;
-- independent original and Ukrainian volume controls;
+- independent original and translated volume controls;
 - automatic original-audio ducking and restoration;
-- bounded user Stop: completed text/translation drain, queued playback capped and cancelled;
+- bounded one-press Stop and bounded source-tab-ended cleanup;
 - bounded queues, retries, drains, and cleanup;
-- no intentional VoiceBridge content persistence.
+- no intentional VoiceBridge content persistence;
+- no automatic paid provider fallback.
 
-The original Phase 1 controlled acceptance baseline remains documented as
-historical evidence. The later Gemini STT transition was validated separately
-against that rollback path.
-
-Current STT transition evidence:
-
-- same-duration Gemini run: 2938 frames, 1 dropped, 6 final STT segments,
-  363 ms reported recognition latency;
-- same-duration AssemblyAI rollback run: 2945 frames, 7 dropped, 4 final STT
-  segments, 378 ms reported recognition latency;
-- both completed with translation pending 0, TTS pending 0, and queued playback
-  0 ms after Stop;
-- qualitative transcript review favored Gemini for coherence and several proper
-  names;
-- no human reference transcript was available, so no WER claim is made.
-
-Active Phase 1 cloud endpoint:
+Active test cloud endpoint:
 
 `https://voicebridge-cloud-us.onrender.com`
 
 ## Current Pipeline
 
 ```text
-YouTube tab audio
-    -> VoiceBridge browser capture
+Current browser tab audio
+    -> Chromium source adapter
+    -> browser PCM capture
+    -> VoiceBridge secure WebSocket ingestion
     -> VoiceBridge Cloud
-    -> Gemini 3.5 Transcribe Live English STT
-    -> Azure Translator Ukrainian translation
-    -> Azure Speech Ukrainian TTS
+    -> Gemini 3.5 Transcribe Live STT
+    -> Azure Translator primary
+    -> Gemini translation fallback when approved/required
+    -> Azure Speech TTS
     -> browser PCM playback
     -> automatic original-audio ducking and restoration
 ```
@@ -77,21 +78,46 @@ YouTube tab audio
 STT rollback path:
 
 ```text
-YouTube tab audio
-    -> VoiceBridge browser capture
+Current browser tab audio
     -> VoiceBridge Cloud
     -> AssemblyAI universal-streaming-english
-    -> Azure Translator Ukrainian translation
-    -> Azure Speech Ukrainian TTS
+    -> Azure Translator
+    -> Azure Speech TTS
 ```
 
-Translation fallback remains:
+## Phase 2 Acceptance
 
-```text
-Selected English STT
-    -> Gemini Ukrainian translation fallback
-    -> Azure Speech Ukrainian TTS
-```
+Controlled Phase 2 acceptance completed on Extension `0.8.0`.
+
+Validated matrix:
+
+- YouTube steady-state regression: PASS;
+- Vimeo non-YouTube video: PASS;
+- separate TED speech-heavy source: PASS;
+- Stop during active speech: PASS;
+- Stop with `45,469 ms` translated playback backlog: PASS, queue drained to `0 ms`;
+- source tab closed without manual Stop: PASS, automatic cleanup returned VoiceBridge to `IDLE` and drained a `55,386 ms` playback backlog to `0 ms`.
+
+Canonical acceptance record:
+
+`docs/phases/PHASE_2_M6_CONTROLLED_E2E_ACCEPTANCE.md`
+
+## Language Capability Boundary
+
+Language options are cloud-owned and capability-aware.
+
+The browser MUST NOT invent or hard-code a broader support matrix than the cloud registry exposes.
+
+Current validated registry version:
+
+`1.0.0`
+
+Current validated selectable pair:
+
+- Source: English (`en`);
+- Target: Ukrainian (`uk`).
+
+Additional language pairs require explicit capability evidence and validation before being advertised as supported.
 
 ## Test Authentication
 
@@ -101,33 +127,33 @@ The test model does not include registration, passwords, account recovery, organ
 
 A production identity model must replace the shared token before public multi-user deployment.
 
+## Next Functional Phase
+
+Phase 3 Cloud Service Hardening is the next roadmap phase.
+
+Candidate Phase 3 work includes production authentication design, reconnect/recovery hardening, multi-session readiness, operational observability, cost/quota controls, provider failover policy, and deployment resilience.
+
+Phase 2 MUST NOT be reopened without a documented defect or explicitly approved change.
+
 ## Documentation
 
+- [Phase 2 Universal Cloud Audio Design](docs/phases/PHASE_2_UNIVERSAL_CLOUD_AUDIO_DESIGN.md)
+- [Phase 2 M6 Controlled E2E Acceptance](docs/phases/PHASE_2_M6_CONTROLLED_E2E_ACCEPTANCE.md)
+- [Phase 2 Complete Recovery Bootstrap](docs/bootstrap/PHASE_2_UNIVERSAL_CLOUD_AUDIO_COMPLETE_BOOTSTRAP.md)
 - [Phase 1 MVP Validation](docs/phases/PHASE_1_MVP_VALIDATION.md)
 - [Gemini 3.5 Transcribe STT Acceptance](docs/history/2026-08-29_GEMINI_3_5_TRANSCRIBE_STT_ACCEPTED.md)
 - [Gemini 3.5 Transcribe Default STT ADR](docs/adr/ADR-009_GEMINI_3_5_TRANSCRIBE_DEFAULT_STT.md)
-- [Phase 1 MVP Recovery Bootstrap](docs/bootstrap/PHASE_1_MVP_VALIDATED_BOOTSTRAP.md)
-- [Phase 1 MVP History Entry](docs/history/2026-07-22_PHASE_1_MVP_VALIDATED.md)
 - [Project Overview](docs/overview/01_PROJECT_OVERVIEW.md)
 - [Project Description](docs/overview/07_PROJECT_DESCRIPTION.md)
 - [Roadmap](docs/planning/03_ROADMAP.md)
 - [Architecture](docs/architecture/04_ARCHITECTURE.md)
 - [Technology Stack](docs/architecture/05_TECHNOLOGY_STACK.md)
 - [Cloud First ADR](docs/adr/ADR-001_CLOUD_FIRST_ARCHITECTURE.md)
-- [Phase 1 Streaming STT Provider ADR](docs/adr/ADR-005_PHASE_1_STREAMING_STT_PROVIDER.md)
-- [Initial Translation Provider ADR](docs/adr/ADR-006_PHASE_1_TRANSLATION_PROVIDER.md)
-- [Initial TTS Provider ADR](docs/adr/ADR-007_PHASE_1_TTS_PROVIDER.md)
-- [Azure Speech TTS ADR](docs/adr/ADR-008_AZURE_TTS_PROVIDER.md)
-- [Azure Translator Primary ADR](docs/adr/ADR-008_PHASE_1_AZURE_TRANSLATION_PROVIDER.md)
 - [Functional Requirements](docs/requirements/09_FUNCTIONAL_REQUIREMENTS.md)
 - [System Design](docs/design/10_SYSTEM_DESIGN.md)
 - [Non-Functional Requirements](docs/requirements/11_NON_FUNCTIONAL_REQUIREMENTS.md)
 - [Security Model](docs/security/12_SECURITY_MODEL.md)
 - [API Design](docs/api/13_API_DESIGN.md)
-- [Phase 1 Cloud YouTube MVP Plan](docs/phases/PHASE_1_CLOUD_YOUTUBE_MVP.md)
-- [Milestone 4 STT Validation](docs/phases/PHASE_1_MILESTONE_4_STT_INTEGRATION_VALIDATION.md)
-- [Milestone 5 Translation Integration](docs/phases/PHASE_1_MILESTONE_5_TRANSLATION_INTEGRATION.md)
-- [Milestone 6 TTS and Playback](docs/phases/PHASE_1_MILESTONE_6_TTS_PLAYBACK.md)
 - [Development Standard](docs/governance/06_DEVELOPMENT_STANDARD.md)
 - [Repository Rules](docs/governance/15_REPOSITORY_RULES.md)
 - [AI Development Rules](docs/governance/16_AI_DEVELOPMENT_RULES.md)
