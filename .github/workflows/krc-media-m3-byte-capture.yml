@@ -23,7 +23,7 @@ jobs:
         run: |
           set -euo pipefail
           python3 -m venv "$RUNNER_TEMP/krc-m3-venv"
-          "$RUNNER_TEMP/krc-m3-venv/bin/python" -m pip install --disable-pip-version-check --no-input yt-dlp
+          "$RUNNER_TEMP/krc-m3-venv/bin/python" -m pip install --disable-pip-version-check --no-input 'yt-dlp==2026.8.19'
           "$RUNNER_TEMP/krc-m3-venv/bin/yt-dlp" --version
 
       - name: Capture locked public media bytes and SHA-256
@@ -36,14 +36,17 @@ jobs:
           mkdir -p "$WORKDIR"
           trap 'rm -rf "$WORKDIR" "$RUNNER_TEMP/krc-m3-venv"' EXIT
 
+          # These are the official upstream/public media endpoints corresponding
+          # to the locked source pages. The reference-text origins remain unchanged.
           cat > "$WORKDIR/cases.tsv" <<'EOF'
-          ua-clean-public-001	https://www.president.gov.ua/videos/na-kozhen-rosijskij-udar-bude-nashe-reaguvannya-zvernennya-p-8809
-          ru-clean-public-001	https://kremlin.ru/events/president/news/79449
-          en-clean-public-001	https://www.un.org/sg/en/content/sg/statements/2026-07-06/secretary-generals-remarks-the-general-assembly-the-responsibility-protect-prepared-for-delivery-the-chef-de-cabinet
+          ua-clean-public-001	https://www.youtube.com/watch?v=GI5rKSymMK4
+          ru-clean-public-001	https://t.me/news_kremlin/7324
+          en-clean-public-001	https://webtv.un.org/en/asset/k1x/k1xi4v5ljv
           EOF
 
           printf '## KRC MEDIA M3 byte capture\n\n' >> "$GITHUB_STEP_SUMMARY"
           printf 'No AssemblyAI/Gemini/Supadata calls. No raw-media artifacts. Temporary media is deleted after hashing.\n\n' >> "$GITHUB_STEP_SUMMARY"
+          printf 'yt-dlp version: `2026.08.19`\n\n' >> "$GITHUB_STEP_SUMMARY"
           printf '| case_id | status | sha256 | bytes | extractor | media_id | format_id | duration_s | ext |\n' >> "$GITHUB_STEP_SUMMARY"
           printf '|---|---|---|---:|---|---|---|---:|---|\n' >> "$GITHUB_STEP_SUMMARY"
 
