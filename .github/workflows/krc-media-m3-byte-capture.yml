@@ -13,12 +13,12 @@ permissions:
 jobs:
   capture:
     runs-on: ubuntu-latest
-    timeout-minutes: 20
+    timeout-minutes: 10
     steps:
       - name: Checkout
         uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803
 
-      - name: Capture direct public media bytes and SHA-256
+      - name: Capture version-pinned public fixture bytes and SHA-256
         shell: bash
         run: |
           set -euo pipefail
@@ -26,10 +26,10 @@ jobs:
           mkdir -p "$WORKDIR"
           trap 'rm -rf "$WORKDIR"' EXIT
 
-          printf '## KRC MEDIA M3 direct-storage byte capture\n\n' >> "$GITHUB_STEP_SUMMARY"
-          printf 'Direct upload.wikimedia.org original media objects only. No AssemblyAI/Gemini/Supadata calls. No credentials. No raw-media artifacts.\n\n' >> "$GITHUB_STEP_SUMMARY"
-          printf '| case_id | status | sha256 | bytes | host | duration_s | ext |\n' >> "$GITHUB_STEP_SUMMARY"
-          printf '|---|---|---|---:|---|---:|---|\n' >> "$GITHUB_STEP_SUMMARY"
+          printf '## KRC MEDIA M3 version-pinned fixture byte capture\n\n' >> "$GITHUB_STEP_SUMMARY"
+          printf 'Public raw.githubusercontent.com objects pinned to exact commits. No AssemblyAI/Gemini/Supadata calls. No credentials. No raw-media artifacts.\n\n' >> "$GITHUB_STEP_SUMMARY"
+          printf '| case_id | status | sha256 | bytes | host | source_blob | ext |\n' >> "$GITHUB_STEP_SUMMARY"
+          printf '|---|---|---|---:|---|---|---|\n' >> "$GITHUB_STEP_SUMMARY"
 
           cat > "$WORKDIR/capture.py" <<'PY'
           import os
@@ -44,46 +44,47 @@ jobs:
           user_agent = 'VoiceBridge-KRC-Media-Beta/1.0 (public corpus evidence capture)'
 
           cases = [
-              (
-                  'ua-clean-public-001',
-                  'https://upload.wikimedia.org/wikipedia/commons/d/d5/%D0%97%D0%B2%D0%B5%D1%80%D0%BD%D0%B5%D0%BD%D0%BD%D1%8F_%D0%92%D0%BE%D0%BB%D0%BE%D0%B4%D0%B8%D0%BC%D0%B8%D1%80%D0%B0_%D0%97%D0%B5%D0%BB%D0%B5%D0%BD%D1%81%D1%8C%D0%BA%D0%BE%D0%B3%D0%BE.webm',
-                  86,
-                  'webm',
-                  16743147,
-              ),
-              (
-                  'ru-clean-public-001',
-                  'https://upload.wikimedia.org/wikipedia/commons/f/f5/Putin_talk_2011-12-15_09888-09940_%D0%98%D0%B4%D0%B8%D1%82%D0%B5_%D0%BA%D0%BE_%D0%BC%D0%BD%D0%B5%2C_%D0%B1%D0%B0%D0%BD%D0%B4%D0%B5%D1%80%D0%BB%D0%BE%D0%B3%D0%B8.ogv',
-                  52,
-                  'ogv',
-                  None,
-              ),
-              (
-                  'en-clean-public-001',
-                  'https://upload.wikimedia.org/wikipedia/commons/f/f1/Biden_clip_from_inaugural_speech_2.ogv',
-                  71,
-                  'ogv',
-                  9481284,
-              ),
+              {
+                  'case_id': 'ua-clean-public-001',
+                  'url': 'https://raw.githubusercontent.com/egorsmkv/speech-recognition-uk/597a3b9231621e1318bf4a802234491f4ef0f9fb/speech-to-text/audio.wav',
+                  'expected_size': 136612,
+                  'blob': 'dc8dab689bef38e69f9aaef5428b71cca39d36c3',
+                  'ext': 'wav',
+              },
+              {
+                  'case_id': 'ru-clean-public-001',
+                  'url': 'https://raw.githubusercontent.com/sberdevices/golos/1d7eac87f82dc2514d7c77450eb1b4017e6cb052/examples/data/001ce26c07c20eaa0d666b824c6c6924.wav',
+                  'expected_size': 128044,
+                  'blob': 'a22344f48668fcfcc17947459a91fe9e84742aa2',
+                  'ext': 'wav',
+              },
+              {
+                  'case_id': 'en-clean-public-001',
+                  'url': 'https://raw.githubusercontent.com/openai/whisper/86098128c0b4f24f0e2aa2994de830614b474227/tests/jfk.flac',
+                  'expected_size': 1152693,
+                  'blob': 'e44b7c13897eae7f78beb220c61fe77429a3961d',
+                  'ext': 'flac',
+              },
           ]
 
           failures = 0
-          for case_id, media_url, duration, ext, expected_size in cases:
-              out = workdir / f'{case_id}.{ext}'
+          for case in cases:
+              case_id = case['case_id']
+              out = workdir / f"{case_id}.{case['ext']}"
               try:
-                  host = (urlparse(media_url).hostname or '').lower()
-                  if host != 'upload.wikimedia.org':
-                      raise RuntimeError('media URL is outside trusted upload.wikimedia.org host')
+                  source_host = (urlparse(case['url']).hostname or '').lower()
+                  if source_host != 'raw.githubusercontent.com':
+                      raise RuntimeError('fixture URL is outside raw.githubusercontent.com')
                   request = urllib.request.Request(
-                      media_url,
-                      headers={'User-Agent': user_agent, 'Accept': '*/*'},
+                      case['url'],
+                      headers={'User-Agent': user_agent, 'Accept': 'application/octet-stream'},
                   )
                   digest = sha256()
                   size = 0
-                  with urllib.request.urlopen(request, timeout=90) as response, out.open('wb') as fh:
+                  with urllib.request.urlopen(request, timeout=60) as response, out.open('wb') as fh:
                       final_host = (urlparse(response.geturl()).hostname or '').lower()
-                      if final_host != 'upload.wikimedia.org':
-                          raise RuntimeError('media request left trusted upload.wikimedia.org host')
+                      if final_host != 'raw.githubusercontent.com':
+                          raise RuntimeError('fixture request left raw.githubusercontent.com')
                       while True:
                           chunk = response.read(1024 * 1024)
                           if not chunk:
@@ -91,24 +92,31 @@ jobs:
                           size += len(chunk)
                           digest.update(chunk)
                           fh.write(chunk)
-                  if size <= 0:
-                      raise RuntimeError('captured asset is empty')
-                  if expected_size is not None and size != expected_size:
-                      raise RuntimeError(f'captured size {size} != Commons metadata size {expected_size}')
+                  if size != case['expected_size']:
+                      raise RuntimeError(f"captured size {size} != repository metadata size {case['expected_size']}")
                   value = digest.hexdigest()
-                  print(f'[{case_id}] CAPTURED sha256={value} bytes={size} host={final_host} duration_s={duration} ext={ext}')
+                  print(
+                      f"[{case_id}] CAPTURED sha256={value} bytes={size} "
+                      f"host={final_host} source_blob={case['blob']} ext={case['ext']}"
+                  )
                   with summary.open('a', encoding='utf-8') as fh:
-                      fh.write(f'| `{case_id}` | CAPTURED | `{value}` | {size} | `{final_host}` | {duration} | `{ext}` |\n')
+                      fh.write(
+                          f"| `{case_id}` | CAPTURED | `{value}` | {size} | `{final_host}` | "
+                          f"`{case['blob']}` | `{case['ext']}` |\n"
+                      )
               except Exception as exc:
                   failures += 1
                   print(f'[{case_id}] FAILED: {type(exc).__name__}: {exc}', file=sys.stderr)
                   with summary.open('a', encoding='utf-8') as fh:
-                      fh.write(f'| `{case_id}` | FAILED | - | - | `upload.wikimedia.org` | {duration} | `{ext}` |\n')
+                      fh.write(
+                          f"| `{case_id}` | FAILED | - | - | `raw.githubusercontent.com` | "
+                          f"`{case['blob']}` | `{case['ext']}` |\n"
+                      )
               finally:
                   out.unlink(missing_ok=True)
 
           if failures:
-              raise SystemExit(f'{failures} direct-storage source capture(s) failed')
+              raise SystemExit(f'{failures} version-pinned fixture capture(s) failed')
           PY
 
           python3 "$WORKDIR/capture.py"
@@ -117,4 +125,4 @@ jobs:
         if: always()
         shell: bash
         run: |
-          echo "No upload-artifact step exists in this workflow. Runner temporary files are deleted and not persisted by this job."
+          echo "No upload-artifact step exists in this workflow. Runner temporary media files are deleted and not persisted by this job."
