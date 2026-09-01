@@ -18,7 +18,7 @@ jobs:
       - name: Checkout
         uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803
 
-      - name: Capture replacement public media bytes and SHA-256
+      - name: Capture direct public media bytes and SHA-256
         shell: bash
         run: |
           set -euo pipefail
@@ -26,9 +26,9 @@ jobs:
           mkdir -p "$WORKDIR"
           trap 'rm -rf "$WORKDIR"' EXIT
 
-          printf '## KRC MEDIA M3 replacement byte capture\n\n' >> "$GITHUB_STEP_SUMMARY"
-          printf 'Direct public Wikimedia Commons file redirects only. No AssemblyAI/Gemini/Supadata calls. No provider credentials. No raw-media artifacts.\n\n' >> "$GITHUB_STEP_SUMMARY"
-          printf '| case_id | status | sha256 | bytes | final_host | duration_s | ext |\n' >> "$GITHUB_STEP_SUMMARY"
+          printf '## KRC MEDIA M3 direct-storage byte capture\n\n' >> "$GITHUB_STEP_SUMMARY"
+          printf 'Direct upload.wikimedia.org original media objects only. No AssemblyAI/Gemini/Supadata calls. No credentials. No raw-media artifacts.\n\n' >> "$GITHUB_STEP_SUMMARY"
+          printf '| case_id | status | sha256 | bytes | host | duration_s | ext |\n' >> "$GITHUB_STEP_SUMMARY"
           printf '|---|---|---|---:|---|---:|---|\n' >> "$GITHUB_STEP_SUMMARY"
 
           cat > "$WORKDIR/capture.py" <<'PY'
@@ -37,48 +37,53 @@ jobs:
           import urllib.request
           from hashlib import sha256
           from pathlib import Path
-          from urllib.parse import quote, urlparse
+          from urllib.parse import urlparse
 
           workdir = Path(os.environ['WORKDIR'])
           summary = Path(os.environ['GITHUB_STEP_SUMMARY'])
-          user_agent = 'VoiceBridge-KRC-Media-Beta/1.0'
+          user_agent = 'VoiceBridge-KRC-Media-Beta/1.0 (public corpus evidence capture)'
 
           cases = [
               (
                   'ua-clean-public-001',
-                  'Звернення Володимира Зеленського.webm',
+                  'https://upload.wikimedia.org/wikipedia/commons/d/d5/%D0%97%D0%B2%D0%B5%D1%80%D0%BD%D0%B5%D0%BD%D0%BD%D1%8F_%D0%92%D0%BE%D0%BB%D0%BE%D0%B4%D0%B8%D0%BC%D0%B8%D1%80%D0%B0_%D0%97%D0%B5%D0%BB%D0%B5%D0%BD%D1%81%D1%8C%D0%BA%D0%BE%D0%B3%D0%BE.webm',
                   86,
                   'webm',
+                  16743147,
               ),
               (
                   'ru-clean-public-001',
-                  'Putin talk 2011-12-15 09888-09940 Идите ко мне, бандерлоги.ogv',
+                  'https://upload.wikimedia.org/wikipedia/commons/f/f5/Putin_talk_2011-12-15_09888-09940_%D0%98%D0%B4%D0%B8%D1%82%D0%B5_%D0%BA%D0%BE_%D0%BC%D0%BD%D0%B5%2C_%D0%B1%D0%B0%D0%BD%D0%B4%D0%B5%D1%80%D0%BB%D0%BE%D0%B3%D0%B8.ogv',
                   52,
                   'ogv',
+                  None,
               ),
               (
                   'en-clean-public-001',
-                  'Biden clip from inaugural speech 2.ogv',
+                  'https://upload.wikimedia.org/wikipedia/commons/f/f1/Biden_clip_from_inaugural_speech_2.ogv',
                   71,
                   'ogv',
+                  9481284,
               ),
           ]
 
           failures = 0
-          for case_id, filename, duration, ext in cases:
+          for case_id, media_url, duration, ext, expected_size in cases:
               out = workdir / f'{case_id}.{ext}'
-              redirect_url = 'https://commons.wikimedia.org/wiki/Special:Redirect/file/' + quote(filename, safe='')
               try:
+                  host = (urlparse(media_url).hostname or '').lower()
+                  if host != 'upload.wikimedia.org':
+                      raise RuntimeError('media URL is outside trusted upload.wikimedia.org host')
                   request = urllib.request.Request(
-                      redirect_url,
+                      media_url,
                       headers={'User-Agent': user_agent, 'Accept': '*/*'},
                   )
                   digest = sha256()
                   size = 0
-                  with urllib.request.urlopen(request, timeout=60) as response, out.open('wb') as fh:
+                  with urllib.request.urlopen(request, timeout=90) as response, out.open('wb') as fh:
                       final_host = (urlparse(response.geturl()).hostname or '').lower()
                       if final_host != 'upload.wikimedia.org':
-                          raise RuntimeError('Commons file redirect left trusted upload.wikimedia.org host')
+                          raise RuntimeError('media request left trusted upload.wikimedia.org host')
                       while True:
                           chunk = response.read(1024 * 1024)
                           if not chunk:
@@ -88,20 +93,22 @@ jobs:
                           fh.write(chunk)
                   if size <= 0:
                       raise RuntimeError('captured asset is empty')
+                  if expected_size is not None and size != expected_size:
+                      raise RuntimeError(f'captured size {size} != Commons metadata size {expected_size}')
                   value = digest.hexdigest()
-                  print(f'[{case_id}] CAPTURED sha256={value} bytes={size} final_host={final_host} duration_s={duration} ext={ext}')
+                  print(f'[{case_id}] CAPTURED sha256={value} bytes={size} host={final_host} duration_s={duration} ext={ext}')
                   with summary.open('a', encoding='utf-8') as fh:
                       fh.write(f'| `{case_id}` | CAPTURED | `{value}` | {size} | `{final_host}` | {duration} | `{ext}` |\n')
               except Exception as exc:
                   failures += 1
                   print(f'[{case_id}] FAILED: {type(exc).__name__}: {exc}', file=sys.stderr)
                   with summary.open('a', encoding='utf-8') as fh:
-                      fh.write(f'| `{case_id}` | FAILED | - | - | - | {duration} | `{ext}` |\n')
+                      fh.write(f'| `{case_id}` | FAILED | - | - | `upload.wikimedia.org` | {duration} | `{ext}` |\n')
               finally:
                   out.unlink(missing_ok=True)
 
           if failures:
-              raise SystemExit(f'{failures} replacement source capture(s) failed')
+              raise SystemExit(f'{failures} direct-storage source capture(s) failed')
           PY
 
           python3 "$WORKDIR/capture.py"
