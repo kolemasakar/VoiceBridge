@@ -1,12 +1,13 @@
 # KRC Media M3 Corpus Selection Plan
 
-Status: READY - FIRST SOURCE TRANCHE LOCKED, BYTE EVIDENCE REQUIRED
+Status: READY - FIRST CLEAN ASSET TRANCHE ACCEPTED, REFERENCE EVIDENCE REQUIRED
 Date: 2026-08-30
+Last updated: 2026-09-01
 Release state: RELEASE_HOLD_OWNER_TESTING
 
 ## Purpose
 
-Define the minimum A/B corpus before selecting real media assets.
+Define the minimum A/B corpus and the evidence gates required before provider-consuming execution.
 
 Each case will use the accepted same-asset execution contract. The same normalized media bytes and SHA-256 digest must be used for AssemblyAI `universal-2` and Gemini `gemini-3.5-transcribe`.
 
@@ -35,26 +36,37 @@ Reference transcripts must not be derived from either candidate provider output 
 
 The accepted offline helper `krc_media_ab_corpus_preparation.ts` provides byte-exact hashing and emits only metadata plus SHA-256 digests. Raw media and reference transcript bytes remain outside GitHub.
 
-## First locked source tranche
+## First clean public asset tranche
 
-The source-selection checkpoint `docs/history/2026-09-01_KRC_MEDIA_M3_REAL_CORPUS_SOURCE_SELECTION.md` locks public source candidates for:
+The original publisher-level source candidates recorded in `docs/history/2026-09-01_KRC_MEDIA_M3_REAL_CORPUS_SOURCE_SELECTION.md` could not yield byte-stable assets from the GitHub-hosted capture environment without cookies, authentication, paid retrieval, or unsupported scraping workarounds. The attempts and the resulting source-reselection decision are retained as historical provenance.
 
-- `ua-clean-public-001`;
-- `ru-clean-public-001`;
-- `en-clean-public-001`.
+The accepted replacement asset evidence is recorded in:
 
-This is a source-level selection only. None of these cases may be labeled `ASSET_SELECTED` until exact media bytes have been captured and hashed through the accepted preparation path.
+- `docs/history/2026-09-01_KRC_MEDIA_M3_BYTE_CAPTURE_ACCEPTANCE.md`.
 
-Current state:
+Accepted clean-public assets:
+
+| Case ID | Bytes | Asset SHA-256 | State |
+| --- | ---: | --- | --- |
+| `ua-clean-public-001` | 136612 | `98e29c2276533699c67454de16b713d9846f668b6cc32b7591a0b2eb8a275a8c` | `ASSET_SELECTED` |
+| `ru-clean-public-001` | 128044 | `d066239503c4e7406ebeb47423334b5109aa6b30d62046d0338a04e41b4c52f5` | `ASSET_SELECTED` |
+| `en-clean-public-001` | 1152693 | `63a4b1e4c1dc655ac70961ffbf518acd249df237e5a0152faae9a4a836949715` | `ASSET_SELECTED` |
+
+The accepted byte-capture workflow is retained as a manual-only reproducibility tool (`workflow_dispatch`). It no longer runs automatically on branch pushes.
+
+## Current state
 
 ```text
 CORPUS_SELECTION_PLAN: READY
 CORPUS_MANIFEST_CONTRACT: PASS
 CORPUS_EVIDENCE_PREPARATION: PASS
-FIRST_PUBLIC_SOURCE_TRANCHE_LOCKED: TRUE
-REAL_ASSET_BYTES_CAPTURED: FALSE
-REAL_ASSETS_SELECTED: FALSE
+FIRST_CLEAN_PUBLIC_ASSET_TRANCHE_ACCEPTED: TRUE
+REAL_ASSET_BYTES_CAPTURED: TRUE
+REAL_ASSETS_SELECTED: TRUE
+ASSET_SHA256_ACCEPTED: TRUE
 REFERENCE_TRANSCRIPTS_READY: FALSE
+REFERENCE_SHA256_ACCEPTED: FALSE
+READY_FOR_AB: FALSE
 M3_LIVE_AB: NOT_RUN
 PROVIDER_CONSUMING_WORK: NONE
 RELEASE_HOLD_OWNER_TESTING: PRESERVED
@@ -62,4 +74,6 @@ RELEASE_HOLD_OWNER_TESTING: PRESERVED
 
 ## Next step
 
-Capture exact media bytes for the first locked public tranche, compute byte-exact asset SHA-256 values, then prepare and independently review reference transcript artifacts. Provider execution remains a separate later step.
+Prepare independent reference transcript candidates for the three accepted clean assets, manually reconcile each candidate to the exact captured audio, hash the final reviewed transcript bytes, and only then advance eligible cases to `READY_FOR_AB`.
+
+Provider execution remains a separate later step.
