@@ -1,11 +1,7 @@
 name: KRC Media M3 Byte Capture
 
 on:
-  push:
-    branches:
-      - agent/krc-media-gemini-migration
-    paths:
-      - .github/workflows/krc-media-m3-byte-capture.yml
+  workflow_dispatch:
 
 permissions:
   contents: read
