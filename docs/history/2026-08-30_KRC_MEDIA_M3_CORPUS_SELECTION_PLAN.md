@@ -1,6 +1,6 @@
 # KRC Media M3 Corpus Selection Plan
 
-Status: READY - REAL EVIDENCE REQUIRED
+Status: READY - FIRST SOURCE TRANCHE LOCKED, BYTE EVIDENCE REQUIRED
 Date: 2026-08-30
 Release state: RELEASE_HOLD_OWNER_TESTING
 
@@ -33,7 +33,17 @@ A case becomes `READY_FOR_AB` only after a real asset is selected, its SHA-256 d
 
 Reference transcripts must not be derived from either candidate provider output and then treated as independent ground truth. Names, numbers, dates, and materially important wording should receive explicit manual review.
 
-The accepted offline helper `krc_media_ab_corpus_preparation.ts` now provides byte-exact hashing and emits only metadata plus SHA-256 digests. Raw media and reference transcript bytes remain outside GitHub.
+The accepted offline helper `krc_media_ab_corpus_preparation.ts` provides byte-exact hashing and emits only metadata plus SHA-256 digests. Raw media and reference transcript bytes remain outside GitHub.
+
+## First locked source tranche
+
+The source-selection checkpoint `docs/history/2026-09-01_KRC_MEDIA_M3_REAL_CORPUS_SOURCE_SELECTION.md` locks public source candidates for:
+
+- `ua-clean-public-001`;
+- `ru-clean-public-001`;
+- `en-clean-public-001`.
+
+This is a source-level selection only. None of these cases may be labeled `ASSET_SELECTED` until exact media bytes have been captured and hashed through the accepted preparation path.
 
 Current state:
 
@@ -41,6 +51,8 @@ Current state:
 CORPUS_SELECTION_PLAN: READY
 CORPUS_MANIFEST_CONTRACT: PASS
 CORPUS_EVIDENCE_PREPARATION: PASS
+FIRST_PUBLIC_SOURCE_TRANCHE_LOCKED: TRUE
+REAL_ASSET_BYTES_CAPTURED: FALSE
 REAL_ASSETS_SELECTED: FALSE
 REFERENCE_TRANSCRIPTS_READY: FALSE
 M3_LIVE_AB: NOT_RUN
@@ -50,4 +62,4 @@ RELEASE_HOLD_OWNER_TESTING: PRESERVED
 
 ## Next step
 
-The remaining M3 pre-execution dependency is real evidence, not additional provider code. Select actual corpus assets and independently prepare/review the reference transcript artifacts. Provider execution remains a separate later step.
+Capture exact media bytes for the first locked public tranche, compute byte-exact asset SHA-256 values, then prepare and independently review reference transcript artifacts. Provider execution remains a separate later step.
