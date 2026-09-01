@@ -1,13 +1,14 @@
 # KRC Media M3 Byte Capture Blocked and Source Reselection
-Фіксація fail-closed результату першого byte-capture tranche та контрольованої заміни джерел на byte-stable public media.
 
-Status: ACCEPTED_CAPTURE_BLOCK / RESELECTION_ACTIVE
+Fail-closed record of the first byte-capture tranche and the controlled source reselection toward byte-stable public media.
+
+Status: ACCEPTED_CAPTURE_BLOCK / RESELECTION_SUPERSEDED_BY_ACCEPTED_GITHUB_FIXTURES
 Date: 2026-09-01
 Release state: RELEASE_HOLD_OWNER_TESTING
 
 ## Purpose
 
-Record the result of the first real byte-capture attempts without promoting unavailable source pages to asset evidence, and select replacement public sources that expose stable downloadable media bytes without cookies, authentication, paid retrieval, provider credentials, AssemblyAI, Gemini, or Supadata.
+Record the result of the first real byte-capture attempts without promoting unavailable source pages to asset evidence, and preserve the intermediate Wikimedia replacement decision that preceded the accepted version-pinned GitHub fixture tranche.
 
 ## Original locked tranche
 
@@ -63,9 +64,25 @@ The capture logic mirrored the accepted Telegram public-web trust boundary and u
 
 The exact-head normal VoiceBridge validation remained green at commit `cc3c67da228a2e36c78a9da90d9ec3134edc78c9`, run `33489510981` SUCCESS.
 
+### Attempt 4 - Wikimedia Commons replacement redirect
+
+Workflow run: `33489821645`
+
+Result: `FAILED / FAIL_CLOSED`.
+
+Three replacement speech objects were selected on Wikimedia Commons. The hosted runner received HTTP 429 from the Commons public file redirect surface.
+
+### Attempt 5 - direct Wikimedia storage objects
+
+Workflow run: `33490131435`
+
+Result: `FAILED / FAIL_CLOSED`.
+
+Direct `upload.wikimedia.org` original object URLs also returned HTTP 429 to the GitHub-hosted runner. This confirmed an infrastructure rate-limit boundary rather than a missing source-selection record.
+
 ## Safety result
 
-Across all attempts:
+Across all failed capture attempts:
 
 ```text
 ASSEMBLYAI_CALLS: NONE
@@ -74,9 +91,8 @@ SUPADATA_CALLS: NONE
 PAID_RETRIEVAL: NONE
 PROVIDER_CREDENTIALS_USED: NONE
 RAW_MEDIA_GITHUB_ARTIFACTS: NONE
-ACCEPTED_ASSET_SHA256: NONE
+ACCEPTED_ASSET_SHA256_FROM_FAILED_ATTEMPTS: NONE
 REFERENCE_SHA256: NONE
-READY_FOR_AB: FALSE
 M3_PROVIDER_AB: NOT_RUN
 ```
 
@@ -84,93 +100,52 @@ Temporary runner files were deleted and no raw media was uploaded as an Actions 
 
 ## Decision
 
-Repeated retries against the same access boundaries would not increase evidence quality. The original tranche is therefore retained as historical source-selection evidence but marked `CAPTURE_BLOCKED` for M3 corpus execution.
+Repeated retries against the same access boundaries would not increase evidence quality. The original publisher tranche is retained as historical source-selection evidence but marked `CAPTURE_BLOCKED` for M3 corpus execution.
 
-This does not mark the original sources false, unavailable to humans, or unsuitable for research. It means only that they do not currently satisfy the byte-stable automated corpus-capture requirement under the accepted no-cookie/no-auth/no-paid-retrieval boundary.
+The Wikimedia tranche was a valid intermediate public-source reselection but was also blocked by hosted-runner HTTP 429. It is retained as provenance history and is not the accepted M3 asset tranche.
 
-## Replacement tranche criteria
+This does not mark those sources false, unavailable to humans, or unsuitable for research. It means only that they did not satisfy the byte-stable automated corpus-capture requirement under the accepted no-cookie/no-auth/no-paid-retrieval boundary in the tested environment.
 
-Replacement sources must provide:
+## Superseding accepted tranche
 
-- real public speech;
-- target language appropriate for the case;
-- direct/stable downloadable media bytes;
-- lawful public reuse/access metadata;
-- traceable source/origin metadata;
-- no login, cookies, personal session, or paid retrieval;
-- no STT-provider call during capture;
-- independent reference transcript preparation remains a later manual evidence step.
+The final clean-public replacement uses version-pinned public GitHub speech fixtures available as exact `raw.githubusercontent.com` objects. Successful byte evidence is recorded in:
 
-## Replacement source candidates
+`docs/history/2026-09-01_KRC_MEDIA_M3_BYTE_CAPTURE_ACCEPTANCE.md`
 
-### `ua-clean-public-001`
+Successful run: `33490716248`.
 
-Wikimedia Commons file:
+The three accepted clean-public assets now have byte-exact SHA-256 values and state `ASSET_SELECTED`.
 
-`File:Звернення Володимира Зеленського.webm`
+## Historical Wikimedia replacement candidates
 
-Characteristics:
+The intermediate candidates were:
 
-- Ukrainian speech;
-- duration about 1:26;
-- public Commons media object;
-- page identifies Ukrinform TV / OPU / President.gov.ua provenance;
-- CC BY 3.0 attribution metadata on Commons;
-- stable file redirect can resolve to `upload.wikimedia.org`.
+- Ukrainian: Wikimedia Commons object titled "Volodymyr Zelenskyy address" (`.webm`), approximately 1:26;
+- Russian: Wikimedia Commons object from the 2011-12-15 Putin talk excerpt (`.ogv`), approximately 0:52;
+- English: Wikimedia Commons Biden inaugural speech clip 2 (`.ogv`), approximately 1:11.
 
-State: `SOURCE_RESELECTED_PENDING_BYTE_CAPTURE`.
-
-### `ru-clean-public-001`
-
-Wikimedia Commons file:
-
-`File:Putin talk 2011-12-15 09888-09940 Идите ко мне, бандерлоги.ogv`
-
-Characteristics:
-
-- Russian clean/studio speech excerpt;
-- duration about 0:52;
-- source identifies the Press Office of the Government of Russia / premier.gov.ru;
-- Commons records CC BY licensing and Russian timed text;
-- stable file redirect can resolve to `upload.wikimedia.org`.
-
-State: `SOURCE_RESELECTED_PENDING_BYTE_CAPTURE`.
-
-### `en-clean-public-001`
-
-Wikimedia Commons file:
-
-`File:Biden clip from inaugural speech 2.ogv`
-
-Characteristics:
-
-- English clean public speech;
-- duration about 1:11;
-- White House source attribution;
-- public-domain US federal government work metadata on Commons;
-- stable file redirect can resolve to `upload.wikimedia.org`.
-
-State: `SOURCE_RESELECTED_PENDING_BYTE_CAPTURE`.
+These candidates were not promoted to `ASSET_SELECTED` because no successful byte capture occurred from the GitHub-hosted runner.
 
 ## Evidence boundary
 
-Wikimedia Commons is the distribution host for these replacement corpus bytes. It is not automatically the underlying origin of the speech. Provenance must preserve the source/author metadata recorded on each file description page.
+Distribution host and underlying speech origin remain distinct provenance concepts. A distribution host does not automatically become the underlying source of the speech.
 
-The captured bytes, if successful, become the fixed A/B corpus asset only after SHA-256 is recorded. The existing source pages and Commons metadata remain provenance evidence; neither substitutes for independent reference-transcript review.
+A captured object becomes a fixed A/B corpus asset only after successful byte capture and SHA-256 acceptance. Independent reference-transcript review remains a separate gate.
 
-## Current state
+## Current historical state
 
 ```text
-FIRST_PUBLIC_SOURCE_TRANCHE_LOCKED: HISTORICAL / CAPTURE_BLOCKED
-REPLACEMENT_PUBLIC_SOURCE_TRANCHE: SELECTED_PENDING_BYTE_CAPTURE
-REAL_ASSET_BYTES_CAPTURED: FALSE
-REAL_ASSETS_SELECTED: FALSE
-ASSET_SHA256: NOT_CREATED
+FIRST_PUBLIC_SOURCE_TRANCHE: HISTORICAL / CAPTURE_BLOCKED
+WIKIMEDIA_REPLACEMENT_TRANCHE: HISTORICAL / CAPTURE_BLOCKED
+VERSION_PINNED_GITHUB_FIXTURE_TRANCHE: ACCEPTED
+REAL_ASSET_BYTES_CAPTURED: TRUE
+REAL_ASSETS_SELECTED: TRUE
+ASSET_SHA256_ACCEPTED: TRUE
 REFERENCE_TRANSCRIPTS_READY: FALSE
-REFERENCE_SHA256: NOT_CREATED
+REFERENCE_SHA256_ACCEPTED: FALSE
 READY_FOR_AB: FALSE
 M3_PROVIDER_AB: NOT_RUN
-CURRENT: M3 REPLACEMENT BYTE CAPTURE + SHA-256
+CURRENT: M3 REFERENCE TRANSCRIPT PREPARATION + INDEPENDENT REVIEW
 ```
 
 ## Marker
