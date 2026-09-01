@@ -17,7 +17,9 @@ concurrency:
 
 jobs:
   live-ab:
-    if: github.event_name == 'workflow_dispatch' || github.event.head_commit.message == 'M3: Execute authorized live A/B'
+    if: >-
+      github.event_name == 'workflow_dispatch' ||
+      github.event.head_commit.message == 'M3: Execute authorized live A/B'
     runs-on: ubuntu-latest
     timeout-minutes: 30
     defaults:
