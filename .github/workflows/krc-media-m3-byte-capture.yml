@@ -1,0 +1,114 @@
+name: KRC Media M3 Byte Capture
+
+on:
+  push:
+    branches:
+      - agent/krc-media-gemini-migration
+    paths:
+      - .github/workflows/krc-media-m3-byte-capture.yml
+
+permissions:
+  contents: read
+
+jobs:
+  capture:
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    steps:
+      - name: Checkout
+        uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803
+
+      - name: Create isolated yt-dlp environment
+        shell: bash
+        run: |
+          set -euo pipefail
+          python3 -m venv "$RUNNER_TEMP/krc-m3-venv"
+          "$RUNNER_TEMP/krc-m3-venv/bin/python" -m pip install --disable-pip-version-check --no-input yt-dlp
+          "$RUNNER_TEMP/krc-m3-venv/bin/yt-dlp" --version
+
+      - name: Capture locked public media bytes and SHA-256
+        shell: bash
+        run: |
+          set -euo pipefail
+
+          YTDLP="$RUNNER_TEMP/krc-m3-venv/bin/yt-dlp"
+          WORKDIR="$RUNNER_TEMP/krc-m3-byte-capture"
+          mkdir -p "$WORKDIR"
+          trap 'rm -rf "$WORKDIR" "$RUNNER_TEMP/krc-m3-venv"' EXIT
+
+          cat > "$WORKDIR/cases.tsv" <<'EOF'
+          ua-clean-public-001	https://www.president.gov.ua/videos/na-kozhen-rosijskij-udar-bude-nashe-reaguvannya-zvernennya-p-8809
+          ru-clean-public-001	https://kremlin.ru/events/president/news/79449
+          en-clean-public-001	https://www.un.org/sg/en/content/sg/statements/2026-07-06/secretary-generals-remarks-the-general-assembly-the-responsibility-protect-prepared-for-delivery-the-chef-de-cabinet
+          EOF
+
+          printf '## KRC MEDIA M3 byte capture\n\n' >> "$GITHUB_STEP_SUMMARY"
+          printf 'No AssemblyAI/Gemini/Supadata calls. No raw-media artifacts. Temporary media is deleted after hashing.\n\n' >> "$GITHUB_STEP_SUMMARY"
+          printf '| case_id | status | sha256 | bytes | extractor | media_id | format_id | duration_s | ext |\n' >> "$GITHUB_STEP_SUMMARY"
+          printf '|---|---|---|---:|---|---|---|---:|---|\n' >> "$GITHUB_STEP_SUMMARY"
+
+          failures=0
+          while IFS=$'\t' read -r case_id source_url; do
+            [ -n "$case_id" ] || continue
+            case_dir="$WORKDIR/$case_id"
+            mkdir -p "$case_dir"
+
+            set +e
+            metadata="$($YTDLP \
+              --quiet \
+              --no-warnings \
+              --no-playlist \
+              --no-part \
+              --restrict-filenames \
+              --format 'best[acodec!=none]/bestaudio[acodec!=none]/best' \
+              --output "$case_dir/${case_id}.%(ext)s" \
+              --print 'after_move:%(filepath)s\t%(extractor_key)s\t%(id)s\t%(format_id)s\t%(duration)s\t%(ext)s' \
+              "$source_url" 2>"$case_dir/error.log")"
+            status=$?
+            set -e
+
+            if [ "$status" -ne 0 ] || [ -z "$metadata" ]; then
+              printf '| `%s` | FAILED | - | - | - | - | - | - | - |\n' "$case_id" >> "$GITHUB_STEP_SUMMARY"
+              echo "[$case_id] capture failed"
+              sed -n '1,20p' "$case_dir/error.log" || true
+              failures=$((failures + 1))
+              rm -rf "$case_dir"
+              continue
+            fi
+
+            filepath="$(printf '%s\n' "$metadata" | tail -n 1 | cut -f1)"
+            extractor="$(printf '%s\n' "$metadata" | tail -n 1 | cut -f2)"
+            media_id="$(printf '%s\n' "$metadata" | tail -n 1 | cut -f3)"
+            format_id="$(printf '%s\n' "$metadata" | tail -n 1 | cut -f4)"
+            duration="$(printf '%s\n' "$metadata" | tail -n 1 | cut -f5)"
+            ext="$(printf '%s\n' "$metadata" | tail -n 1 | cut -f6)"
+
+            if [ ! -f "$filepath" ]; then
+              printf '| `%s` | FAILED_NO_FILE | - | - | `%s` | `%s` | `%s` | %s | `%s` |\n' \
+                "$case_id" "$extractor" "$media_id" "$format_id" "$duration" "$ext" >> "$GITHUB_STEP_SUMMARY"
+              failures=$((failures + 1))
+              rm -rf "$case_dir"
+              continue
+            fi
+
+            sha256="$(sha256sum "$filepath" | awk '{print $1}')"
+            bytes="$(stat -c '%s' "$filepath")"
+
+            printf '| `%s` | CAPTURED | `%s` | %s | `%s` | `%s` | `%s` | %s | `%s` |\n' \
+              "$case_id" "$sha256" "$bytes" "$extractor" "$media_id" "$format_id" "$duration" "$ext" >> "$GITHUB_STEP_SUMMARY"
+
+            echo "[$case_id] CAPTURED sha256=$sha256 bytes=$bytes extractor=$extractor media_id=$media_id format_id=$format_id duration_s=$duration ext=$ext"
+
+            rm -rf "$case_dir"
+          done < "$WORKDIR/cases.tsv"
+
+          if [ "$failures" -ne 0 ]; then
+            echo "$failures locked source capture(s) failed" >&2
+            exit 1
+          fi
+
+      - name: Confirm no raw media artifact upload
+        if: always()
+        shell: bash
+        run: |
+          echo "No upload-artifact step exists in this workflow. Runner temporary files are not persisted by this job."
