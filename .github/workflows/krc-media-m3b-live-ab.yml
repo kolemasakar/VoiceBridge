@@ -88,3 +88,5 @@ jobs:
         shell: bash
         run: |
           echo "M3B A-B only. Maximum 8 provider submissions. No automatic retries. No normal KRC provider selector, deployment, database, Builder, Action URL, or release gate is changed by this workflow."
+
+# Authorized M3B execution trigger: 2026-09-01
