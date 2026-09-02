@@ -1,0 +1,461 @@
+name: KRC Media M4 Owner Canary
+
+on:
+  push:
+    branches:
+      - agent/krc-media-gemini-migration
+    paths:
+      - .github/workflows/krc-media-m4-owner-canary.yml
+
+permissions:
+  contents: read
+
+concurrency:
+  group: krc-media-m4-owner-canary
+  cancel-in-progress: false
+
+env:
+  RENDER_API_BASE: https://api.render.com/v1
+  SERVICE_NAME: voicebridge-krc-media-beta-kolemasakar
+  BASE_URL: https://voicebridge-krc-media-beta-kolemasakar.onrender.com
+  TARGET_COMMIT: 6a9491359795840ec9e79c9edc0ea82f595e9784
+  TELEGRAM_TARGET: https://t.me/techcrimes/12107
+
+jobs:
+  owner-canary:
+    if: contains(github.event.head_commit.message, 'M4 OWNER CANARY EXECUTE')
+    runs-on: ubuntu-latest
+    timeout-minutes: 45
+    env:
+      RENDER_API_KEY: ${{ secrets.RENDER_API_KEY }}
+      KRC_NEON_DATABASE_URL: ${{ secrets.KRC_NEON_DATABASE_URL }}
+    steps:
+      - name: Checkout migration branch
+        uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803
+        with:
+          ref: agent/krc-media-gemini-migration
+          fetch-depth: 0
+
+      - name: Verify authorization target and resolve isolated Render service
+        id: resolve
+        shell: bash
+        run: |
+          set -euo pipefail
+          test -n "${RENDER_API_KEY:-}" || { echo "RENDER_API_KEY missing" >&2; exit 1; }
+          test -n "${KRC_NEON_DATABASE_URL:-}" || { echo "KRC_NEON_DATABASE_URL missing" >&2; exit 1; }
+          echo "::add-mask::${KRC_NEON_DATABASE_URL}"
+          git cat-file -e "${TARGET_COMMIT}^{commit}"
+
+          selected=""
+          configured_branch=""
+          for sid in srv-da1kic5bedkc73d6fk60 srv-d3mg6r7pm1nc739aggm0; do
+            tmp="$(mktemp)"
+            code="$(curl -sS -o "$tmp" -w '%{http_code}' \
+              "${RENDER_API_BASE}/services/${sid}" \
+              -H 'Accept: application/json' \
+              -H "Authorization: Bearer ${RENDER_API_KEY}" || true)"
+            if [[ "$code" == 200 ]]; then
+              name="$(jq -r '.name // empty' "$tmp")"
+              branch="$(jq -r '.branch // empty' "$tmp")"
+              if [[ "$name" == "$SERVICE_NAME" ]]; then
+                selected="$sid"
+                configured_branch="$branch"
+                rm -f "$tmp"
+                break
+              fi
+            fi
+            rm -f "$tmp"
+          done
+          test -n "$selected" || { echo "Isolated Render service could not be resolved." >&2; exit 1; }
+          [[ "$configured_branch" == "agent/krc-media-transcript" || "$configured_branch" == "agent/krc-media-gemini-migration" ]] || {
+            echo "Unexpected Render branch: $configured_branch" >&2
+            exit 1
+          }
+
+          tmp="$(mktemp)"
+          code="$(curl -sS -o "$tmp" -w '%{http_code}' \
+            "${RENDER_API_BASE}/services/${selected}/deploys?limit=20" \
+            -H 'Accept: application/json' \
+            -H "Authorization: Bearer ${RENDER_API_KEY}")"
+          [[ "$code" == 200 ]] || { echo "Render deploy list failed HTTP $code" >&2; rm -f "$tmp"; exit 1; }
+          previous_commit="$(jq -r '
+            if type == "array" then
+              [ .[] | (.deploy // .) | select(.status == "live") | (.commit.id // .commitId // empty) ][0] // empty
+            else empty end
+          ' "$tmp")"
+          rm -f "$tmp"
+          [[ "$previous_commit" =~ ^[0-9a-f]{40}$ ]] || { echo "Exact rollback commit could not be resolved." >&2; exit 1; }
+
+          echo "service_id=$selected" >> "$GITHUB_OUTPUT"
+          echo "configured_branch=$configured_branch" >> "$GITHUB_OUTPUT"
+          echo "previous_commit=$previous_commit" >> "$GITHUB_OUTPUT"
+          echo "Isolation boundary: PASS / service=$SERVICE_NAME / branch=$configured_branch"
+          echo "Rollback target captured: ${previous_commit:0:12}..."
+
+      - name: Verify Render environment presence without exposing secrets
+        shell: bash
+        env:
+          SERVICE_ID: ${{ steps.resolve.outputs.service_id }}
+        run: |
+          set -euo pipefail
+          get_required_env() {
+            key="$1"
+            destination="$2"
+            tmp="$(mktemp)"
+            code="$(curl -sS -o "$tmp" -w '%{http_code}' \
+              "${RENDER_API_BASE}/services/${SERVICE_ID}/env-vars/${key}" \
+              -H 'Accept: application/json' \
+              -H "Authorization: Bearer ${RENDER_API_KEY}")"
+            [[ "$code" == 200 ]] || { echo "Required Render env missing: $key (HTTP $code)" >&2; rm -f "$tmp"; exit 1; }
+            value="$(jq -r '(.envVar.value // .value // empty)' "$tmp")"
+            rm -f "$tmp"
+            test -n "$value" || { echo "Required Render env empty: $key" >&2; exit 1; }
+            echo "::add-mask::$value"
+            printf '%s' "$value" > "$destination"
+            echo "$key: PRESENT"
+          }
+
+          get_required_env KRC_MEDIA_DATABASE_URL /tmp/m4-render-db-url
+          get_required_env KRC_MEDIA_ACTION_TOKEN /tmp/m4-action-token
+          get_required_env KRC_MEDIA_BETA_CODES /tmp/m4-beta-codes
+          get_required_env ASSEMBLYAI_API_KEY /tmp/m4-assembly-key
+          get_required_env TEST_ACCESS_TOKEN /tmp/m4-test-token
+          get_required_env KRC_MEDIA_COBALT_ENDPOINT /tmp/m4-cobalt-endpoint
+
+          render_db="$(cat /tmp/m4-render-db-url)"
+          [[ "$render_db" == "$KRC_NEON_DATABASE_URL" ]] || {
+            echo "Render KRC_MEDIA_DATABASE_URL does not match canonical Neon secret." >&2
+            exit 1
+          }
+          echo "Render/Neon database URL identity: PASS"
+
+          tmp="$(mktemp)"
+          code="$(curl -sS -o "$tmp" -w '%{http_code}' \
+            "${RENDER_API_BASE}/services/${SERVICE_ID}/env-vars/KRC_MEDIA_STT_PROVIDER" \
+            -H 'Accept: application/json' \
+            -H "Authorization: Bearer ${RENDER_API_KEY}" || true)"
+          if [[ "$code" == 200 ]]; then
+            value="$(jq -r '(.envVar.value // .value // empty)' "$tmp")"
+            [[ -z "$value" || "$value" == "assemblyai" ]] || { echo "Unexpected KRC media STT selector." >&2; rm -f "$tmp"; exit 1; }
+          elif [[ "$code" != 404 ]]; then
+            echo "KRC_MEDIA_STT_PROVIDER lookup failed HTTP $code" >&2
+            rm -f "$tmp"
+            exit 1
+          fi
+          rm -f "$tmp"
+          echo "KRC prerecorded selector: ASSEMBLYAI/default"
+
+          tmp="$(mktemp)"
+          code="$(curl -sS -o "$tmp" -w '%{http_code}' \
+            "${RENDER_API_BASE}/services/${SERVICE_ID}/env-vars/SCRAPECREATORS_API_KEY" \
+            -H 'Accept: application/json' \
+            -H "Authorization: Bearer ${RENDER_API_KEY}" || true)"
+          if [[ "$code" == 200 ]]; then
+            value="$(jq -r '(.envVar.value // .value // empty)' "$tmp")"
+            [[ -z "$value" ]] || { echo "ScrapeCreators is unexpectedly configured." >&2; rm -f "$tmp"; exit 1; }
+          elif [[ "$code" != 404 ]]; then
+            echo "ScrapeCreators configuration lookup failed HTTP $code" >&2
+            rm -f "$tmp"
+            exit 1
+          fi
+          rm -f "$tmp"
+          echo "ScrapeCreators paid route: INACTIVE"
+
+      - name: Verify Cobalt reachability without media retrieval
+        shell: bash
+        run: |
+          set -euo pipefail
+          endpoint="$(cat /tmp/m4-cobalt-endpoint)"
+          code="$(curl -sS -o /dev/null -w '%{http_code}' --max-time 30 "${endpoint%/}/" || true)"
+          [[ "$code" =~ ^[1-5][0-9][0-9]$ ]] || { echo "Cobalt endpoint unreachable." >&2; exit 1; }
+          echo "Cobalt transport reachability: PASS / HTTP $code / no media request"
+
+      - name: Verify Neon connectivity and quiescent durable state
+        shell: bash
+        run: |
+          set -euo pipefail
+          sudo apt-get -qq update
+          sudo apt-get -qq install -y postgresql-client >/dev/null
+
+          schema="$(psql "$KRC_NEON_DATABASE_URL" -X -v ON_ERROR_STOP=1 -A -t -F '|' -c \
+            "SELECT to_regclass('public.krc_managed_media_jobs') IS NOT NULL, to_regclass('public.krc_media_stt_charges') IS NOT NULL;")"
+          [[ "$schema" == "t|t" ]] || { echo "Required KRC Neon tables are missing." >&2; exit 1; }
+
+          baseline="$(psql "$KRC_NEON_DATABASE_URL" -X -v ON_ERROR_STOP=1 -A -t -F '|' -c \
+            "SELECT (SELECT count(*) FROM public.krc_managed_media_jobs), (SELECT count(*) FROM public.krc_media_stt_charges), (SELECT count(*) FROM public.krc_managed_media_jobs WHERE status NOT IN ('COMPLETED','FAILED') AND expires_at > now());")"
+          IFS='|' read -r jobs charges active <<< "$baseline"
+          [[ "$jobs" =~ ^[0-9]+$ && "$charges" =~ ^[0-9]+$ && "$active" =~ ^[0-9]+$ ]] || { echo "Malformed Neon preflight counts." >&2; exit 1; }
+          [[ "$active" == 0 ]] || { echo "Active nonterminal KRC jobs exist; canary aborted." >&2; exit 1; }
+          printf '%s|%s\n' "$jobs" "$charges" > /tmp/m4-neon-baseline
+          echo "Neon connectivity/schema: PASS / active_nonterminal_jobs=0"
+
+      - name: Deploy exact M4 target to isolated service
+        id: deploy
+        shell: bash
+        env:
+          SERVICE_ID: ${{ steps.resolve.outputs.service_id }}
+          PREVIOUS_COMMIT: ${{ steps.resolve.outputs.previous_commit }}
+        run: |
+          set -euo pipefail
+          if [[ "$PREVIOUS_COMMIT" == "$TARGET_COMMIT" ]]; then
+            echo "mutated=false" >> "$GITHUB_OUTPUT"
+            echo "deploy_id=already-live" >> "$GITHUB_OUTPUT"
+            echo "Target commit already live; no deployment mutation required."
+            exit 0
+          fi
+
+          payload="$(jq -nc --arg commitId "$TARGET_COMMIT" '{commitId:$commitId,clearCache:"do_not_clear"}')"
+          tmp="$(mktemp)"
+          code="$(curl -sS -o "$tmp" -w '%{http_code}' \
+            -X POST "${RENDER_API_BASE}/services/${SERVICE_ID}/deploys" \
+            -H 'Accept: application/json' \
+            -H 'Content-Type: application/json' \
+            -H "Authorization: Bearer ${RENDER_API_KEY}" \
+            --data "$payload")"
+          [[ "$code" == 201 || "$code" == 202 ]] || { echo "Canary deploy request failed HTTP $code" >&2; rm -f "$tmp"; exit 1; }
+          deploy_id="$(jq -r '(.deploy // .).id // empty' "$tmp")"
+          rm -f "$tmp"
+          test -n "$deploy_id" || { echo "Canary deploy ID missing." >&2; exit 1; }
+
+          printf '%s|%s\n' "$SERVICE_ID" "$PREVIOUS_COMMIT" > /tmp/m4-rollback-required
+          echo "mutated=true" >> "$GITHUB_OUTPUT"
+          echo "deploy_id=$deploy_id" >> "$GITHUB_OUTPUT"
+          echo "Canary deployment requested: $deploy_id / target=${TARGET_COMMIT:0:12}..."
+
+          for attempt in $(seq 1 72); do
+            tmp="$(mktemp)"
+            code="$(curl -sS -o "$tmp" -w '%{http_code}' \
+              "${RENDER_API_BASE}/services/${SERVICE_ID}/deploys/${deploy_id}" \
+              -H 'Accept: application/json' \
+              -H "Authorization: Bearer ${RENDER_API_KEY}")"
+            [[ "$code" == 200 ]] || { rm -f "$tmp"; echo "Canary deploy status failed HTTP $code" >&2; exit 1; }
+            status="$(jq -r '(.deploy // .).status // "unknown"' "$tmp")"
+            commit="$(jq -r '(.deploy // .).commit.id // (.deploy // .).commitId // "unknown"' "$tmp")"
+            rm -f "$tmp"
+            case "$status" in
+              live)
+                [[ "$commit" == "$TARGET_COMMIT" ]] || { echo "Canary live commit mismatch." >&2; exit 1; }
+                echo "Canary target live: PASS / deploy=$deploy_id"
+                exit 0
+                ;;
+              build_failed|update_failed|canceled|deactivated)
+                echo "Canary target deployment failed: $status" >&2
+                exit 1
+                ;;
+            esac
+            sleep 10
+          done
+          echo "Timed out waiting for canary target deployment." >&2
+          exit 1
+
+      - name: Verify live health owner auth and managed capability
+        shell: bash
+        run: |
+          set -euo pipefail
+          action_token="$(cat /tmp/m4-action-token)"
+
+          health_code="$(curl -sS --retry 8 --retry-delay 5 --max-time 120 -o /tmp/m4-health.json -w '%{http_code}' \
+            "${BASE_URL}/api/v1/health")"
+          [[ "$health_code" == 200 ]] || { echo "Live health failed HTTP $health_code" >&2; exit 1; }
+          jq -e '.status == "ok" and .service == "voicebridge-cloud"' /tmp/m4-health.json >/dev/null
+
+          unauth_code="$(curl -sS --max-time 60 -o /tmp/m4-unauth.json -w '%{http_code}' \
+            "${BASE_URL}/api/v1/media/managed")"
+          [[ "$unauth_code" == 401 ]] || { echo "Owner boundary expected HTTP 401 without bearer, got $unauth_code" >&2; exit 1; }
+
+          capability_code="$(curl -sS --max-time 60 -o /tmp/m4-capability.json -w '%{http_code}' \
+            "${BASE_URL}/api/v1/media/managed" \
+            -H "Authorization: Bearer ${action_token}" \
+            -H 'Accept: application/json')"
+          [[ "$capability_code" == 200 ]] || { echo "Managed capability failed HTTP $capability_code" >&2; exit 1; }
+          jq -e '
+            .configured == true and
+            .mode == "zero_client_managed_beta" and
+            .durable_store == "postgres" and
+            .restart_resilient_jobs == true and
+            .facebook_free_retrieval_provider == "cobalt" and
+            .facebook_free_retrieval_configured == true and
+            .facebook_paid_retrieval_configured == false and
+            .facebook_automatic_paid_retrieval == false and
+            .telegram_public_retrieval == true and
+            .telegram_retrieval_provider == "telegram_public_web" and
+            .telegram_retrieval_credits == 0 and
+            .telegram_stt_provider == "assemblyai" and
+            .telegram_stt_configured == true and
+            .local_attachment_transport == true and
+            .local_attachment_transcription == true and
+            .local_attachment_provider == "assemblyai" and
+            .user_beta_access_code_required == false and
+            .owner_access_injected_server_side == true
+          ' /tmp/m4-capability.json >/dev/null
+          jq -c '{mode,configured,durable_store,restart_resilient_jobs,facebook_free_retrieval_provider,facebook_free_retrieval_configured,facebook_paid_retrieval_configured,facebook_automatic_paid_retrieval,telegram_public_retrieval,telegram_retrieval_credits,telegram_stt_provider,telegram_stt_configured,local_attachment_transport,local_attachment_transcription,local_attachment_provider,user_beta_access_code_required,owner_access_injected_server_side}' /tmp/m4-capability.json
+
+      - name: Prove no-provider smoke did not mutate Neon
+        shell: bash
+        run: |
+          set -euo pipefail
+          before="$(cat /tmp/m4-neon-baseline)"
+          after="$(psql "$KRC_NEON_DATABASE_URL" -X -v ON_ERROR_STOP=1 -A -t -F '|' -c \
+            "SELECT (SELECT count(*) FROM public.krc_managed_media_jobs), (SELECT count(*) FROM public.krc_media_stt_charges);")"
+          [[ "$after" == "$before" ]] || { echo "No-provider smoke unexpectedly mutated durable KRC state." >&2; exit 1; }
+          echo "No-provider durable-state mutation: NONE"
+
+      - name: Run exactly one real Telegram to AssemblyAI owner canary
+        id: real
+        shell: bash
+        run: |
+          set -euo pipefail
+          action_token="$(cat /tmp/m4-action-token)"
+          payload="$(jq -nc --arg url "$TELEGRAM_TARGET" '{url:$url,language_hint:"auto"}')"
+          code="$(curl -sS --max-time 1200 -o /tmp/m4-telegram-start.json -w '%{http_code}' \
+            -X POST "${BASE_URL}/api/v1/media/managed/telegram" \
+            -H "Authorization: Bearer ${action_token}" \
+            -H 'Content-Type: application/json' \
+            -H 'Accept: application/json' \
+            --data "$payload")"
+          [[ "$code" == 200 ]] || {
+            echo "Real Telegram canary failed HTTP $code" >&2
+            jq -c '{status,error}' /tmp/m4-telegram-start.json 2>/dev/null || true
+            exit 1
+          }
+          jq -e '
+            .status == "COMPLETED" and
+            .provider == "assemblyai" and
+            .provider_mode == "telegram_public_retrieval_stt" and
+            .retrieval_provider == "telegram_public_web" and
+            .retrieval_credits_charged == 0 and
+            .credits_charged == 0 and
+            (.stt_seconds_charged > 0) and
+            (.segment_count > 0) and
+            (.transcript_characters > 0) and
+            .provider_data_deleted == true and
+            .error == null
+          ' /tmp/m4-telegram-start.json >/dev/null || {
+            echo "Real Telegram canary did not meet acceptance contract." >&2
+            jq -c '{status,provider,provider_mode,retrieval_provider,retrieval_credits_charged,credits_charged,stt_seconds_charged,segment_count,transcript_characters,provider_data_deleted,error,reused}' /tmp/m4-telegram-start.json
+            exit 1
+          }
+          job_id="$(jq -r '.job_id // empty' /tmp/m4-telegram-start.json)"
+          [[ "$job_id" =~ ^KRCM_[A-Za-z0-9-]+$ ]] || { echo "Invalid canary KRCM job id." >&2; exit 1; }
+          echo "job_id=$job_id" >> "$GITHUB_OUTPUT"
+          jq -c '{status,provider,provider_mode,retrieval_provider,retrieval_credits_charged,credits_charged,stt_seconds_charged,segment_count,transcript_characters,provider_data_deleted,reused}' /tmp/m4-telegram-start.json
+
+      - name: Verify durable readback duplicate reuse and single provider reservation
+        shell: bash
+        env:
+          JOB_ID: ${{ steps.real.outputs.job_id }}
+        run: |
+          set -euo pipefail
+          [[ "$JOB_ID" =~ ^KRCM_[A-Za-z0-9-]+$ ]] || { echo "Invalid KRCM job id for readback." >&2; exit 1; }
+          action_token="$(cat /tmp/m4-action-token)"
+
+          code="$(curl -sS --max-time 60 -o /tmp/m4-status.json -w '%{http_code}' \
+            "${BASE_URL}/api/v1/media/managed/transcriptions/${JOB_ID}" \
+            -H "Authorization: Bearer ${action_token}" -H 'Accept: application/json')"
+          [[ "$code" == 200 ]] || { echo "Durable status readback failed HTTP $code" >&2; exit 1; }
+          jq -e --arg job "$JOB_ID" '.status == "COMPLETED" and .job_id == $job and .retrieval_credits_charged == 0' /tmp/m4-status.json >/dev/null
+
+          code="$(curl -sS --max-time 60 -o /tmp/m4-segments.json -w '%{http_code}' \
+            "${BASE_URL}/api/v1/media/managed/transcriptions/${JOB_ID}/segments?cursor=0&limit=20" \
+            -H "Authorization: Bearer ${action_token}" -H 'Accept: application/json')"
+          [[ "$code" == 200 ]] || { echo "Durable segment readback failed HTTP $code" >&2; exit 1; }
+          jq -e '.status == "COMPLETED" and (.segments | length) > 0' /tmp/m4-segments.json >/dev/null
+
+          payload="$(jq -nc --arg url "$TELEGRAM_TARGET" '{url:$url,language_hint:"auto"}')"
+          code="$(curl -sS --max-time 120 -o /tmp/m4-duplicate.json -w '%{http_code}' \
+            -X POST "${BASE_URL}/api/v1/media/managed/telegram" \
+            -H "Authorization: Bearer ${action_token}" \
+            -H 'Content-Type: application/json' \
+            -H 'Accept: application/json' \
+            --data "$payload")"
+          [[ "$code" == 200 ]] || { echo "Duplicate canary start failed HTTP $code" >&2; exit 1; }
+          jq -e --arg job "$JOB_ID" '
+            .status == "COMPLETED" and
+            .job_id == $job and
+            .reused == true and
+            .retrieval_credits_charged == 0
+          ' /tmp/m4-duplicate.json >/dev/null
+
+          db_counts="$(psql "$KRC_NEON_DATABASE_URL" -X -v ON_ERROR_STOP=1 -A -t -F '|' -c \
+            "SELECT (SELECT count(*) FROM public.krc_managed_media_jobs WHERE job_id='${JOB_ID}'), (SELECT count(*) FROM public.krc_media_stt_charges WHERE job_id='${JOB_ID}');")"
+          [[ "$db_counts" == "1|1" ]] || { echo "Expected exactly one durable job and one STT reservation; got $db_counts" >&2; exit 1; }
+          echo "Durability/idempotency: PASS / job=$JOB_ID / durable_rows=1 / stt_reservations=1"
+
+      - name: Verify invalid Telegram boundary without provider call
+        shell: bash
+        run: |
+          set -euo pipefail
+          action_token="$(cat /tmp/m4-action-token)"
+          code="$(curl -sS --max-time 60 -o /tmp/m4-invalid.json -w '%{http_code}' \
+            -X POST "${BASE_URL}/api/v1/media/managed/telegram" \
+            -H "Authorization: Bearer ${action_token}" \
+            -H 'Content-Type: application/json' \
+            -H 'Accept: application/json' \
+            --data '{"url":"https://t.me/+privateInviteExample","language_hint":"auto"}')"
+          [[ "$code" == 400 ]] || { echo "Invalid Telegram boundary expected HTTP 400, got $code" >&2; exit 1; }
+          jq -e '.error.code == "INVALID_REQUEST"' /tmp/m4-invalid.json >/dev/null
+          echo "Private/invalid Telegram boundary: PASS"
+
+      - name: Roll back isolated Render service to exact previous commit
+        if: always()
+        shell: bash
+        run: |
+          set -euo pipefail
+          if [[ ! -f /tmp/m4-rollback-required ]]; then
+            echo "Rollback mutation not required."
+            exit 0
+          fi
+          IFS='|' read -r service_id previous_commit < /tmp/m4-rollback-required
+          [[ "$service_id" =~ ^srv-[A-Za-z0-9]+$ ]] || { echo "Invalid rollback service id." >&2; exit 1; }
+          [[ "$previous_commit" =~ ^[0-9a-f]{40}$ ]] || { echo "Invalid rollback commit." >&2; exit 1; }
+
+          payload="$(jq -nc --arg commitId "$previous_commit" '{commitId:$commitId,clearCache:"do_not_clear"}')"
+          tmp="$(mktemp)"
+          code="$(curl -sS -o "$tmp" -w '%{http_code}' \
+            -X POST "${RENDER_API_BASE}/services/${service_id}/deploys" \
+            -H 'Accept: application/json' \
+            -H 'Content-Type: application/json' \
+            -H "Authorization: Bearer ${RENDER_API_KEY}" \
+            --data "$payload")"
+          [[ "$code" == 201 || "$code" == 202 ]] || { echo "Rollback request failed HTTP $code" >&2; rm -f "$tmp"; exit 1; }
+          rollback_id="$(jq -r '(.deploy // .).id // empty' "$tmp")"
+          rm -f "$tmp"
+          test -n "$rollback_id" || { echo "Rollback deploy id missing." >&2; exit 1; }
+          echo "Rollback requested: $rollback_id / commit=${previous_commit:0:12}..."
+
+          for attempt in $(seq 1 72); do
+            tmp="$(mktemp)"
+            code="$(curl -sS -o "$tmp" -w '%{http_code}' \
+              "${RENDER_API_BASE}/services/${service_id}/deploys/${rollback_id}" \
+              -H 'Accept: application/json' \
+              -H "Authorization: Bearer ${RENDER_API_KEY}")"
+            [[ "$code" == 200 ]] || { rm -f "$tmp"; echo "Rollback status failed HTTP $code" >&2; exit 1; }
+            status="$(jq -r '(.deploy // .).status // "unknown"' "$tmp")"
+            commit="$(jq -r '(.deploy // .).commit.id // (.deploy // .).commitId // "unknown"' "$tmp")"
+            rm -f "$tmp"
+            case "$status" in
+              live)
+                [[ "$commit" == "$previous_commit" ]] || { echo "Rollback live commit mismatch." >&2; exit 1; }
+                health_code="$(curl -sS --retry 8 --retry-delay 5 --max-time 120 -o /tmp/m4-rollback-health.json -w '%{http_code}' "${BASE_URL}/api/v1/health")"
+                [[ "$health_code" == 200 ]] || { echo "Rollback health failed HTTP $health_code" >&2; exit 1; }
+                echo "Rollback: PASS / restored=${previous_commit:0:12}..."
+                exit 0
+                ;;
+              build_failed|update_failed|canceled|deactivated)
+                echo "Rollback deployment failed: $status" >&2
+                exit 1
+                ;;
+            esac
+            sleep 10
+          done
+          echo "Timed out waiting for rollback." >&2
+          exit 1
+
+      - name: Cleanup local secret material
+        if: always()
+        shell: bash
+        run: |
+          rm -f /tmp/m4-render-db-url /tmp/m4-action-token /tmp/m4-beta-codes \
+            /tmp/m4-assembly-key /tmp/m4-test-token /tmp/m4-cobalt-endpoint \
+            /tmp/m4-neon-baseline /tmp/m4-rollback-required
+          echo "Temporary local canary secret material removed."
