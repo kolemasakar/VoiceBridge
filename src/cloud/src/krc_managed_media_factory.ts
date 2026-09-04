@@ -4,6 +4,7 @@ import {
   ScrapeCreatorsFacebookRetriever
 } from "./facebook_media_retrieval.js";
 import { DefaultManagedFacebookPipeline } from "./facebook_managed_pipeline.js";
+import { FreeTierSupadataProvider } from "./free_tier_supadata_provider.js";
 import { MediaBetaGate } from "./media_beta.js";
 import { ManagedMediaPersistentStore } from "./managed_media_persistence.js";
 import { ManagedMediaService } from "./managed_media_service.js";
@@ -11,6 +12,7 @@ import {
   createMediaTranscriptionProvider,
   type MediaTranscriptionProvider
 } from "./media_transcription_provider.js";
+import { SupadataProvider } from "./supadata_provider.js";
 import { DefaultManagedTelegramPipeline } from "./telegram_managed_pipeline.js";
 import { TelegramPublicWebRetriever } from "./telegram_public_retrieval.js";
 
@@ -34,13 +36,15 @@ export function createKrcManagedMediaService(
     )
     : null;
 
-  const paidRetriever = config.scrapeCreatorsApiKey
-    ? new ScrapeCreatorsFacebookRetriever(
-      config.scrapeCreatorsApiKey,
-      config.scrapeCreatorsEndpoint ?? "https://api.scrapecreators.com",
-      config.scrapeCreatorsCacheMaxAge ?? "30d"
-    )
-    : null;
+  const paidRetriever = config.mediaFreeTierOnly
+    ? null
+    : config.scrapeCreatorsApiKey
+      ? new ScrapeCreatorsFacebookRetriever(
+        config.scrapeCreatorsApiKey,
+        config.scrapeCreatorsEndpoint ?? "https://api.scrapecreators.com",
+        config.scrapeCreatorsCacheMaxAge ?? "30d"
+      )
+      : null;
 
   const transcriptionProvider = createMediaTranscriptionProvider(config);
   const facebookPipeline = new DefaultManagedFacebookPipeline(
@@ -53,13 +57,17 @@ export function createKrcManagedMediaService(
     transcriptionProvider.telegramStt
   );
 
+  const nativeProvider = config.mediaFreeTierOnly && config.supadataApiKey
+    ? new FreeTierSupadataProvider(new SupadataProvider(config.supadataApiKey))
+    : undefined;
+
   const service = new ManagedMediaService(
     new MediaBetaGate(
       config.mediaBetaCodes ?? [],
       config.mediaDailySttSeconds ?? 7200
     ),
-    config.supadataApiKey ?? null,
-    undefined,
+    nativeProvider ? null : config.supadataApiKey ?? null,
+    nativeProvider,
     {
       ...(store ? { store } : {}),
       jobTtlSeconds: config.mediaJobTtlSeconds ?? 3600,
