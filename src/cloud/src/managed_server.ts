@@ -4,6 +4,7 @@ import type { AppConfig } from "./config.js";
 import { createKrcManagedMediaService } from "./krc_managed_media_factory.js";
 import { createManagedAttachmentProbeHttpHandler } from "./managed_attachment_probe_http.js";
 import { createManagedMediaHttpHandler } from "./managed_media_http.js";
+import { PublicMediaAdmissionController } from "./public_media_admission.js";
 import { createVoiceBridgeServer } from "./server.js";
 
 type RequestListener = (
@@ -19,9 +20,19 @@ export function createManagedVoiceBridgeServer(config: AppConfig) {
   const attachmentProbe = createManagedAttachmentProbeHttpHandler(config);
   const krcManaged = createKrcManagedMediaService(config);
   const managedMedia = createManagedMediaHttpHandler(config, krcManaged.service);
+  const publicAdmission = new PublicMediaAdmissionController(config);
+
   server.on("request", async (request, response) => {
-    if (await attachmentProbe.handle(request, response)) return;
-    if (await managedMedia.handle(request, response)) return;
+    const lease = publicAdmission.admit(request, response);
+    if (lease.handled) return;
+
+    try {
+      if (await attachmentProbe.handle(request, response)) return;
+      if (await managedMedia.handle(request, response)) return;
+    } finally {
+      lease.release();
+    }
+
     for (const listener of legacyListeners) {
       await listener.call(server, request, response);
       if (response.writableEnded) break;
