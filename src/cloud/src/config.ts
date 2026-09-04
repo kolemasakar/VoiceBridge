@@ -187,19 +187,14 @@ export function loadConfig(
         "KRC_MEDIA_PUBLIC_MODE requires KRC_MEDIA_ASSEMBLYAI_FREE_TRIAL_ONLY=true."
       );
     }
-    if (!environment.SUPADATA_API_KEY) {
-      throw new Error(
-        "KRC_MEDIA_PUBLIC_MODE requires SUPADATA_API_KEY for YouTube and Instagram."
-      );
-    }
     if (!environment.ASSEMBLYAI_API_KEY) {
       throw new Error(
-        "KRC_MEDIA_PUBLIC_MODE requires ASSEMBLYAI_API_KEY for Facebook and Telegram STT."
+        "KRC_MEDIA_PUBLIC_MODE requires ASSEMBLYAI_API_KEY for YouTube, Instagram, Facebook and Telegram STT."
       );
     }
     if (!environment.KRC_MEDIA_COBALT_ENDPOINT) {
       throw new Error(
-        "KRC_MEDIA_PUBLIC_MODE requires KRC_MEDIA_COBALT_ENDPOINT for Facebook free retrieval."
+        "KRC_MEDIA_PUBLIC_MODE requires KRC_MEDIA_COBALT_ENDPOINT for YouTube, Instagram and Facebook free retrieval."
       );
     }
     if (environment.SCRAPECREATORS_API_KEY) {

@@ -57,7 +57,11 @@ export function createKrcManagedMediaService(
     transcriptionProvider.telegramStt
   );
 
-  const nativeProvider = config.mediaFreeTierOnly && config.supadataApiKey
+  // Supadata remains available only for the historical/private managed-native path.
+  // Public MEDIA is routed by public_cobalt_media.ts and must not activate Supadata.
+  const nativeProvider = !config.mediaPublicMode &&
+    config.mediaFreeTierOnly &&
+    config.supadataApiKey
     ? new FreeTierSupadataProvider(new SupadataProvider(config.supadataApiKey))
     : undefined;
 
@@ -66,7 +70,11 @@ export function createKrcManagedMediaService(
       config.mediaBetaCodes ?? [],
       config.mediaDailySttSeconds ?? 7200
     ),
-    nativeProvider ? null : config.supadataApiKey ?? null,
+    config.mediaPublicMode
+      ? null
+      : nativeProvider
+        ? null
+        : config.supadataApiKey ?? null,
     nativeProvider,
     {
       ...(store ? { store } : {}),

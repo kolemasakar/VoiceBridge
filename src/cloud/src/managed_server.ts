@@ -4,6 +4,7 @@ import type { AppConfig } from "./config.js";
 import { createKrcManagedMediaService } from "./krc_managed_media_factory.js";
 import { createManagedAttachmentProbeHttpHandler } from "./managed_attachment_probe_http.js";
 import { createManagedMediaHttpHandler } from "./managed_media_http.js";
+import { createPublicCobaltMediaHttpHandler } from "./public_cobalt_media.js";
 import { PublicMediaAdmissionController } from "./public_media_admission.js";
 import { createVoiceBridgeServer } from "./server.js";
 
@@ -20,6 +21,9 @@ export function createManagedVoiceBridgeServer(config: AppConfig) {
   const attachmentProbe = createManagedAttachmentProbeHttpHandler(config);
   const krcManaged = createKrcManagedMediaService(config);
   const managedMedia = createManagedMediaHttpHandler(config, krcManaged.service);
+  const publicCobaltMedia = config.mediaPublicMode
+    ? createPublicCobaltMediaHttpHandler(config)
+    : null;
   const publicAdmission = new PublicMediaAdmissionController(config);
 
   server.on("request", async (request, response) => {
@@ -28,6 +32,7 @@ export function createManagedVoiceBridgeServer(config: AppConfig) {
 
     try {
       if (await attachmentProbe.handle(request, response)) return;
+      if (publicCobaltMedia && await publicCobaltMedia.handle(request, response)) return;
       if (await managedMedia.handle(request, response)) return;
     } finally {
       lease.release();
