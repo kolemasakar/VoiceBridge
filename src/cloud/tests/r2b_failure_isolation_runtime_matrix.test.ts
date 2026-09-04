@@ -222,8 +222,8 @@ test("R2-B public MEDIA failure matrix fails closed while Core health remains av
         credit_consent: { provider: "supadata", mode: "native", max_credits: 1 }
       }
     );
-    assert.equal(unsupported.status, 400);
-    assert.equal(unsupported.code, "INVALID_REQUEST");
+    assert.equal(unsupported.status, 409);
+    assert.equal(unsupported.code, "MEDIA_CREDIT_CONSENT_REQUIRED");
     assert.equal(await health(base), 200);
 
     assert.equal(calls.startNative, 3);
