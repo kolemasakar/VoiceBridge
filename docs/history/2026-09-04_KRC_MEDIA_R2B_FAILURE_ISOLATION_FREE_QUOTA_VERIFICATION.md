@@ -1,6 +1,6 @@
 # KRC MEDIA R2-B - FAILURE ISOLATION AND FREE-QUOTA VERIFICATION
 
-Дата перевірки: 2026-09-04
+Verification date: 2026-09-04
 
 ## Scope
 
