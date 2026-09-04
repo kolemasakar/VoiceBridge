@@ -1,0 +1,124 @@
+name: KRC Media M3 Byte Capture
+
+on:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  capture:
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - name: Checkout
+        uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803
+
+      - name: Capture version-pinned public fixture bytes and SHA-256
+        shell: bash
+        run: |
+          set -euo pipefail
+          export WORKDIR="$RUNNER_TEMP/krc-m3-byte-capture"
+          mkdir -p "$WORKDIR"
+          trap 'rm -rf "$WORKDIR"' EXIT
+
+          printf '## KRC MEDIA M3 version-pinned fixture byte capture\n\n' >> "$GITHUB_STEP_SUMMARY"
+          printf 'Public raw.githubusercontent.com objects pinned to exact commits. No AssemblyAI/Gemini/Supadata calls. No credentials. No raw-media artifacts.\n\n' >> "$GITHUB_STEP_SUMMARY"
+          printf '| case_id | status | sha256 | bytes | host | source_blob | ext |\n' >> "$GITHUB_STEP_SUMMARY"
+          printf '|---|---|---|---:|---|---|---|\n' >> "$GITHUB_STEP_SUMMARY"
+
+          cat > "$WORKDIR/capture.py" <<'PY'
+          import os
+          import sys
+          import urllib.request
+          from hashlib import sha256
+          from pathlib import Path
+          from urllib.parse import urlparse
+
+          workdir = Path(os.environ['WORKDIR'])
+          summary = Path(os.environ['GITHUB_STEP_SUMMARY'])
+          user_agent = 'VoiceBridge-KRC-Media-Beta/1.0 (public corpus evidence capture)'
+
+          cases = [
+              {
+                  'case_id': 'ua-clean-public-001',
+                  'url': 'https://raw.githubusercontent.com/egorsmkv/speech-recognition-uk/597a3b9231621e1318bf4a802234491f4ef0f9fb/speech-to-text/audio.wav',
+                  'expected_size': 136612,
+                  'blob': 'dc8dab689bef38e69f9aaef5428b71cca39d36c3',
+                  'ext': 'wav',
+              },
+              {
+                  'case_id': 'ru-clean-public-001',
+                  'url': 'https://raw.githubusercontent.com/sberdevices/golos/1d7eac87f82dc2514d7c77450eb1b4017e6cb052/examples/data/001ce26c07c20eaa0d666b824c6c6924.wav',
+                  'expected_size': 128044,
+                  'blob': 'a22344f48668fcfcc17947459a91fe9e84742aa2',
+                  'ext': 'wav',
+              },
+              {
+                  'case_id': 'en-clean-public-001',
+                  'url': 'https://raw.githubusercontent.com/openai/whisper/86098128c0b4f24f0e2aa2994de830614b474227/tests/jfk.flac',
+                  'expected_size': 1152693,
+                  'blob': 'e44b7c13897eae7f78beb220c61fe77429a3961d',
+                  'ext': 'flac',
+              },
+          ]
+
+          failures = 0
+          for case in cases:
+              case_id = case['case_id']
+              out = workdir / f"{case_id}.{case['ext']}"
+              try:
+                  source_host = (urlparse(case['url']).hostname or '').lower()
+                  if source_host != 'raw.githubusercontent.com':
+                      raise RuntimeError('fixture URL is outside raw.githubusercontent.com')
+                  request = urllib.request.Request(
+                      case['url'],
+                      headers={'User-Agent': user_agent, 'Accept': 'application/octet-stream'},
+                  )
+                  digest = sha256()
+                  size = 0
+                  with urllib.request.urlopen(request, timeout=60) as response, out.open('wb') as fh:
+                      final_host = (urlparse(response.geturl()).hostname or '').lower()
+                      if final_host != 'raw.githubusercontent.com':
+                          raise RuntimeError('fixture request left raw.githubusercontent.com')
+                      while True:
+                          chunk = response.read(1024 * 1024)
+                          if not chunk:
+                              break
+                          size += len(chunk)
+                          digest.update(chunk)
+                          fh.write(chunk)
+                  if size != case['expected_size']:
+                      raise RuntimeError(f"captured size {size} != repository metadata size {case['expected_size']}")
+                  value = digest.hexdigest()
+                  print(
+                      f"[{case_id}] CAPTURED sha256={value} bytes={size} "
+                      f"host={final_host} source_blob={case['blob']} ext={case['ext']}"
+                  )
+                  with summary.open('a', encoding='utf-8') as fh:
+                      fh.write(
+                          f"| `{case_id}` | CAPTURED | `{value}` | {size} | `{final_host}` | "
+                          f"`{case['blob']}` | `{case['ext']}` |\n"
+                      )
+              except Exception as exc:
+                  failures += 1
+                  print(f'[{case_id}] FAILED: {type(exc).__name__}: {exc}', file=sys.stderr)
+                  with summary.open('a', encoding='utf-8') as fh:
+                      fh.write(
+                          f"| `{case_id}` | FAILED | - | - | `raw.githubusercontent.com` | "
+                          f"`{case['blob']}` | `{case['ext']}` |\n"
+                      )
+              finally:
+                  out.unlink(missing_ok=True)
+
+          if failures:
+              raise SystemExit(f'{failures} version-pinned fixture capture(s) failed')
+          PY
+
+          python3 "$WORKDIR/capture.py"
+
+      - name: Confirm no raw media artifact upload
+        if: always()
+        shell: bash
+        run: |
+          echo "No upload-artifact step exists in this workflow. Runner temporary media files are deleted and not persisted by this job."
