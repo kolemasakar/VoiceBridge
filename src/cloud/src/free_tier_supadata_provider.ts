@@ -13,9 +13,14 @@ function normalizePlan(plan: string): string {
   return plan.trim().toLowerCase();
 }
 
+function isAcceptedFreePlanLabel(plan: string): boolean {
+  const normalized = normalizePlan(plan);
+  return normalized === "free" || normalized === "basic";
+}
+
 export function assertSupadataFreeTier(account: SupadataAccountInfo): void {
   if (
-    normalizePlan(account.plan) !== "free" ||
+    !isAcceptedFreePlanLabel(account.plan) ||
     account.max_credits > SUPADATA_FREE_MONTHLY_CREDITS
   ) {
     throw new MediaTranscriptError(
