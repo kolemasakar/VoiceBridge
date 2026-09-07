@@ -107,11 +107,13 @@ async function close(server: Server): Promise<void> {
 }
 
 test("Gemini direct YouTube provider sends only public URL and transcript prompt", async () => {
-  let seenHeaders: Headers | null = null;
-  let seenBody: Record<string, unknown> | null = null;
+  const capture: {
+    headers?: Headers;
+    body?: Record<string, unknown>;
+  } = {};
   const fetchImpl = (async (_input: string | URL | Request, init?: RequestInit) => {
-    seenHeaders = new Headers(init?.headers);
-    seenBody = JSON.parse(String(init?.body)) as Record<string, unknown>;
+    capture.headers = new Headers(init?.headers);
+    capture.body = JSON.parse(String(init?.body)) as Record<string, unknown>;
     return new Response(
       JSON.stringify({ output_text: "hello from direct youtube" }),
       { status: 200, headers: { "content-type": "application/json" } }
@@ -130,11 +132,11 @@ test("Gemini direct YouTube provider sends only public URL and transcript prompt
   assert.equal(result.provider_model, "gemini-3.7-flash");
   assert.equal(result.transcript_text, "hello from direct youtube");
   assert.equal(result.segments.length, 1);
-  assert.equal(seenHeaders?.get("x-goog-api-key"), "gemini-fixture-key");
-  assert.equal(seenHeaders?.get("authorization"), null);
-  assert.equal(seenHeaders?.get("cookie"), null);
-  assert.equal(seenBody?.model, "gemini-3.7-flash");
-  const input = seenBody?.input as Array<Record<string, unknown>>;
+  assert.equal(capture.headers?.get("x-goog-api-key"), "gemini-fixture-key");
+  assert.equal(capture.headers?.get("authorization"), null);
+  assert.equal(capture.headers?.get("cookie"), null);
+  assert.equal(capture.body?.model, "gemini-3.7-flash");
+  const input = capture.body?.input as Array<Record<string, unknown>>;
   assert.equal(input[1]?.type, "video");
   assert.equal(input[1]?.uri, YOUTUBE_URL);
 
