@@ -82,7 +82,9 @@ AssemblyAI must not start before successful Cobalt retrieval
 
 Public runtime now refuses to start if `mediaPublicMode=true` without `KRC_MEDIA_COBALT_API_KEY`. Regression coverage verifies the `Authorization: Api-Key <configured-key>` header wiring.
 
-A temporary bounded startup diagnostic may be enabled only for one deployment. It may log only HTTP status, provider status and provider error code; it must not log the key, source URL, raw response, or returned media/tunnel URL, and it must not call STT.
+A temporary bounded startup diagnostic is implemented behind `KRC_MEDIA_COBALT_DIAGNOSTIC_ONCE=true`. It logs only HTTP status, provider status and provider error code; it does not log the key, source URL, raw response, or returned media/tunnel URL, and it does not call STT.
+
+Diagnostic implementation validated by VoiceBridge `Validate 34142848953` on candidate `52499e4959aa2673f07239c73054cdbeaec0eeac`: SUCCESS.
 
 ## Next step
 
