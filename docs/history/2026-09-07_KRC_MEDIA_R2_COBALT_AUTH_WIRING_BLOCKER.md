@@ -1,13 +1,13 @@
 # KRC MEDIA R2 Cobalt auth wiring blocker
 
-Дата: 2026-09-07
-Статус: R2 LIVE CANARY BLOCKED / FAIL-CLOSED / ZERO PROVIDER CHARGE
+Date: 2026-09-07
+Status: R2 LIVE CANARY BLOCKED / FAIL-CLOSED / ZERO PROVIDER CHARGE
 
-## Контекст
+## Context
 
-R2 Cobalt candidate `5003689ad2fe4c850d47dc7777c50470820b0bff` був розгорнутий на `voicebridge-krc-media-beta-kolemasakar`. Перший bounded YouTube canary для `https://www.youtube.com/watch?v=5i-4Pk5Idb4` дійшов до нового `cobalt_retrieval_stt` маршруту, але завершився `FAILED` до запуску AssemblyAI.
+R2 Cobalt candidate `5003689ad2fe4c850d47dc7777c50470820b0bff` was deployed to `voicebridge-krc-media-beta-kolemasakar`. The first bounded YouTube canary for `https://www.youtube.com/watch?v=5i-4Pk5Idb4` reached the new `cobalt_retrieval_stt` route but ended as `FAILED` before AssemblyAI started.
 
-Durable job state зафіксував:
+Durable job state recorded:
 
 - `provider_mode=cobalt_retrieval_stt`;
 - `retrieval_provider=cobalt`;
@@ -19,12 +19,12 @@ Durable job state зафіксував:
 
 ## Bounded live probe
 
-Для діагностики був одноразово доданий GitHub Actions probe без STT і без переходу за media/tunnel URL.
+A one-off GitHub Actions probe was used for diagnosis without STT and without following any media/tunnel URL.
 
 Run: `34132438781`
 Commit: `96e52a416218df168d6afc0f4e25e11028d5160f`
 
-Результат:
+Result:
 
 ```text
 GET /:
@@ -42,17 +42,17 @@ POST / YouTube audio request:
   error_code: error.api.auth.key.missing
 ```
 
-Cobalt startup logs у цей самий період підтвердили `api keys loaded successfully!`.
+Cobalt startup logs from the same period confirmed `api keys loaded successfully!`.
 
-## Висновок
+## Conclusion
 
-Self-hosted Cobalt живий, повертає валідний JSON і має увімкнену API-key authentication. Підтверджений live blocker: VoiceBridge не має робочого `KRC_MEDIA_COBALT_API_KEY` для цього захищеного Cobalt instance.
+Self-hosted Cobalt is alive, returns valid JSON, and has API-key authentication enabled. The confirmed live blocker is that VoiceBridge does not have working `KRC_MEDIA_COBALT_API_KEY` wiring for this protected Cobalt instance.
 
-Початковий `COBALT_PUBLIC_MEDIA_INVALID_RESPONSE` не використовується як доказ конкретної причини cold-start/edge відповіді, оскільки raw body першої невдалої відповіді не був збережений. Після прогріву підтверджений блокер є `error.api.auth.key.missing`.
+The initial `COBALT_PUBLIC_MEDIA_INVALID_RESPONSE` is not used as proof of a specific cold-start or edge response because the raw body from that first failed request was not retained. After warmup, the confirmed blocker is `error.api.auth.key.missing`.
 
 ## Safety invariant
 
-Не послаблювати Cobalt authentication для обходу blocker:
+Do not weaken Cobalt authentication to bypass this blocker:
 
 ```text
 API_AUTH_REQUIRED stays enabled
@@ -64,8 +64,8 @@ AssemblyAI must not start before successful Cobalt retrieval
 
 ## Repository hardening
 
-Public runtime factory тепер повинен відмовлятися стартувати, якщо `mediaPublicMode=true` і `KRC_MEDIA_COBALT_API_KEY` не підключений. Regression test також перевіряє, що Cobalt retriever надсилає `Authorization: Api-Key <configured-key>`.
+The public runtime factory now refuses to start when `mediaPublicMode=true` and `KRC_MEDIA_COBALT_API_KEY` is not wired. A regression test also verifies that the Cobalt retriever sends `Authorization: Api-Key <configured-key>`.
 
-## Наступний крок
+## Next step
 
-Securely wire an existing or newly added Cobalt API key into VoiceBridge Render environment without exposing the secret in chat and without replacing an unknown existing Cobalt key database. Після wiring: exact deployment of the hardened candidate, health check, bounded YouTube canary, Neon delta verification, then Instagram/Facebook/Telegram canaries.
+Securely wire an existing or newly added Cobalt API key into the VoiceBridge Render environment without exposing the secret in chat and without replacing an unknown existing Cobalt key database. After wiring: exact deployment of the hardened candidate, health check, bounded YouTube canary, Neon delta verification, then Instagram/Facebook/Telegram canaries.
