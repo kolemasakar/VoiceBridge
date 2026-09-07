@@ -24,6 +24,12 @@ export interface KrcManagedMediaFactoryResult {
 export function createKrcManagedMediaService(
   config: AppConfig
 ): KrcManagedMediaFactoryResult {
+  if (config.mediaPublicMode && !config.cobaltApiKey) {
+    throw new Error(
+      "KRC_MEDIA_PUBLIC_MODE requires KRC_MEDIA_COBALT_API_KEY for authenticated self-hosted Cobalt retrieval."
+    );
+  }
+
   const databaseUrl = process.env.KRC_MEDIA_DATABASE_URL?.trim() || null;
   const store = databaseUrl
     ? new ManagedMediaPersistentStore(databaseUrl)
