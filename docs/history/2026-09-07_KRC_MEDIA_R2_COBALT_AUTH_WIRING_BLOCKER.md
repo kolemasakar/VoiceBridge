@@ -84,8 +84,8 @@ Public runtime now refuses to start if `mediaPublicMode=true` without `KRC_MEDIA
 
 A temporary bounded startup diagnostic is implemented behind `KRC_MEDIA_COBALT_DIAGNOSTIC_ONCE=true`. It logs only HTTP status, provider status and provider error code; it does not log the key, source URL, raw response, or returned media/tunnel URL, and it does not call STT.
 
-Diagnostic implementation validated by VoiceBridge `Validate 34142848953` on candidate `52499e4959aa2673f07239c73054cdbeaec0eeac`: SUCCESS.
+Validated diagnostic deployment code is commit `52499e4959aa2673f07239c73054cdbeaec0eeac`; VoiceBridge `Validate 34142848953` completed SUCCESS on that exact commit.
 
 ## Next step
 
-Enable the bounded sanitized startup diagnostic for one deployment, capture the exact Cobalt provider error code, disable the diagnostic flag, then decide whether the fix belongs in auth wiring, Cobalt YouTube retrieval configuration, or upstream service handling. After the fix: bounded YouTube canary, Neon delta verification, then Instagram/Facebook/Telegram canaries.
+Deploy exact commit `52499e4959aa2673f07239c73054cdbeaec0eeac` with the diagnostic flag enabled for one deployment, capture the exact Cobalt provider error code, disable the diagnostic flag, then decide whether the fix belongs in auth wiring, Cobalt YouTube retrieval configuration, or upstream service handling. After the fix: bounded YouTube canary, Neon delta verification, then Instagram/Facebook/Telegram canaries.
