@@ -1,7 +1,8 @@
 import { loadConfig } from "./config.js";
-import { listen } from "./server.js";
+import { listen } from "./managed_server.js";
 import { configuredAssemblyAiSpeechModel } from "./stt_provider.js";
 import { resolveGeminiSttModel } from "./gemini_stt_provider.js";
+import { runCobaltStartupDiagnostic } from "./cobalt_startup_diagnostic.js";
 
 try {
   const config = loadConfig();
@@ -16,9 +17,24 @@ try {
       service: "voicebridge-cloud",
       url,
       stt_provider: sttProvider,
-      stt_model: sttModel
+      stt_model: sttModel,
+      krc_media_stt_provider: config.krcMediaSttProvider ?? "assemblyai"
     })
   );
+
+  if (process.env.KRC_MEDIA_COBALT_DIAGNOSTIC_ONCE === "true") {
+    void runCobaltStartupDiagnostic(
+      config.cobaltEndpoint ?? null,
+      config.cobaltApiKey ?? null
+    ).then((diagnostic) => {
+      console.log(
+        JSON.stringify({
+          event: "cobalt_startup_diagnostic",
+          ...diagnostic
+        })
+      );
+    });
+  }
 
   const shutdown = (signal: string) => {
     console.log(
