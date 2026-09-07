@@ -4,7 +4,7 @@ import { runCobaltStartupDiagnostic } from "../src/cobalt_startup_diagnostic.js"
 
 test("Cobalt startup diagnostic sends Api-Key and returns only sanitized provider metadata", async () => {
   let seenAuthorization: string | null = null;
-  let seenBody: Record<string, unknown> | null = null;
+  let seenBody: Record<string, unknown> = {};
 
   const fetchImpl = (async (_input: string | URL | Request, init?: RequestInit) => {
     const headers = new Headers(init?.headers);
@@ -27,9 +27,9 @@ test("Cobalt startup diagnostic sends Api-Key and returns only sanitized provide
   );
 
   assert.equal(seenAuthorization, "Api-Key fixture-uuid-key");
-  assert.equal(seenBody?.downloadMode, "audio");
-  assert.equal(seenBody?.audioFormat, "mp3");
-  assert.equal(seenBody?.disableMetadata, true);
+  assert.equal(seenBody.downloadMode, "audio");
+  assert.equal(seenBody.audioFormat, "mp3");
+  assert.equal(seenBody.disableMetadata, true);
   assert.deepEqual(result, {
     attempted: true,
     http_status: 401,
