@@ -138,6 +138,83 @@ async function runTextCommand(
   });
 }
 
+export function facebookAudioNormalizationArgs(
+  inputPath: string,
+  outputPath: string
+): string[] {
+  return [
+    "-nostdin", "-hide_banner", "-loglevel", "error", "-y",
+    "-i", inputPath,
+    "-vn",
+    "-ac", "1",
+    "-ar", "16000",
+    "-c:a", "pcm_s16le",
+    outputPath
+  ];
+}
+
+async function normalizeFacebookAudio(
+  inputPath: string,
+  directory: string
+): Promise<string> {
+  const outputPath = join(directory, "audio.wav");
+  await new Promise<void>((resolve, reject) => {
+    const child = spawn(
+      "ffmpeg",
+      facebookAudioNormalizationArgs(inputPath, outputPath),
+      { stdio: ["ignore", "ignore", "ignore"] }
+    );
+    let settled = false;
+    const timer = setTimeout(() => {
+      if (settled) return;
+      settled = true;
+      child.kill("SIGKILL");
+      reject(new MediaTranscriptError(
+        "FACEBOOK_AUDIO_NORMALIZATION_TIMEOUT",
+        "Facebook audio normalization timed out.",
+        504,
+        true
+      ));
+    }, COMMAND_TIMEOUT_MS);
+    child.on("error", () => {
+      if (settled) return;
+      settled = true;
+      clearTimeout(timer);
+      reject(new MediaTranscriptError(
+        "FACEBOOK_AUDIO_NORMALIZATION_UNAVAILABLE",
+        "The server audio normalizer is unavailable.",
+        503,
+        true
+      ));
+    });
+    child.on("close", (code) => {
+      if (settled) return;
+      settled = true;
+      clearTimeout(timer);
+      if (code !== 0) {
+        reject(new MediaTranscriptError(
+          "FACEBOOK_AUDIO_NORMALIZATION_FAILED",
+          "The retrieved Facebook media did not contain a usable audio track.",
+          422,
+          false
+        ));
+        return;
+      }
+      resolve();
+    });
+  });
+  const info = await stat(outputPath).catch(() => null);
+  if (!info || !info.isFile() || info.size <= 44) {
+    throw new MediaTranscriptError(
+      "FACEBOOK_AUDIO_NORMALIZATION_EMPTY",
+      "The normalized Facebook audio track is empty.",
+      422,
+      false
+    );
+  }
+  return outputPath;
+}
+
 async function probeDurationSeconds(path: string): Promise<number> {
   const output = await runTextCommand("ffprobe", [
     "-v", "error",
@@ -350,10 +427,14 @@ export class AssemblyAiFacebookMediaStt {
     let transcriptId: string | null = null;
     let providerDataDeleted = false;
     try {
-      const duration = await probeDurationSeconds(downloaded.path);
+      const audioPath = await normalizeFacebookAudio(
+        downloaded.path,
+        downloaded.directory
+      );
+      const duration = await probeDurationSeconds(audioPath);
       await reserveSttSeconds(duration);
       transcriber = new AssemblyAiFileTranscriber(this.apiKey);
-      const uploadUrl = await transcriber.upload(downloaded.path);
+      const uploadUrl = await transcriber.upload(audioPath);
       transcriptId = await transcriber.submit(uploadUrl, languageHint);
       const result = await transcriber.waitForCompletion(transcriptId);
       const transcriptText = nonEmptyString(result.text) || "";
