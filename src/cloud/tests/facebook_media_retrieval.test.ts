@@ -73,7 +73,7 @@ test("Facebook paid retrieval preflight remains reserve-only provider metadata",
   }), null);
 });
 
-test("Cobalt returns a zero-credit Facebook media asset without paid fallback", async () => {
+test("Cobalt requests Facebook audio-only MP3 and returns a zero-credit media asset", async () => {
   let cobaltCalls = 0;
   await withMockServer(async (request, response) => {
     cobaltCalls += 1;
@@ -81,13 +81,15 @@ test("Cobalt returns a zero-credit Facebook media asset without paid fallback", 
     assert.equal(request.url, "/");
     const body = JSON.parse(await bodyText(request)) as Record<string, unknown>;
     assert.equal(body.url, FACEBOOK_URL);
-    assert.equal(body.downloadMode, "auto");
-    assert.equal(body.videoQuality, "720");
+    assert.equal(body.downloadMode, "audio");
+    assert.equal(body.audioFormat, "mp3");
+    assert.equal(body.disableMetadata, true);
+    assert.equal(body.videoQuality, undefined);
     response.writeHead(200, { "content-type": "application/json" });
     response.end(JSON.stringify({
       status: "redirect",
-      url: "https://video.example.test/facebook.mp4",
-      filename: "facebook.mp4"
+      url: "https://audio.example.test/facebook.mp3",
+      filename: "facebook.mp3"
     }));
   }, async (cobaltBase) => {
     const paidRetriever = {
@@ -103,7 +105,7 @@ test("Cobalt returns a zero-credit Facebook media asset without paid fallback", 
     const asset = await chain.retrieve(FACEBOOK_URL);
     assert.equal(asset.provider, "cobalt");
     assert.equal(asset.credits_charged, 0);
-    assert.equal(asset.media_url, "https://video.example.test/facebook.mp4");
+    assert.equal(asset.media_url, "https://audio.example.test/facebook.mp3");
     assert.equal(asset.duration_seconds, null);
   });
   assert.equal(cobaltCalls, 1);
