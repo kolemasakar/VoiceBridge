@@ -202,8 +202,8 @@ export class CobaltFacebookRetriever implements FacebookMediaRetriever {
         headers,
         body: JSON.stringify({
           url: source,
-          downloadMode: "audio",
-          audioFormat: "mp3",
+          downloadMode: "auto",
+          videoQuality: "720",
           disableMetadata: true
         })
       });
