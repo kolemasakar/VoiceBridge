@@ -15,6 +15,7 @@ import {
   parseFacebookRetrievalCreditConsent,
   type FacebookRetrievalCreditConsent
 } from "../src/facebook_media_retrieval.js";
+import { facebookAudioNormalizationArgs } from "../src/facebook_managed_pipeline.js";
 
 const FACEBOOK_URL = "https://www.facebook.com/reel/1114235920664408/";
 const CONSENT: FacebookRetrievalCreditConsent = {
@@ -73,7 +74,7 @@ test("Facebook paid retrieval preflight remains reserve-only provider metadata",
   }), null);
 });
 
-test("Cobalt requests Facebook audio-only MP3 and returns a zero-credit media asset", async () => {
+test("Cobalt requests Facebook video+audio for local normalization and returns a zero-credit media asset", async () => {
   let cobaltCalls = 0;
   await withMockServer(async (request, response) => {
     cobaltCalls += 1;
@@ -81,15 +82,15 @@ test("Cobalt requests Facebook audio-only MP3 and returns a zero-credit media as
     assert.equal(request.url, "/");
     const body = JSON.parse(await bodyText(request)) as Record<string, unknown>;
     assert.equal(body.url, FACEBOOK_URL);
-    assert.equal(body.downloadMode, "audio");
-    assert.equal(body.audioFormat, "mp3");
+    assert.equal(body.downloadMode, "auto");
+    assert.equal(body.videoQuality, "720");
     assert.equal(body.disableMetadata, true);
-    assert.equal(body.videoQuality, undefined);
+    assert.equal(body.audioFormat, undefined);
     response.writeHead(200, { "content-type": "application/json" });
     response.end(JSON.stringify({
       status: "redirect",
-      url: "https://audio.example.test/facebook.mp3",
-      filename: "facebook.mp3"
+      url: "https://video.example.test/facebook.mp4",
+      filename: "facebook.mp4"
     }));
   }, async (cobaltBase) => {
     const paidRetriever = {
@@ -105,10 +106,25 @@ test("Cobalt requests Facebook audio-only MP3 and returns a zero-credit media as
     const asset = await chain.retrieve(FACEBOOK_URL);
     assert.equal(asset.provider, "cobalt");
     assert.equal(asset.credits_charged, 0);
-    assert.equal(asset.media_url, "https://audio.example.test/facebook.mp3");
+    assert.equal(asset.media_url, "https://video.example.test/facebook.mp4");
     assert.equal(asset.duration_seconds, null);
   });
   assert.equal(cobaltCalls, 1);
+});
+
+test("Facebook STT normalization extracts mono 16 kHz PCM WAV", () => {
+  assert.deepEqual(
+    facebookAudioNormalizationArgs("input.bin", "output.wav"),
+    [
+      "-nostdin", "-hide_banner", "-loglevel", "error", "-y",
+      "-i", "input.bin",
+      "-vn",
+      "-ac", "1",
+      "-ar", "16000",
+      "-c:a", "pcm_s16le",
+      "output.wav"
+    ]
+  );
 });
 
 test("Cobalt failure is terminal unavailable and never calls reserve paid fallback", async () => {
