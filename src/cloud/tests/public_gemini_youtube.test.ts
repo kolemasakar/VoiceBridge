@@ -204,17 +204,33 @@ test("Gemini YouTube engine fails closed with zero paid or AssemblyAI fallback",
     { provider }
   );
 
-  const job = await engine.start({
+  const input = {
     url: YOUTUBE_URL,
-    language_hint: "auto",
+    language_hint: "auto" as const,
     beta_access_code: ACCESS_CODE
-  }, CONSENT);
+  };
+  const job = await engine.start(input, CONSENT);
 
   assert.equal(job.status, "FAILED");
   assert.equal(job.error?.code, "GEMINI_YOUTUBE_FAILED");
   assert.equal(job.retrieval_credits_charged, 0);
   assert.equal(job.stt_seconds_charged, 0);
   assert.equal(provider.calls, 1);
+
+  provider.fail = false;
+  const retry = await engine.start(input, CONSENT);
+  assert.notEqual(retry.job_id, job.job_id);
+  assert.equal(retry.status, "COMPLETED");
+  assert.equal(retry.reused, false);
+  assert.equal(provider.calls, 2);
+
+  const lookup = await engine.lookup(input);
+  assert.equal(lookup?.job_id, retry.job_id);
+  assert.equal(lookup?.status, "COMPLETED");
+  const duplicate = await engine.start(input, CONSENT);
+  assert.equal(duplicate.job_id, retry.job_id);
+  assert.equal(duplicate.reused, true);
+  assert.equal(provider.calls, 2);
 });
 
 test("Gemini YouTube HTTP route exposes consent preflight and rejects unconsented start", async () => {

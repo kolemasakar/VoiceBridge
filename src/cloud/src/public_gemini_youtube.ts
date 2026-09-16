@@ -334,6 +334,12 @@ function requestKey(
     .digest("hex");
 }
 
+function retryRequestKey(requestKeyValue: string, failedJobId: string): string {
+  return createHash("sha256")
+    .update(`gemini-youtube-retry-v1|${requestKeyValue}|${failedJobId}`, "utf8")
+    .digest("hex");
+}
+
 export interface PublicGeminiYoutubeEngineOptions {
   store?: ManagedMediaJobStore;
   provider?: PublicGeminiYoutubeProvider;
@@ -421,6 +427,21 @@ export class PublicGeminiYoutubeEngine {
     return new Date(Date.parse(updatedAt) + this.jobTtlSeconds * 1000).toISOString();
   }
 
+  private async latestRetryChainRecord(
+    baseRequestKey: string
+  ): Promise<{ requestKey: string; record: GeminiYoutubeStoredRecord } | null> {
+    let currentKey = baseRequestKey;
+    let latest: { requestKey: string; record: GeminiYoutubeStoredRecord } | null = null;
+    for (let depth = 0; depth < 16; depth += 1) {
+      const record = asGeminiRecord(await this.store.findByRequestKey(currentKey));
+      if (!record) return latest;
+      latest = { requestKey: currentKey, record };
+      if (record.job.status !== "FAILED") return latest;
+      currentKey = retryRequestKey(currentKey, record.job.job_id);
+    }
+    return latest;
+  }
+
   private publicJob(job: GeminiYoutubeJobView, reused: boolean): GeminiYoutubeJobView {
     return { ...structuredClone(job), reused };
   }
@@ -452,8 +473,8 @@ export class PublicGeminiYoutubeEngine {
     await this.ensureStore();
     const sourceUrl = youtubeUrl(input.url);
     const key = requestKey(sourceUrl, input.language_hint, input.beta_access_code, this.model);
-    const record = asGeminiRecord(await this.store.findByRequestKey(key));
-    return record ? this.publicJob(record.job, true) : null;
+    const latest = await this.latestRetryChainRecord(key);
+    return latest ? this.publicJob(latest.record.job, true) : null;
   }
 
   async start(
@@ -471,10 +492,17 @@ export class PublicGeminiYoutubeEngine {
     }
     await this.ensureStore();
     const sourceUrl = youtubeUrl(input.url);
-    const key = requestKey(sourceUrl, input.language_hint, input.beta_access_code, this.model);
-    const existing = asGeminiRecord(await this.store.findByRequestKey(key));
-    if (existing) {
-      if (existing.job.status === "PROCESSING" && !this.inFlight.has(key)) {
+    const baseKey = requestKey(sourceUrl, input.language_hint, input.beta_access_code, this.model);
+    const latest = await this.latestRetryChainRecord(baseKey);
+    let key = baseKey;
+    if (latest) {
+      const existing = latest.record;
+      key = latest.requestKey;
+      if (existing.job.status === "COMPLETED") {
+        return this.publicJob(existing.job, true);
+      }
+      if (existing.job.status === "PROCESSING") {
+        if (this.inFlight.has(key)) return this.publicJob(existing.job, true);
         const updatedAt = new Date().toISOString();
         const interrupted: GeminiYoutubeStoredRecord = {
           ...existing,
@@ -483,17 +511,20 @@ export class PublicGeminiYoutubeEngine {
             status: "FAILED",
             updated_at: updatedAt,
             error: {
-              code: "GEMINI_YOUTUBE_RESULT_UNCERTAIN_RETRY_BLOCKED",
-              message: "A prior Gemini YouTube request was interrupted. Automatic replay is blocked.",
-              retryable: false
+              code: "GEMINI_YOUTUBE_REQUEST_INTERRUPTED",
+              message: "The prior free-tier Gemini YouTube request was interrupted and may be retried with fresh consent.",
+              retryable: true
             }
           },
           expiresAt: this.expiry(updatedAt)
         };
         await this.store.put(asStoredRecord(interrupted));
-        return this.publicJob(interrupted.job, true);
+        key = retryRequestKey(key, interrupted.job.job_id);
+      } else if (existing.job.status === "FAILED") {
+        key = retryRequestKey(key, existing.job.job_id);
+      } else {
+        return this.publicJob(existing.job, true);
       }
-      return this.publicJob(existing.job, true);
     }
 
     const now = new Date().toISOString();

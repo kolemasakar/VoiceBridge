@@ -402,6 +402,12 @@ export function managedTelegramRequestKey(
     .digest("hex");
 }
 
+function managedFreeRetryRequestKey(requestKey: string, failedJobId: string): string {
+  return createHash("sha256")
+    .update(`managed-free-retry-v1|${requestKey}|${failedJobId}`, "utf8")
+    .digest("hex");
+}
+
 function parseLanguageHint(value: unknown): MediaLanguageHint | null {
   const normalized = value === undefined ? "auto" : String(value);
   return ["auto", "uk", "ru", "en"].includes(normalized)
@@ -743,6 +749,57 @@ export class ManagedMediaService {
     if (existing.job.status !== "PROCESSING") return existing;
     if (this.inFlight.has(requestKey)) return existing;
     return this.interruptedRecord(existing);
+  }
+
+  private async freeRouteStartReservation(
+    baseRequestKey: string
+  ): Promise<{ requestKey: string; existing: ManagedMediaStoredRecord | null }> {
+    let requestKey = baseRequestKey;
+    for (let depth = 0; depth < 16; depth += 1) {
+      const existing = await this.store.findByRequestKey(requestKey);
+      if (!existing) return { requestKey, existing: null };
+      if (existing.job.status === "COMPLETED") {
+        return { requestKey, existing };
+      }
+      if (existing.job.status === "PROCESSING") {
+        if (this.inFlight.has(requestKey)) return { requestKey, existing };
+        const updatedAt = new Date().toISOString();
+        const interrupted: ManagedMediaStoredRecord = {
+          ...existing,
+          job: {
+            ...existing.job,
+            status: "FAILED",
+            updated_at: updatedAt,
+            credit_charge_uncertain: false,
+            error: {
+              code: "FREE_MEDIA_REQUEST_INTERRUPTED",
+              message: "The prior free-only MEDIA request was interrupted and may be retried by a fresh user request.",
+              retryable: true
+            }
+          },
+          expiresAt: this.expiryFrom(updatedAt, existing.job)
+        };
+        interrupted.expiresAt = this.expiryFrom(updatedAt, interrupted.job);
+        await this.store.put(interrupted);
+        requestKey = managedFreeRetryRequestKey(requestKey, interrupted.job.job_id);
+        continue;
+      }
+      if (existing.job.status === "FAILED") {
+        const paidOrUncertain = existing.job.credit_charge_uncertain ||
+          existing.job.credits_charged > 0 ||
+          (existing.job.metadata_credits_charged ?? 0) > 0;
+        if (paidOrUncertain) return { requestKey, existing };
+        requestKey = managedFreeRetryRequestKey(requestKey, existing.job.job_id);
+        continue;
+      }
+      return { requestKey, existing };
+    }
+    throw new MediaTranscriptError(
+      "FREE_MEDIA_RETRY_CHAIN_EXHAUSTED",
+      "Too many failed free-only MEDIA attempts exist for this request. Try again after the retention window expires.",
+      429,
+      false
+    );
   }
 
   private async authorizedRecord(
@@ -1295,13 +1352,14 @@ export class ManagedMediaService {
         false
       );
     }
-    const requestKey = managedTelegramRequestKey(
+    const baseRequestKey = managedTelegramRequestKey(
       sourceUrl,
       input.language_hint,
       input.beta_access_code
     );
-    const existing = await this.reusableRecord(requestKey);
-    if (existing) return this.publicJob(existing.job, true);
+    const retry = await this.freeRouteStartReservation(baseRequestKey);
+    if (retry.existing) return this.publicJob(retry.existing.job, true);
+    const requestKey = retry.requestKey;
 
     const now = new Date().toISOString();
     const job: ManagedMediaJobView = {
@@ -1432,13 +1490,14 @@ export class ManagedMediaService {
         false
       );
     }
-    const requestKey = managedFacebookFallbackRequestKey(
+    const baseRequestKey = managedFacebookFallbackRequestKey(
       sourceUrl,
       input.language_hint,
       input.beta_access_code
     );
-    const existing = await this.reusableRecord(requestKey);
-    if (existing) return this.publicJob(existing.job, true);
+    const retry = await this.freeRouteStartReservation(baseRequestKey);
+    if (retry.existing) return this.publicJob(retry.existing.job, true);
+    const requestKey = retry.requestKey;
 
     const now = new Date().toISOString();
     const job: ManagedMediaJobView = {

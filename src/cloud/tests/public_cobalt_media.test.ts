@@ -217,15 +217,32 @@ test("public Cobalt retrieval failure stops before STT and remains fail-closed",
     { retriever, stt }
   );
 
-  const job = await engine.start({
+  const input = {
     url: INSTAGRAM_URL,
-    language_hint: "auto",
+    language_hint: "auto" as const,
     beta_access_code: ACCESS_CODE
-  });
+  };
+  const job = await engine.start(input);
   assert.equal(job.status, "FAILED");
   assert.equal(job.error?.code, "COBALT_PUBLIC_MEDIA_FAILED");
   assert.equal(job.retrieval_credits_charged, 0);
   assert.equal(stt.calls, 0);
+
+  retriever.fail = false;
+  const retry = await engine.start(input);
+  assert.notEqual(retry.job_id, job.job_id);
+  assert.equal(retry.status, "COMPLETED");
+  assert.equal(retry.reused, false);
+  assert.equal(retriever.calls, 2);
+  assert.equal(stt.calls, 1);
+
+  const lookup = await engine.lookup(input);
+  assert.equal(lookup?.job_id, retry.job_id);
+  assert.equal(lookup?.status, "COMPLETED");
+  const duplicate = await engine.start(input);
+  assert.equal(duplicate.job_id, retry.job_id);
+  assert.equal(duplicate.reused, true);
+  assert.equal(retriever.calls, 2);
 });
 
 test("public Cobalt HTTP route accepts YouTube without Supadata credit consent", async () => {
