@@ -157,7 +157,7 @@ test("Cobalt failure becomes terminal unavailable and never calls paid retriever
   assert.equal(paidCalls, 0);
 });
 
-test("terminal unavailable Facebook job is reused without replaying Cobalt or paid provider", async () => {
+test("terminal unavailable Facebook free-only job permits fresh Cobalt retry without paid fallback", async () => {
   let freeCalls = 0;
   let paidCalls = 0;
   const freeRetriever: FacebookMediaRetriever = {
@@ -202,9 +202,9 @@ test("terminal unavailable Facebook job is reused without replaying Cobalt or pa
 
   assert.equal(first.status, "FAILED");
   assert.equal(first.error?.code, "FACEBOOK_RETRIEVAL_UNAVAILABLE");
-  assert.equal(second.job_id, first.job_id);
-  assert.equal(second.reused, true);
-  assert.equal(freeCalls, 1);
+  assert.notEqual(second.job_id, first.job_id);
+  assert.equal(second.reused, false);
+  assert.equal(freeCalls, 2);
   assert.equal(paidCalls, 0);
 });
 

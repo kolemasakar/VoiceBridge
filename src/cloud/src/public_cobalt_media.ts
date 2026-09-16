@@ -343,6 +343,12 @@ function publicCobaltRequestKey(
     .digest("hex");
 }
 
+function publicCobaltRetryRequestKey(requestKey: string, failedJobId: string): string {
+  return createHash("sha256")
+    .update(`cobalt-public-retry-v1|${requestKey}|${failedJobId}`, "utf8")
+    .digest("hex");
+}
+
 export interface PublicCobaltMediaEngineOptions {
   store?: ManagedMediaJobStore;
   retriever?: PublicCobaltRetriever;
@@ -427,6 +433,21 @@ export class PublicCobaltMediaEngine {
 
   private expiry(updatedAt: string): string {
     return new Date(Date.parse(updatedAt) + this.jobTtlSeconds * 1000).toISOString();
+  }
+
+  private async latestRetryChainRecord(
+    baseRequestKey: string
+  ): Promise<{ requestKey: string; record: PublicCobaltStoredRecord } | null> {
+    let requestKey = baseRequestKey;
+    let latest: { requestKey: string; record: PublicCobaltStoredRecord } | null = null;
+    for (let depth = 0; depth < 16; depth += 1) {
+      const record = asCobaltRecord(await this.store.findByRequestKey(requestKey));
+      if (!record) return latest;
+      latest = { requestKey, record };
+      if (record.job.status !== "FAILED") return latest;
+      requestKey = publicCobaltRetryRequestKey(requestKey, record.job.job_id);
+    }
+    return latest;
   }
 
   private async reserveSttQuota(jobId: string, requestedSeconds: number): Promise<void> {
@@ -516,9 +537,9 @@ export class PublicCobaltMediaEngine {
       input.language_hint,
       input.beta_access_code
     );
-    const record = asCobaltRecord(await this.store.findByRequestKey(requestKey));
-    if (!record) return null;
-    return this.publicJob(record.job, true);
+    const latest = await this.latestRetryChainRecord(requestKey);
+    if (!latest) return null;
+    return this.publicJob(latest.record.job, true);
   }
 
   async start(input: ManagedMediaPreflightInput): Promise<PublicCobaltJobView> {
@@ -526,15 +547,21 @@ export class PublicCobaltMediaEngine {
     await this.ensureStore();
     const sourceUrl = normalizeManagedMediaUrl(input.url);
     cobaltPlatform(sourceUrl);
-    const requestKey = publicCobaltRequestKey(
+    const baseRequestKey = publicCobaltRequestKey(
       sourceUrl,
       input.language_hint,
       input.beta_access_code
     );
-
-    const existing = asCobaltRecord(await this.store.findByRequestKey(requestKey));
-    if (existing) {
-      if (existing.job.status === "PROCESSING" && !this.inFlight.has(requestKey)) {
+    const latest = await this.latestRetryChainRecord(baseRequestKey);
+    let requestKey = baseRequestKey;
+    if (latest) {
+      const existing = latest.record;
+      requestKey = latest.requestKey;
+      if (existing.job.status === "COMPLETED") {
+        return this.publicJob(existing.job, true);
+      }
+      if (existing.job.status === "PROCESSING") {
+        if (this.inFlight.has(requestKey)) return this.publicJob(existing.job, true);
         const updatedAt = new Date().toISOString();
         const interrupted: PublicCobaltStoredRecord = {
           ...existing,
@@ -544,17 +571,20 @@ export class PublicCobaltMediaEngine {
             updated_at: updatedAt,
             credit_charge_uncertain: false,
             error: {
-              code: "PUBLIC_COBALT_RESULT_UNCERTAIN_RETRY_BLOCKED",
-              message: "A prior Cobalt/STT request was interrupted. Automatic replay is blocked.",
-              retryable: false
+              code: "PUBLIC_COBALT_REQUEST_INTERRUPTED",
+              message: "The prior free-only Cobalt/STT request was interrupted and may be retried by a fresh user request.",
+              retryable: true
             }
           },
           expiresAt: this.expiry(updatedAt)
         };
         await this.store.put(asStoredRecord(interrupted));
-        return this.publicJob(interrupted.job, true);
+        requestKey = publicCobaltRetryRequestKey(requestKey, interrupted.job.job_id);
+      } else if (existing.job.status === "FAILED") {
+        requestKey = publicCobaltRetryRequestKey(requestKey, existing.job.job_id);
+      } else {
+        return this.publicJob(existing.job, true);
       }
-      return this.publicJob(existing.job, true);
     }
 
     const now = new Date().toISOString();

@@ -101,7 +101,7 @@ test("A9.9 Telegram managed path completes durably with zero retrieval credits",
   assert.equal(pipeline.sttCalls, 1);
 });
 
-test("A9.9 Telegram unavailable is terminal durable state and duplicate does not retry", async () => {
+test("A9.9 Telegram failed free-only job permits a fresh explicit retry", async () => {
   const pipeline = new FakeTelegramPipeline(true);
   const service = new ManagedMediaService(
     new MediaBetaGate([ACCESS_CODE], 7200),
@@ -122,10 +122,10 @@ test("A9.9 Telegram unavailable is terminal durable state and duplicate does not
   assert.equal(pipeline.retrieveCalls, 1);
   assert.equal(pipeline.sttCalls, 0);
 
-  const duplicate = await service.startTelegram(input);
-  assert.equal(duplicate.job_id, failed.job_id);
-  assert.equal(duplicate.status, "FAILED");
-  assert.equal(duplicate.reused, true);
-  assert.equal(pipeline.retrieveCalls, 1);
+  const retry = await service.startTelegram(input);
+  assert.notEqual(retry.job_id, failed.job_id);
+  assert.equal(retry.status, "FAILED");
+  assert.equal(retry.reused, false);
+  assert.equal(pipeline.retrieveCalls, 2);
   assert.equal(pipeline.sttCalls, 0);
 });
