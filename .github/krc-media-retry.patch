@@ -1,0 +1,450 @@
+diff --git a/src/cloud/src/managed_media_service.ts b/src/cloud/src/managed_media_service.ts
+index f982ef0..0db37aa 100644
+--- a/src/cloud/src/managed_media_service.ts
++++ b/src/cloud/src/managed_media_service.ts
+@@ -402,6 +402,12 @@ export function managedTelegramRequestKey(
+     .digest("hex");
+ }
+ 
++function managedFreeRetryRequestKey(requestKey: string, failedJobId: string): string {
++  return createHash("sha256")
++    .update(`managed-free-retry-v1|${requestKey}|${failedJobId}`, "utf8")
++    .digest("hex");
++}
++
+ function parseLanguageHint(value: unknown): MediaLanguageHint | null {
+   const normalized = value === undefined ? "auto" : String(value);
+   return ["auto", "uk", "ru", "en"].includes(normalized)
+@@ -745,6 +751,57 @@ export class ManagedMediaService {
+     return this.interruptedRecord(existing);
+   }
+ 
++  private async freeRouteStartReservation(
++    baseRequestKey: string
++  ): Promise<{ requestKey: string; existing: ManagedMediaStoredRecord | null }> {
++    let requestKey = baseRequestKey;
++    for (let depth = 0; depth < 16; depth += 1) {
++      const existing = await this.store.findByRequestKey(requestKey);
++      if (!existing) return { requestKey, existing: null };
++      if (existing.job.status === "COMPLETED") {
++        return { requestKey, existing };
++      }
++      if (existing.job.status === "PROCESSING") {
++        if (this.inFlight.has(requestKey)) return { requestKey, existing };
++        const updatedAt = new Date().toISOString();
++        const interrupted: ManagedMediaStoredRecord = {
++          ...existing,
++          job: {
++            ...existing.job,
++            status: "FAILED",
++            updated_at: updatedAt,
++            credit_charge_uncertain: false,
++            error: {
++              code: "FREE_MEDIA_REQUEST_INTERRUPTED",
++              message: "The prior free-only MEDIA request was interrupted and may be retried by a fresh user request.",
++              retryable: true
++            }
++          },
++          expiresAt: this.expiryFrom(updatedAt, existing.job)
++        };
++        interrupted.expiresAt = this.expiryFrom(updatedAt, interrupted.job);
++        await this.store.put(interrupted);
++        requestKey = managedFreeRetryRequestKey(requestKey, interrupted.job.job_id);
++        continue;
++      }
++      if (existing.job.status === "FAILED") {
++        const paidOrUncertain = existing.job.credit_charge_uncertain ||
++          existing.job.credits_charged > 0 ||
++          (existing.job.metadata_credits_charged ?? 0) > 0;
++        if (paidOrUncertain) return { requestKey, existing };
++        requestKey = managedFreeRetryRequestKey(requestKey, existing.job.job_id);
++        continue;
++      }
++      return { requestKey, existing };
++    }
++    throw new MediaTranscriptError(
++      "FREE_MEDIA_RETRY_CHAIN_EXHAUSTED",
++      "Too many failed free-only MEDIA attempts exist for this request. Try again after the retention window expires.",
++      429,
++      false
++    );
++  }
++
+   private async authorizedRecord(
+     jobId: string,
+     accessCode: string
+@@ -1295,13 +1352,14 @@ export class ManagedMediaService {
+         false
+       );
+     }
+-    const requestKey = managedTelegramRequestKey(
++    const baseRequestKey = managedTelegramRequestKey(
+       sourceUrl,
+       input.language_hint,
+       input.beta_access_code
+     );
+-    const existing = await this.reusableRecord(requestKey);
+-    if (existing) return this.publicJob(existing.job, true);
++    const retry = await this.freeRouteStartReservation(baseRequestKey);
++    if (retry.existing) return this.publicJob(retry.existing.job, true);
++    const requestKey = retry.requestKey;
+ 
+     const now = new Date().toISOString();
+     const job: ManagedMediaJobView = {
+@@ -1432,13 +1490,14 @@ export class ManagedMediaService {
+         false
+       );
+     }
+-    const requestKey = managedFacebookFallbackRequestKey(
++    const baseRequestKey = managedFacebookFallbackRequestKey(
+       sourceUrl,
+       input.language_hint,
+       input.beta_access_code
+     );
+-    const existing = await this.reusableRecord(requestKey);
+-    if (existing) return this.publicJob(existing.job, true);
++    const retry = await this.freeRouteStartReservation(baseRequestKey);
++    if (retry.existing) return this.publicJob(retry.existing.job, true);
++    const requestKey = retry.requestKey;
+ 
+     const now = new Date().toISOString();
+     const job: ManagedMediaJobView = {
+diff --git a/src/cloud/src/public_cobalt_media.ts b/src/cloud/src/public_cobalt_media.ts
+index 7b6ad64..8631431 100644
+--- a/src/cloud/src/public_cobalt_media.ts
++++ b/src/cloud/src/public_cobalt_media.ts
+@@ -343,6 +343,12 @@ function publicCobaltRequestKey(
+     .digest("hex");
+ }
+ 
++function publicCobaltRetryRequestKey(requestKey: string, failedJobId: string): string {
++  return createHash("sha256")
++    .update(`cobalt-public-retry-v1|${requestKey}|${failedJobId}`, "utf8")
++    .digest("hex");
++}
++
+ export interface PublicCobaltMediaEngineOptions {
+   store?: ManagedMediaJobStore;
+   retriever?: PublicCobaltRetriever;
+@@ -429,6 +435,21 @@ export class PublicCobaltMediaEngine {
+     return new Date(Date.parse(updatedAt) + this.jobTtlSeconds * 1000).toISOString();
+   }
+ 
++  private async latestRetryChainRecord(
++    baseRequestKey: string
++  ): Promise<{ requestKey: string; record: PublicCobaltStoredRecord } | null> {
++    let requestKey = baseRequestKey;
++    let latest: { requestKey: string; record: PublicCobaltStoredRecord } | null = null;
++    for (let depth = 0; depth < 16; depth += 1) {
++      const record = asCobaltRecord(await this.store.findByRequestKey(requestKey));
++      if (!record) return latest;
++      latest = { requestKey, record };
++      if (record.job.status !== "FAILED") return latest;
++      requestKey = publicCobaltRetryRequestKey(requestKey, record.job.job_id);
++    }
++    return latest;
++  }
++
+   private async reserveSttQuota(jobId: string, requestedSeconds: number): Promise<void> {
+     if (!Number.isFinite(requestedSeconds) || requestedSeconds <= 0) {
+       throw new MediaTranscriptError(
+@@ -516,9 +537,9 @@ export class PublicCobaltMediaEngine {
+       input.language_hint,
+       input.beta_access_code
+     );
+-    const record = asCobaltRecord(await this.store.findByRequestKey(requestKey));
+-    if (!record) return null;
+-    return this.publicJob(record.job, true);
++    const latest = await this.latestRetryChainRecord(requestKey);
++    if (!latest) return null;
++    return this.publicJob(latest.record.job, true);
+   }
+ 
+   async start(input: ManagedMediaPreflightInput): Promise<PublicCobaltJobView> {
+@@ -526,15 +547,21 @@ export class PublicCobaltMediaEngine {
+     await this.ensureStore();
+     const sourceUrl = normalizeManagedMediaUrl(input.url);
+     cobaltPlatform(sourceUrl);
+-    const requestKey = publicCobaltRequestKey(
++    const baseRequestKey = publicCobaltRequestKey(
+       sourceUrl,
+       input.language_hint,
+       input.beta_access_code
+     );
+-
+-    const existing = asCobaltRecord(await this.store.findByRequestKey(requestKey));
+-    if (existing) {
+-      if (existing.job.status === "PROCESSING" && !this.inFlight.has(requestKey)) {
++    const latest = await this.latestRetryChainRecord(baseRequestKey);
++    let requestKey = baseRequestKey;
++    if (latest) {
++      const existing = latest.record;
++      requestKey = latest.requestKey;
++      if (existing.job.status === "COMPLETED") {
++        return this.publicJob(existing.job, true);
++      }
++      if (existing.job.status === "PROCESSING") {
++        if (this.inFlight.has(requestKey)) return this.publicJob(existing.job, true);
+         const updatedAt = new Date().toISOString();
+         const interrupted: PublicCobaltStoredRecord = {
+           ...existing,
+@@ -544,17 +571,20 @@ export class PublicCobaltMediaEngine {
+             updated_at: updatedAt,
+             credit_charge_uncertain: false,
+             error: {
+-              code: "PUBLIC_COBALT_RESULT_UNCERTAIN_RETRY_BLOCKED",
+-              message: "A prior Cobalt/STT request was interrupted. Automatic replay is blocked.",
+-              retryable: false
++              code: "PUBLIC_COBALT_REQUEST_INTERRUPTED",
++              message: "The prior free-only Cobalt/STT request was interrupted and may be retried by a fresh user request.",
++              retryable: true
+             }
+           },
+           expiresAt: this.expiry(updatedAt)
+         };
+         await this.store.put(asStoredRecord(interrupted));
+-        return this.publicJob(interrupted.job, true);
++        requestKey = publicCobaltRetryRequestKey(requestKey, interrupted.job.job_id);
++      } else if (existing.job.status === "FAILED") {
++        requestKey = publicCobaltRetryRequestKey(requestKey, existing.job.job_id);
++      } else {
++        return this.publicJob(existing.job, true);
+       }
+-      return this.publicJob(existing.job, true);
+     }
+ 
+     const now = new Date().toISOString();
+diff --git a/src/cloud/src/public_gemini_youtube.ts b/src/cloud/src/public_gemini_youtube.ts
+index 3565346..7f92086 100644
+--- a/src/cloud/src/public_gemini_youtube.ts
++++ b/src/cloud/src/public_gemini_youtube.ts
+@@ -334,6 +334,12 @@ function requestKey(
+     .digest("hex");
+ }
+ 
++function retryRequestKey(requestKeyValue: string, failedJobId: string): string {
++  return createHash("sha256")
++    .update(`gemini-youtube-retry-v1|${requestKeyValue}|${failedJobId}`, "utf8")
++    .digest("hex");
++}
++
+ export interface PublicGeminiYoutubeEngineOptions {
+   store?: ManagedMediaJobStore;
+   provider?: PublicGeminiYoutubeProvider;
+@@ -421,6 +427,21 @@ export class PublicGeminiYoutubeEngine {
+     return new Date(Date.parse(updatedAt) + this.jobTtlSeconds * 1000).toISOString();
+   }
+ 
++  private async latestRetryChainRecord(
++    baseRequestKey: string
++  ): Promise<{ requestKey: string; record: GeminiYoutubeStoredRecord } | null> {
++    let currentKey = baseRequestKey;
++    let latest: { requestKey: string; record: GeminiYoutubeStoredRecord } | null = null;
++    for (let depth = 0; depth < 16; depth += 1) {
++      const record = asGeminiRecord(await this.store.findByRequestKey(currentKey));
++      if (!record) return latest;
++      latest = { requestKey: currentKey, record };
++      if (record.job.status !== "FAILED") return latest;
++      currentKey = retryRequestKey(currentKey, record.job.job_id);
++    }
++    return latest;
++  }
++
+   private publicJob(job: GeminiYoutubeJobView, reused: boolean): GeminiYoutubeJobView {
+     return { ...structuredClone(job), reused };
+   }
+@@ -452,8 +473,8 @@ export class PublicGeminiYoutubeEngine {
+     await this.ensureStore();
+     const sourceUrl = youtubeUrl(input.url);
+     const key = requestKey(sourceUrl, input.language_hint, input.beta_access_code, this.model);
+-    const record = asGeminiRecord(await this.store.findByRequestKey(key));
+-    return record ? this.publicJob(record.job, true) : null;
++    const latest = await this.latestRetryChainRecord(key);
++    return latest ? this.publicJob(latest.record.job, true) : null;
+   }
+ 
+   async start(
+@@ -471,10 +492,17 @@ export class PublicGeminiYoutubeEngine {
+     }
+     await this.ensureStore();
+     const sourceUrl = youtubeUrl(input.url);
+-    const key = requestKey(sourceUrl, input.language_hint, input.beta_access_code, this.model);
+-    const existing = asGeminiRecord(await this.store.findByRequestKey(key));
+-    if (existing) {
+-      if (existing.job.status === "PROCESSING" && !this.inFlight.has(key)) {
++    const baseKey = requestKey(sourceUrl, input.language_hint, input.beta_access_code, this.model);
++    const latest = await this.latestRetryChainRecord(baseKey);
++    let key = baseKey;
++    if (latest) {
++      const existing = latest.record;
++      key = latest.requestKey;
++      if (existing.job.status === "COMPLETED") {
++        return this.publicJob(existing.job, true);
++      }
++      if (existing.job.status === "PROCESSING") {
++        if (this.inFlight.has(key)) return this.publicJob(existing.job, true);
+         const updatedAt = new Date().toISOString();
+         const interrupted: GeminiYoutubeStoredRecord = {
+           ...existing,
+@@ -483,17 +511,20 @@ export class PublicGeminiYoutubeEngine {
+             status: "FAILED",
+             updated_at: updatedAt,
+             error: {
+-              code: "GEMINI_YOUTUBE_RESULT_UNCERTAIN_RETRY_BLOCKED",
+-              message: "A prior Gemini YouTube request was interrupted. Automatic replay is blocked.",
+-              retryable: false
++              code: "GEMINI_YOUTUBE_REQUEST_INTERRUPTED",
++              message: "The prior free-tier Gemini YouTube request was interrupted and may be retried with fresh consent.",
++              retryable: true
+             }
+           },
+           expiresAt: this.expiry(updatedAt)
+         };
+         await this.store.put(asStoredRecord(interrupted));
+-        return this.publicJob(interrupted.job, true);
++        key = retryRequestKey(key, interrupted.job.job_id);
++      } else if (existing.job.status === "FAILED") {
++        key = retryRequestKey(key, existing.job.job_id);
++      } else {
++        return this.publicJob(existing.job, true);
+       }
+-      return this.publicJob(existing.job, true);
+     }
+ 
+     const now = new Date().toISOString();
+diff --git a/src/cloud/tests/managed_facebook_fallback.test.ts b/src/cloud/tests/managed_facebook_fallback.test.ts
+index 84894fb..b4471b0 100644
+--- a/src/cloud/tests/managed_facebook_fallback.test.ts
++++ b/src/cloud/tests/managed_facebook_fallback.test.ts
+@@ -157,7 +157,7 @@ test("Cobalt failure becomes terminal unavailable and never calls paid retriever
+   assert.equal(paidCalls, 0);
+ });
+ 
+-test("terminal unavailable Facebook job is reused without replaying Cobalt or paid provider", async () => {
++test("terminal unavailable Facebook free-only job permits fresh Cobalt retry without paid fallback", async () => {
+   let freeCalls = 0;
+   let paidCalls = 0;
+   const freeRetriever: FacebookMediaRetriever = {
+@@ -202,9 +202,9 @@ test("terminal unavailable Facebook job is reused without replaying Cobalt or pa
+ 
+   assert.equal(first.status, "FAILED");
+   assert.equal(first.error?.code, "FACEBOOK_RETRIEVAL_UNAVAILABLE");
+-  assert.equal(second.job_id, first.job_id);
+-  assert.equal(second.reused, true);
+-  assert.equal(freeCalls, 1);
++  assert.notEqual(second.job_id, first.job_id);
++  assert.equal(second.reused, false);
++  assert.equal(freeCalls, 2);
+   assert.equal(paidCalls, 0);
+ });
+ 
+diff --git a/src/cloud/tests/managed_media_telegram.test.ts b/src/cloud/tests/managed_media_telegram.test.ts
+index 93cb577..25cb143 100644
+--- a/src/cloud/tests/managed_media_telegram.test.ts
++++ b/src/cloud/tests/managed_media_telegram.test.ts
+@@ -101,7 +101,7 @@ test("A9.9 Telegram managed path completes durably with zero retrieval credits",
+   assert.equal(pipeline.sttCalls, 1);
+ });
+ 
+-test("A9.9 Telegram unavailable is terminal durable state and duplicate does not retry", async () => {
++test("A9.9 Telegram failed free-only job permits a fresh explicit retry", async () => {
+   const pipeline = new FakeTelegramPipeline(true);
+   const service = new ManagedMediaService(
+     new MediaBetaGate([ACCESS_CODE], 7200),
+@@ -122,10 +122,10 @@ test("A9.9 Telegram unavailable is terminal durable state and duplicate does not
+   assert.equal(pipeline.retrieveCalls, 1);
+   assert.equal(pipeline.sttCalls, 0);
+ 
+-  const duplicate = await service.startTelegram(input);
+-  assert.equal(duplicate.job_id, failed.job_id);
+-  assert.equal(duplicate.status, "FAILED");
+-  assert.equal(duplicate.reused, true);
+-  assert.equal(pipeline.retrieveCalls, 1);
++  const retry = await service.startTelegram(input);
++  assert.notEqual(retry.job_id, failed.job_id);
++  assert.equal(retry.status, "FAILED");
++  assert.equal(retry.reused, false);
++  assert.equal(pipeline.retrieveCalls, 2);
+   assert.equal(pipeline.sttCalls, 0);
+ });
+diff --git a/src/cloud/tests/public_cobalt_media.test.ts b/src/cloud/tests/public_cobalt_media.test.ts
+index d5e557e..2b51660 100644
+--- a/src/cloud/tests/public_cobalt_media.test.ts
++++ b/src/cloud/tests/public_cobalt_media.test.ts
+@@ -217,15 +217,32 @@ test("public Cobalt retrieval failure stops before STT and remains fail-closed",
+     { retriever, stt }
+   );
+ 
+-  const job = await engine.start({
++  const input = {
+     url: INSTAGRAM_URL,
+-    language_hint: "auto",
++    language_hint: "auto" as const,
+     beta_access_code: ACCESS_CODE
+-  });
++  };
++  const job = await engine.start(input);
+   assert.equal(job.status, "FAILED");
+   assert.equal(job.error?.code, "COBALT_PUBLIC_MEDIA_FAILED");
+   assert.equal(job.retrieval_credits_charged, 0);
+   assert.equal(stt.calls, 0);
++
++  retriever.fail = false;
++  const retry = await engine.start(input);
++  assert.notEqual(retry.job_id, job.job_id);
++  assert.equal(retry.status, "COMPLETED");
++  assert.equal(retry.reused, false);
++  assert.equal(retriever.calls, 2);
++  assert.equal(stt.calls, 1);
++
++  const lookup = await engine.lookup(input);
++  assert.equal(lookup?.job_id, retry.job_id);
++  assert.equal(lookup?.status, "COMPLETED");
++  const duplicate = await engine.start(input);
++  assert.equal(duplicate.job_id, retry.job_id);
++  assert.equal(duplicate.reused, true);
++  assert.equal(retriever.calls, 2);
+ });
+ 
+ test("public Cobalt HTTP route accepts YouTube without Supadata credit consent", async () => {
+diff --git a/src/cloud/tests/public_gemini_youtube.test.ts b/src/cloud/tests/public_gemini_youtube.test.ts
+index fd6926f..d1950f7 100644
+--- a/src/cloud/tests/public_gemini_youtube.test.ts
++++ b/src/cloud/tests/public_gemini_youtube.test.ts
+@@ -204,17 +204,33 @@ test("Gemini YouTube engine fails closed with zero paid or AssemblyAI fallback",
+     { provider }
+   );
+ 
+-  const job = await engine.start({
++  const input = {
+     url: YOUTUBE_URL,
+-    language_hint: "auto",
++    language_hint: "auto" as const,
+     beta_access_code: ACCESS_CODE
+-  }, CONSENT);
++  };
++  const job = await engine.start(input, CONSENT);
+ 
+   assert.equal(job.status, "FAILED");
+   assert.equal(job.error?.code, "GEMINI_YOUTUBE_FAILED");
+   assert.equal(job.retrieval_credits_charged, 0);
+   assert.equal(job.stt_seconds_charged, 0);
+   assert.equal(provider.calls, 1);
++
++  provider.fail = false;
++  const retry = await engine.start(input, CONSENT);
++  assert.notEqual(retry.job_id, job.job_id);
++  assert.equal(retry.status, "COMPLETED");
++  assert.equal(retry.reused, false);
++  assert.equal(provider.calls, 2);
++
++  const lookup = await engine.lookup(input);
++  assert.equal(lookup?.job_id, retry.job_id);
++  assert.equal(lookup?.status, "COMPLETED");
++  const duplicate = await engine.start(input, CONSENT);
++  assert.equal(duplicate.job_id, retry.job_id);
++  assert.equal(duplicate.reused, true);
++  assert.equal(provider.calls, 2);
+ });
+ 
+ test("Gemini YouTube HTTP route exposes consent preflight and rejects unconsented start", async () => {
