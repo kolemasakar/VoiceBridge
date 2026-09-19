@@ -16,6 +16,7 @@ import {
 
 const ACCESS_CODE = "public-cobalt-access-code-2026";
 const ACTION_TOKEN = "public-cobalt-action-token-2026-0123456789";
+const R3E2_ACTION_TOKEN = "public-cobalt-r3e2-action-token-2026-0123456789";
 const YOUTUBE_URL = "https://www.youtube.com/watch?v=jNQXAC9IVRw";
 const INSTAGRAM_URL = "https://www.instagram.com/reel/ABC123xyz_/";
 
@@ -83,6 +84,7 @@ function publicEnvironment(): NodeJS.ProcessEnv {
   return {
     TEST_ACCESS_TOKEN: "test-access-token-0123456789",
     KRC_MEDIA_ACTION_TOKEN: ACTION_TOKEN,
+    KRC_MEDIA_R3E2_ACTION_TOKEN: R3E2_ACTION_TOKEN,
     KRC_MEDIA_PUBLIC_MODE: "true",
     KRC_MEDIA_FREE_TIER_ONLY: "true",
     KRC_MEDIA_ASSEMBLYAI_FREE_TRIAL_ONLY: "true",
@@ -287,6 +289,68 @@ test("public Cobalt HTTP route accepts YouTube without Supadata credit consent",
     assert.equal(job.provider_mode, "cobalt_retrieval_stt");
     assert.equal(job.retrieval_provider, "cobalt");
     assert.equal(job.retrieval_credits_charged, 0);
+  } finally {
+    await close(server);
+  }
+});
+
+
+test("R3-E2 bearer is accepted for Instagram preflight and lookup but blocked from YouTube", async () => {
+  const retriever = new FixtureRetriever();
+  const stt = new FixtureStt();
+  const config = publicConfig();
+  const engine = new PublicCobaltMediaEngine(
+    new MediaBetaGate([ACCESS_CODE], 7200),
+    null,
+    null,
+    null,
+    { retriever, stt }
+  );
+  const handler = createPublicCobaltMediaHttpHandler(config, engine);
+  const server = createServer(async (request, response) => {
+    if (await handler.handle(request, response)) return;
+    response.statusCode = 404;
+    response.end();
+  });
+  const base = await listen(server);
+  const headers = {
+    authorization: `Bearer ${R3E2_ACTION_TOKEN}`,
+    "content-type": "application/json"
+  };
+
+  try {
+    const preflight = await fetch(`${base}/api/v1/media/managed/preflight`, {
+      method: "POST",
+      headers,
+      body: JSON.stringify({ url: INSTAGRAM_URL, language_hint: "auto" })
+    });
+    assert.equal(preflight.status, 200);
+    const quote = await preflight.json() as Record<string, unknown>;
+    assert.equal(quote.platform, "instagram");
+    assert.equal(quote.provider, "cobalt");
+    assert.equal(quote.estimated_retrieval_credits, 0);
+    assert.equal(retriever.calls, 0);
+    assert.equal(stt.calls, 0);
+
+    const lookup = await fetch(`${base}/api/v1/media/managed/lookup`, {
+      method: "POST",
+      headers,
+      body: JSON.stringify({ url: INSTAGRAM_URL, language_hint: "auto" })
+    });
+    assert.equal(lookup.status, 404);
+    assert.equal(retriever.calls, 0);
+    assert.equal(stt.calls, 0);
+
+    const youtube = await fetch(`${base}/api/v1/media/managed/preflight`, {
+      method: "POST",
+      headers,
+      body: JSON.stringify({ url: YOUTUBE_URL, language_hint: "auto" })
+    });
+    assert.equal(youtube.status, 403);
+    const denied = await youtube.json() as { error?: { code?: string } };
+    assert.equal(denied.error?.code, "MEDIA_R3E2_SCOPE_VIOLATION");
+    assert.equal(retriever.calls, 0);
+    assert.equal(stt.calls, 0);
   } finally {
     await close(server);
   }
