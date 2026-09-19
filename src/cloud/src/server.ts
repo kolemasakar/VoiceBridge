@@ -278,21 +278,9 @@ export function createVoiceBridgeServer(
       return;
     }
 
-    if (!rateLimiter.allow(clientKey(request))) {
-      response.setHeader("retry-after", "60");
-      sendError(
-        response,
-        429,
-        "RATE_LIMITED",
-        "The request limit was reached.",
-        "AUTH",
-        true,
-        context,
-        config.corsAllowedOrigin
-      );
-      return;
-    }
-
+    // Health/readiness must remain observable even when the public request
+    // limiter is saturated. This is especially important for free-tier hosts
+    // that cold-start and are probed before a consequential MEDIA request.
     if (method === "GET" && path === "/api/v1/health") {
       sendJson(
         response,
@@ -328,6 +316,21 @@ export function createVoiceBridgeServer(
           correlation_id: context.correlationId,
           timestamp: new Date().toISOString()
         },
+        context,
+        config.corsAllowedOrigin
+      );
+      return;
+    }
+
+    if (!rateLimiter.allow(clientKey(request))) {
+      response.setHeader("retry-after", "60");
+      sendError(
+        response,
+        429,
+        "RATE_LIMITED",
+        "The request limit was reached.",
+        "AUTH",
+        true,
         context,
         config.corsAllowedOrigin
       );
