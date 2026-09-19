@@ -852,6 +852,42 @@ function routePlatformError(platform: string): never {
   );
 }
 
+type PublicCobaltAuthScope = "general" | "r3e2_instagram";
+
+function authenticatePublicCobaltRequest(
+  request: IncomingMessage,
+  config: AppConfig
+): { ok: true; scope: PublicCobaltAuthScope } | { ok: false; code: string } {
+  if (config.mediaActionToken) {
+    const general = authenticate(request, config.mediaActionToken);
+    if (general.ok) return { ok: true, scope: "general" };
+  }
+  if (config.mediaR3e2ActionToken) {
+    const scoped = authenticate(request, config.mediaR3e2ActionToken);
+    if (scoped.ok) return { ok: true, scope: "r3e2_instagram" };
+  }
+  const supplied = request.headers.authorization;
+  return {
+    ok: false,
+    code: supplied ? "AUTHENTICATION_FAILED" : "AUTHENTICATION_REQUIRED"
+  };
+}
+
+function requireR3e2InstagramScope(
+  scope: PublicCobaltAuthScope,
+  sourceUrl: string
+): void {
+  if (scope !== "r3e2_instagram") return;
+  if (managedMediaPlatform(sourceUrl) !== "instagram") {
+    throw new MediaTranscriptError(
+      "MEDIA_R3E2_SCOPE_VIOLATION",
+      "The R3-E2 credential is restricted to public Instagram media.",
+      403,
+      false
+    );
+  }
+}
+
 export function createPublicCobaltMediaHttpHandler(
   config: AppConfig,
   engine = new PublicCobaltMediaEngine(
@@ -924,7 +960,7 @@ export function createPublicCobaltMediaHttpHandler(
 
     const context = createRequestContext(request);
     try {
-      if (!config.mediaActionToken) {
+      if (!config.mediaActionToken && !config.mediaR3e2ActionToken) {
         throw new MediaTranscriptError(
           "MEDIA_TRANSCRIPT_NOT_CONFIGURED",
           "Managed media transcription is not configured.",
@@ -932,7 +968,7 @@ export function createPublicCobaltMediaHttpHandler(
           true
         );
       }
-      const authentication = authenticate(request, config.mediaActionToken);
+      const authentication = authenticatePublicCobaltRequest(request, config);
       if (!authentication.ok) {
         throw new MediaTranscriptError(
           authentication.code,
@@ -943,6 +979,7 @@ export function createPublicCobaltMediaHttpHandler(
           false
         );
       }
+      const authScope = authentication.scope;
 
       const method = request.method || "GET";
       if (method === "GET" && path === ROOT) {
@@ -972,6 +1009,7 @@ export function createPublicCobaltMediaHttpHandler(
         if (platform !== "youtube" && platform !== "instagram") {
           routePlatformError(platform);
         }
+        requireR3e2InstagramScope(authScope, input.url);
 
         if (path === PREFLIGHT) {
           const quote = await engine.preflight(input);
@@ -998,6 +1036,11 @@ export function createPublicCobaltMediaHttpHandler(
 
       const segmentsMatch = SEGMENTS_PATH.exec(path);
       if (method === "GET" && segmentsMatch?.[1]) {
+        if (authScope === "r3e2_instagram") {
+          const scopedJob = await engine.get(segmentsMatch[1]);
+          if (!scopedJob) return false;
+          requireR3e2InstagramScope(authScope, scopedJob.source_url);
+        }
         const { cursor, limit } = pagination(requestUrl);
         const page = await engine.page(segmentsMatch[1], cursor, limit);
         if (!page) return false;
@@ -1009,6 +1052,7 @@ export function createPublicCobaltMediaHttpHandler(
       if (method === "GET" && jobMatch?.[1]) {
         const job = await engine.get(jobMatch[1]);
         if (!job) return false;
+        requireR3e2InstagramScope(authScope, job.source_url);
         sendJson(response, 200, { request_id: context.requestId, ...job }, context, config.corsAllowedOrigin);
         return true;
       }
