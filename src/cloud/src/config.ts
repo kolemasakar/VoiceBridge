@@ -19,6 +19,8 @@ export interface AppConfig {
   mediaActionToken?: string | null;
   mediaR3e1ActionToken?: string | null;
   mediaR3e2ActionToken?: string | null;
+  mediaR3e3ActionToken?: string | null;
+  mediaR3e4ActionToken?: string | null;
   mediaBetaCodes?: string[];
   mediaDailySttSeconds?: number;
   mediaPublicMode?: boolean;
@@ -175,6 +177,20 @@ export function loadConfig(
     );
   }
 
+  const mediaR3e3ActionToken = environment.KRC_MEDIA_R3E3_ACTION_TOKEN || null;
+  if (mediaR3e3ActionToken !== null && mediaR3e3ActionToken.length < 24) {
+    throw new Error(
+      "KRC_MEDIA_R3E3_ACTION_TOKEN must contain at least 24 characters when configured."
+    );
+  }
+
+  const mediaR3e4ActionToken = environment.KRC_MEDIA_R3E4_ACTION_TOKEN || null;
+  if (mediaR3e4ActionToken !== null && mediaR3e4ActionToken.length < 24) {
+    throw new Error(
+      "KRC_MEDIA_R3E4_ACTION_TOKEN must contain at least 24 characters when configured."
+    );
+  }
+
   const mediaPublicMode = parseBoolean(
     environment.KRC_MEDIA_PUBLIC_MODE,
     false,
@@ -252,6 +268,8 @@ export function loadConfig(
     mediaActionToken,
     mediaR3e1ActionToken,
     mediaR3e2ActionToken,
+    mediaR3e3ActionToken,
+    mediaR3e4ActionToken,
     mediaBetaCodes: betaCodes,
     mediaPublicMode,
     mediaFreeTierOnly,

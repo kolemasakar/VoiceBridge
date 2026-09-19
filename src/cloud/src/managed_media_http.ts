@@ -183,6 +183,87 @@ function pagination(requestUrl: URL): { cursor: number; limit: number } {
   return { cursor, limit };
 }
 
+type ManagedMediaAuthScope = "general" | "r3e3_facebook" | "r3e4_telegram";
+
+function authenticateManagedMediaRequest(
+  request: IncomingMessage,
+  config: AppConfig
+): { ok: true; scope: ManagedMediaAuthScope } | { ok: false; code: string } {
+  if (config.mediaActionToken) {
+    const general = authenticate(request, config.mediaActionToken);
+    if (general.ok) return { ok: true, scope: "general" };
+  }
+  if (config.mediaR3e3ActionToken) {
+    const scoped = authenticate(request, config.mediaR3e3ActionToken);
+    if (scoped.ok) return { ok: true, scope: "r3e3_facebook" };
+  }
+  if (config.mediaR3e4ActionToken) {
+    const scoped = authenticate(request, config.mediaR3e4ActionToken);
+    if (scoped.ok) return { ok: true, scope: "r3e4_telegram" };
+  }
+  const supplied = request.headers.authorization;
+  return {
+    ok: false,
+    code: supplied ? "AUTHENTICATION_FAILED" : "AUTHENTICATION_REQUIRED"
+  };
+}
+
+function requireGeneralManagedScope(scope: ManagedMediaAuthScope): void {
+  if (scope === "general") return;
+  if (scope === "r3e3_facebook") {
+    throw new MediaTranscriptError(
+      "MEDIA_R3E3_SCOPE_VIOLATION",
+      "The R3-E3 credential is restricted to the active free-only Facebook route.",
+      403,
+      false
+    );
+  }
+  throw new MediaTranscriptError(
+    "MEDIA_R3E4_SCOPE_VIOLATION",
+    "The R3-E4 credential is restricted to the active public Telegram route.",
+    403,
+    false
+  );
+}
+
+function requireR3e3FacebookUrl(
+  scope: ManagedMediaAuthScope,
+  sourceUrl: string
+): void {
+  if (scope !== "r3e3_facebook") return;
+  if (managedMediaPlatform(sourceUrl) !== "facebook") {
+    throw new MediaTranscriptError(
+      "MEDIA_R3E3_SCOPE_VIOLATION",
+      "The R3-E3 credential is restricted to public Facebook media.",
+      403,
+      false
+    );
+  }
+}
+
+function requireR3e4TelegramUrl(
+  scope: ManagedMediaAuthScope,
+  sourceUrl: string
+): void {
+  if (scope !== "r3e4_telegram") return;
+  if (managedMediaPlatform(sourceUrl) !== "telegram") {
+    throw new MediaTranscriptError(
+      "MEDIA_R3E4_SCOPE_VIOLATION",
+      "The R3-E4 credential is restricted to public Telegram media.",
+      403,
+      false
+    );
+  }
+}
+
+function requireScopedJobUrl(
+  scope: ManagedMediaAuthScope,
+  sourceUrl: string
+): void {
+  requireR3e3FacebookUrl(scope, sourceUrl);
+  requireR3e4TelegramUrl(scope, sourceUrl);
+}
+
 function defaultManagedService(config: AppConfig): ManagedMediaService {
   const databaseUrl = process.env.KRC_MEDIA_DATABASE_URL?.trim() || null;
   const store = databaseUrl
@@ -291,7 +372,11 @@ export function createManagedMediaHttpHandler(
 
     const context = createRequestContext(request);
     try {
-      if (!config.mediaActionToken) {
+      if (
+        !config.mediaActionToken
+        && !config.mediaR3e3ActionToken
+        && !config.mediaR3e4ActionToken
+      ) {
         throw new MediaTranscriptError(
           "MEDIA_TRANSCRIPT_NOT_CONFIGURED",
           "Managed media transcription is not configured.",
@@ -299,7 +384,7 @@ export function createManagedMediaHttpHandler(
           true
         );
       }
-      const authentication = authenticate(request, config.mediaActionToken);
+      const authentication = authenticateManagedMediaRequest(request, config);
       if (!authentication.ok) {
         throw new MediaTranscriptError(
           authentication.code,
@@ -310,6 +395,7 @@ export function createManagedMediaHttpHandler(
           false
         );
       }
+      const authScope = authentication.scope;
 
       const method = request.method || "GET";
       if (method === "GET" && path === ROOT) {
@@ -324,6 +410,7 @@ export function createManagedMediaHttpHandler(
       }
 
       if (method === "POST" && path === PREFLIGHT) {
+        requireGeneralManagedScope(authScope);
         const rawBody = await readJsonBody(request, config.maxRequestBodyBytes);
         const body = withServerOwnerAccessCode(rawBody, config.mediaBetaCodes);
         const input = parseManagedMediaPreflightInput(body);
@@ -374,7 +461,12 @@ export function createManagedMediaHttpHandler(
             false
           );
         }
-        if (managedMediaPlatform(input.url) === "facebook") {
+        const lookupPlatform = managedMediaPlatform(input.url);
+        if (authScope === "r3e3_facebook") {
+          requireR3e3FacebookUrl(authScope, input.url);
+        } else if (authScope === "r3e4_telegram") {
+          requireR3e4TelegramUrl(authScope, input.url);
+        } else if (lookupPlatform === "facebook") {
           throw new MediaTranscriptError(
             "FACEBOOK_FREE_RETRIEVAL_REQUIRED",
             "Active Facebook intake uses the free Cobalt route; generic Supadata lookup is disabled.",
@@ -382,7 +474,7 @@ export function createManagedMediaHttpHandler(
             false
           );
         }
-        if (managedMediaPlatform(input.url) === "telegram") {
+        if (authScope === "general" && lookupPlatform === "telegram") {
           throw new MediaTranscriptError(
             "TELEGRAM_PUBLIC_RETRIEVAL_REQUIRED",
             "Active Telegram intake uses the public Telegram retrieval route; generic Supadata lookup is disabled.",
@@ -412,6 +504,7 @@ export function createManagedMediaHttpHandler(
 
 
       if (method === "POST" && path === ATTACHMENT) {
+        requireGeneralManagedScope(authScope);
         const rawBody = await readJsonBody(request, config.maxRequestBodyBytes);
         const body = withServerOwnerAccessCode(rawBody, config.mediaBetaCodes);
         const input = parseManagedMediaAttachmentInput(body);
@@ -435,6 +528,9 @@ export function createManagedMediaHttpHandler(
       }
 
       if (method === "POST" && path === TELEGRAM_PUBLIC) {
+        if (authScope === "r3e3_facebook") {
+          requireGeneralManagedScope(authScope);
+        }
         const rawBody = await readJsonBody(request, config.maxRequestBodyBytes);
         const body = withServerOwnerAccessCode(rawBody, config.mediaBetaCodes);
         const input = parseManagedMediaPreflightInput(body);
@@ -454,6 +550,7 @@ export function createManagedMediaHttpHandler(
             false
           );
         }
+        requireR3e4TelegramUrl(authScope, input.url);
         const job = await service.startTelegram(input);
         sendJson(
           response,
@@ -466,6 +563,9 @@ export function createManagedMediaHttpHandler(
       }
 
 if (method === "POST" && path === FACEBOOK_FALLBACK) {
+  if (authScope === "r3e4_telegram") {
+    requireGeneralManagedScope(authScope);
+  }
   const rawBody = await readJsonBody(request, config.maxRequestBodyBytes);
   const body = withServerOwnerAccessCode(rawBody, config.mediaBetaCodes);
   const input = parseManagedMediaPreflightInput(body);
@@ -485,6 +585,7 @@ if (method === "POST" && path === FACEBOOK_FALLBACK) {
       false
     );
   }
+  requireR3e3FacebookUrl(authScope, input.url);
   const job = await service.startFacebookFallback(input);
   sendJson(
     response,
@@ -497,6 +598,7 @@ if (method === "POST" && path === FACEBOOK_FALLBACK) {
 }
 
       if (method === "POST" && path === TRANSCRIPTIONS) {
+        requireGeneralManagedScope(authScope);
         const rawBody = await readJsonBody(request, config.maxRequestBodyBytes);
         const body = withServerOwnerAccessCode(rawBody, config.mediaBetaCodes);
         const input = parseManagedMediaNativeInput(body);
@@ -538,6 +640,7 @@ if (method === "POST" && path === FACEBOOK_FALLBACK) {
 
 const facebookRetrievalPreflightMatch = FACEBOOK_RETRIEVAL_PREFLIGHT_PATH.exec(path);
 if (method === "GET" && facebookRetrievalPreflightMatch?.[1]) {
+  requireGeneralManagedScope(authScope);
   const quote = await service.facebookFallbackPreflight(
     facebookRetrievalPreflightMatch[1],
     serverOwnerAccessCode(config.mediaBetaCodes)
@@ -554,6 +657,7 @@ if (method === "GET" && facebookRetrievalPreflightMatch?.[1]) {
 
 const facebookRetrievalStartMatch = FACEBOOK_RETRIEVAL_START_PATH.exec(path);
 if (method === "POST" && facebookRetrievalStartMatch?.[1]) {
+  requireGeneralManagedScope(authScope);
   const rawBody = await readJsonBody(request, config.maxRequestBodyBytes);
   const body = withServerOwnerAccessCode(rawBody, config.mediaBetaCodes);
   const input = parseManagedMediaFacebookFallbackConsentInput(body);
@@ -581,6 +685,7 @@ if (method === "POST" && facebookRetrievalStartMatch?.[1]) {
 
       const facebookMetadataPreflightMatch = FACEBOOK_METADATA_PREFLIGHT_PATH.exec(path);
       if (method === "GET" && facebookMetadataPreflightMatch?.[1]) {
+        requireGeneralManagedScope(authScope);
         const quote = await service.facebookMetadataPreflight(
           facebookMetadataPreflightMatch[1],
           serverOwnerAccessCode(config.mediaBetaCodes)
@@ -591,6 +696,7 @@ if (method === "POST" && facebookRetrievalStartMatch?.[1]) {
 
       const facebookMetadataStartMatch = FACEBOOK_METADATA_START_PATH.exec(path);
       if (method === "POST" && facebookMetadataStartMatch?.[1]) {
+        requireGeneralManagedScope(authScope);
         const rawBody = await readJsonBody(request, config.maxRequestBodyBytes);
         const body = withServerOwnerAccessCode(rawBody, config.mediaBetaCodes);
         const input = parseManagedMediaFacebookMetadataInput(body);
@@ -612,6 +718,7 @@ if (method === "POST" && facebookRetrievalStartMatch?.[1]) {
 
       const aiPreflightMatch = AI_PREFLIGHT_PATH.exec(path);
       if (method === "GET" && aiPreflightMatch?.[1]) {
+        requireGeneralManagedScope(authScope);
         const quote = await service.aiPreflight(
           aiPreflightMatch[1],
           serverOwnerAccessCode(config.mediaBetaCodes)
@@ -628,6 +735,7 @@ if (method === "POST" && facebookRetrievalStartMatch?.[1]) {
 
       const aiStartMatch = AI_START_PATH.exec(path);
       if (method === "POST" && aiStartMatch?.[1]) {
+        requireGeneralManagedScope(authScope);
         const rawBody = await readJsonBody(request, config.maxRequestBodyBytes);
         const body = withServerOwnerAccessCode(rawBody, config.mediaBetaCodes);
         const input = parseManagedMediaAiInput(body);
@@ -652,6 +760,18 @@ if (method === "POST" && facebookRetrievalStartMatch?.[1]) {
 
       const segmentsMatch = SEGMENTS_PATH.exec(path);
       if (method === "GET" && segmentsMatch?.[1]) {
+        if (authScope !== "general") {
+          const scopedJob = await service.get(segmentsMatch[1]);
+          if (!scopedJob) {
+            throw new MediaTranscriptError(
+              "MEDIA_TRANSCRIPT_NOT_FOUND",
+              "The managed media job was not found.",
+              404,
+              false
+            );
+          }
+          requireScopedJobUrl(authScope, scopedJob.source_url);
+        }
         const { cursor, limit } = pagination(requestUrl);
         const page = await service.page(segmentsMatch[1], cursor, limit);
         if (!page) {
@@ -683,6 +803,7 @@ if (method === "POST" && facebookRetrievalStartMatch?.[1]) {
             false
           );
         }
+        requireScopedJobUrl(authScope, job.source_url);
         sendJson(
           response,
           200,
