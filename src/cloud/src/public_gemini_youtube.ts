@@ -750,6 +750,26 @@ function publicGeminiModel(): string {
   return process.env.KRC_MEDIA_YOUTUBE_GEMINI_MODEL?.trim() || DEFAULT_MODEL;
 }
 
+function authenticateYoutubeRequest(
+  request: IncomingMessage,
+  config: AppConfig
+): ReturnType<typeof authenticate> {
+  const tokens = [config.mediaActionToken, config.mediaR3e1ActionToken]
+    .filter((token): token is string => Boolean(token));
+  if (tokens.length === 0) {
+    return { ok: false, code: "AUTHENTICATION_FAILED" };
+  }
+  let missing = false;
+  for (const token of tokens) {
+    const result = authenticate(request, token);
+    if (result.ok) return result;
+    if (result.code === "AUTHENTICATION_REQUIRED") missing = true;
+  }
+  return missing
+    ? { ok: false, code: "AUTHENTICATION_REQUIRED" }
+    : { ok: false, code: "AUTHENTICATION_FAILED" };
+}
+
 export function createPublicGeminiYoutubeHttpHandler(
   config: AppConfig,
   engine = new PublicGeminiYoutubeEngine(
@@ -821,7 +841,7 @@ export function createPublicGeminiYoutubeHttpHandler(
           true
         );
       }
-      const authentication = authenticate(request, config.mediaActionToken);
+      const authentication = authenticateYoutubeRequest(request, config);
       if (!authentication.ok) {
         throw new MediaTranscriptError(
           authentication.code,
