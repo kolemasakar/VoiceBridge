@@ -16,6 +16,7 @@ import {
 
 const ACCESS_CODE = "public-gemini-youtube-access-2026";
 const ACTION_TOKEN = "public-gemini-youtube-action-token-2026-0123456789";
+const R3E1_ACTION_TOKEN = "public-gemini-youtube-r3e1-token-2026-0123456789";
 const YOUTUBE_URL = "https://www.youtube.com/watch?v=jNQXAC9IVRw";
 const CONSENT: GeminiFreeConsent = {
   provider: "google_gemini",
@@ -231,6 +232,58 @@ test("Gemini YouTube engine fails closed with zero paid or AssemblyAI fallback",
   assert.equal(duplicate.job_id, retry.job_id);
   assert.equal(duplicate.reused, true);
   assert.equal(provider.calls, 2);
+});
+
+test("R3-E1 token is accepted only by the Gemini YouTube handler", async () => {
+  const previous = process.env.KRC_MEDIA_GEMINI_FREE_TIER_ONLY;
+  process.env.KRC_MEDIA_GEMINI_FREE_TIER_ONLY = "true";
+  const provider = new FixtureGeminiYoutubeProvider();
+  const config = { ...publicConfig(), mediaR3e1ActionToken: R3E1_ACTION_TOKEN };
+  const engine = new PublicGeminiYoutubeEngine(
+    new MediaBetaGate([ACCESS_CODE], 7200),
+    null,
+    true,
+    provider.model,
+    { provider }
+  );
+  const handler = createPublicGeminiYoutubeHttpHandler(config, engine);
+  const server = createServer(async (request, response) => {
+    if (await handler.handle(request, response)) return;
+    response.statusCode = 404;
+    response.end();
+  });
+  const base = await listen(server);
+
+  try {
+    const lookup = await fetch(`${base}/api/v1/media/youtube-gemini/lookup`, {
+      method: "POST",
+      headers: {
+        authorization: `Bearer ${R3E1_ACTION_TOKEN}`,
+        "content-type": "application/json"
+      },
+      body: JSON.stringify({ url: YOUTUBE_URL, language_hint: "auto" })
+    });
+    assert.equal(lookup.status, 404);
+    assert.equal(provider.calls, 0);
+
+    const invalid = await fetch(`${base}/api/v1/media/youtube-gemini/lookup`, {
+      method: "POST",
+      headers: {
+        authorization: "Bearer invalid-r3e1-token-value",
+        "content-type": "application/json"
+      },
+      body: JSON.stringify({ url: YOUTUBE_URL, language_hint: "auto" })
+    });
+    assert.equal(invalid.status, 401);
+    assert.equal(provider.calls, 0);
+  } finally {
+    await close(server);
+    if (previous === undefined) {
+      delete process.env.KRC_MEDIA_GEMINI_FREE_TIER_ONLY;
+    } else {
+      process.env.KRC_MEDIA_GEMINI_FREE_TIER_ONLY = previous;
+    }
+  }
 });
 
 test("Gemini YouTube HTTP route exposes consent preflight and rejects unconsented start", async () => {
