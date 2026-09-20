@@ -390,7 +390,7 @@ export function createManagedMediaHttpHandler(
           const authorization = request.headers.authorization || "";
           const bearerMatch = /^Bearer ([^\\s]+)$/.exec(authorization);
           const suppliedBearer = bearerMatch?.[1] || "";
-          console.log(JSON.stringify({
+          process.stdout.write(JSON.stringify({
             event: "managed_media_auth_diagnostic",
             authorization_present: Boolean(authorization),
             bearer_format_valid: Boolean(bearerMatch?.[1]),
@@ -418,7 +418,7 @@ export function createManagedMediaHttpHandler(
             supplied_matches_r3e4: Boolean(
               config.mediaR3e4ActionToken && authenticate(request, config.mediaR3e4ActionToken).ok
             )
-          }));
+          }) + "\\n");
         }
         throw new MediaTranscriptError(
           authentication.code,
