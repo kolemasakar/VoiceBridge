@@ -1,3 +1,4 @@
+import { createHash } from "node:crypto";
 import { createServer, type IncomingMessage, type ServerResponse } from "node:http";
 import type { AddressInfo } from "node:net";
 import { authenticate } from "./auth.js";
@@ -290,6 +291,23 @@ export function createVoiceBridgeServer(
           service: SERVICE_NAME,
           version: SERVICE_VERSION,
           capabilities: {
+            r3e3_route_auth: (() => {
+              const override = (
+                process.env.KRC_MEDIA_R3E3_ACTION_TOKEN_OVERRIDE || ""
+              ).trim();
+              const expected = (
+                process.env.KRC_MEDIA_R3E3_OVERRIDE_EXPECTED_SHA256 || ""
+              ).trim().toLowerCase();
+              const actual = override
+                ? createHash("sha256").update(override, "utf8").digest("hex")
+                : "";
+              return {
+                override_configured: Boolean(override),
+                override_matches_expected_sha256: Boolean(
+                  override && expected && actual === expected
+                )
+              };
+            })(),
             languages: publicLanguageCapabilities(),
             stt: {
               provider: sttProvider.name,
