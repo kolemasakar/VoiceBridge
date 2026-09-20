@@ -211,8 +211,16 @@ export function loadConfig(
   );
   const mediaR3e3ActionToken = mediaR3e3ActionTokenOverride ||
     (
-      mediaPublicMode && mediaActionToken
-        ? deriveR3e3RouteActionToken(mediaActionToken)
+      mediaPublicMode
+        ? (
+            mediaR3e3ActionTokenLegacy
+              ? deriveR3e3RouteActionToken(mediaR3e3ActionTokenLegacy)
+              : (
+                  mediaActionToken
+                    ? deriveR3e3RouteActionToken(mediaActionToken)
+                    : null
+                )
+          )
         : mediaR3e3ActionTokenLegacy
     );
 
