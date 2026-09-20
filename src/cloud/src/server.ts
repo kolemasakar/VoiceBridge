@@ -291,6 +291,9 @@ export function createVoiceBridgeServer(
           service: SERVICE_NAME,
           version: SERVICE_VERSION,
           capabilities: {
+            managed_media_retention: {
+              job_ttl_seconds: config.mediaJobTtlSeconds ?? 3600
+            },
             r3e3_route_auth: (() => {
               const override = (
                 process.env.KRC_MEDIA_R3E3_ACTION_TOKEN_OVERRIDE || ""
