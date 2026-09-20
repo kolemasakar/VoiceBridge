@@ -301,10 +301,18 @@ export function createVoiceBridgeServer(
               const actual = override
                 ? createHash("sha256").update(override, "utf8").digest("hex")
                 : "";
+              const effective = config.mediaR3e3ActionToken || "";
+              const effectiveSha = effective
+                ? createHash("sha256").update(effective, "utf8").digest("hex")
+                : "";
               return {
                 override_configured: Boolean(override),
                 override_matches_expected_sha256: Boolean(
                   override && expected && actual === expected
+                ),
+                effective_token_configured: Boolean(effective),
+                effective_token_matches_expected_sha256: Boolean(
+                  effective && expected && effectiveSha === expected
                 )
               };
             })(),
