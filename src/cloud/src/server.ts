@@ -306,6 +306,8 @@ export function createVoiceBridgeServer(
                 ? createHash("sha256").update(effective, "utf8").digest("hex")
                 : "";
               return {
+                auth_diagnostic_enabled:
+                  process.env.KRC_MEDIA_AUTH_DIAGNOSTIC === "true",
                 override_configured: Boolean(override),
                 override_matches_expected_sha256: Boolean(
                   override && expected && actual === expected
