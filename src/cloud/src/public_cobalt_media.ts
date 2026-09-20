@@ -958,6 +958,15 @@ export function createPublicCobaltMediaHttpHandler(
       path === TRANSCRIPTIONS || JOB_PATH.test(path) || SEGMENTS_PATH.test(path);
     if (!ownsPath) return false;
 
+    if (
+      (config.mediaR3e3ActionToken
+        && authenticate(request, config.mediaR3e3ActionToken).ok)
+      || (config.mediaR3e4ActionToken
+        && authenticate(request, config.mediaR3e4ActionToken).ok)
+    ) {
+      return false;
+    }
+
     const context = createRequestContext(request);
     try {
       if (!config.mediaActionToken && !config.mediaR3e2ActionToken) {
