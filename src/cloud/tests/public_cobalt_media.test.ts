@@ -17,6 +17,8 @@ import {
 const ACCESS_CODE = "public-cobalt-access-code-2026";
 const ACTION_TOKEN = "public-cobalt-action-token-2026-0123456789";
 const R3E2_ACTION_TOKEN = "public-cobalt-r3e2-action-token-2026-0123456789";
+const R3E3_ACTION_TOKEN = "public-cobalt-r3e3-action-token-2026-0123456789";
+const R3E4_ACTION_TOKEN = "public-cobalt-r3e4-action-token-2026-0123456789";
 const YOUTUBE_URL = "https://www.youtube.com/watch?v=jNQXAC9IVRw";
 const INSTAGRAM_URL = "https://www.instagram.com/reel/ABC123xyz_/";
 
@@ -349,6 +351,46 @@ test("R3-E2 bearer is accepted for Instagram preflight and lookup but blocked fr
     assert.equal(youtube.status, 403);
     const denied = await youtube.json() as { error?: { code?: string } };
     assert.equal(denied.error?.code, "MEDIA_R3E2_SCOPE_VIOLATION");
+    assert.equal(retriever.calls, 0);
+    assert.equal(stt.calls, 0);
+  } finally {
+    await close(server);
+  }
+});
+
+
+test("public Cobalt handler delegates R3-E3 and R3-E4 scoped managed paths", async () => {
+  const retriever = new FixtureRetriever();
+  const stt = new FixtureStt();
+  const config: AppConfig = {
+    ...publicConfig(),
+    mediaR3e3ActionToken: R3E3_ACTION_TOKEN,
+    mediaR3e4ActionToken: R3E4_ACTION_TOKEN
+  };
+  const engine = new PublicCobaltMediaEngine(
+    new MediaBetaGate([ACCESS_CODE], 7200),
+    null,
+    null,
+    null,
+    { retriever, stt }
+  );
+  const handler = createPublicCobaltMediaHttpHandler(config, engine);
+  const server = createServer(async (request, response) => {
+    if (await handler.handle(request, response)) return;
+    response.statusCode = 418;
+    response.end("delegated");
+  });
+  const base = await listen(server);
+
+  try {
+    for (const token of [R3E3_ACTION_TOKEN, R3E4_ACTION_TOKEN]) {
+      const response = await fetch(
+        `${base}/api/v1/media/managed/transcriptions/KRCM_route123`,
+        { headers: { authorization: `Bearer ${token}` } }
+      );
+      assert.equal(response.status, 418);
+      assert.equal(await response.text(), "delegated");
+    }
     assert.equal(retriever.calls, 0);
     assert.equal(stt.calls, 0);
   } finally {
