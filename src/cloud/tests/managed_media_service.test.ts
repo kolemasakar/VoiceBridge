@@ -515,3 +515,24 @@ test("fresh native retry rejects malformed or non-FAILED retry targets", async (
   );
   assert.equal(nativeCalls, 1);
 });
+
+
+test("managed lookup remains read-only when native provider is absent", async () => {
+  const store = new RecordingStore();
+  const service = new ManagedMediaService(
+    new MediaBetaGate([ACCESS_CODE]),
+    null,
+    undefined,
+    { store }
+  );
+  const input = parseManagedMediaPreflightInput({
+    url: "https://www.facebook.com/reel/1114235920664408/",
+    language_hint: "auto",
+    beta_access_code: ACCESS_CODE
+  });
+  assert.ok(input);
+
+  const result = await service.lookup(input);
+  assert.equal(result, null);
+  assert.equal(store.record, null);
+});
