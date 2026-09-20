@@ -941,7 +941,7 @@ export class ManagedMediaService {
   async lookup(
     input: ManagedMediaPreflightInput
   ): Promise<ManagedMediaJobView | null> {
-    this.authorize(input.beta_access_code);
+    this.authorizeAccess(input.beta_access_code);
     await this.ensureStore();
     const sourceUrl = normalizeManagedMediaUrl(input.url);
     const requestKey = managedMediaRequestKey(
