@@ -39,3 +39,21 @@ test("R3-E3 route token override takes precedence over legacy token", () => {
     "override-r3e3-action-token-123456789"
   );
 });
+
+
+test("R3-E3 public mode derives a stable scoped token", () => {
+  const config = loadConfig({
+    TEST_ACCESS_TOKEN,
+    KRC_MEDIA_ACTION_TOKEN: "general-media-action-token-123456789",
+    KRC_MEDIA_PUBLIC_MODE: "true",
+    KRC_MEDIA_FREE_TIER_ONLY: "true",
+    KRC_MEDIA_ASSEMBLYAI_FREE_TRIAL_ONLY: "true",
+    ASSEMBLYAI_API_KEY: "test-assembly-key",
+    KRC_MEDIA_COBALT_ENDPOINT: "https://cobalt.invalid"
+  });
+
+  assert.equal(
+    config.mediaR3e3ActionToken,
+    "r3e3-b9e9c294b678947317d24274938f4417715d95c2c082413abe48d81633604f9d"
+  );
+});
