@@ -177,10 +177,10 @@ export function loadConfig(
     );
   }
 
-  const mediaR3e3ActionToken = environment.KRC_MEDIA_R3E3_ACTION_TOKEN || null;
+  const mediaR3e3ActionToken = environment.KRC_MEDIA_R3E3_ACTION_TOKEN_OVERRIDE ||\n    environment.KRC_MEDIA_R3E3_ACTION_TOKEN || null;
   if (mediaR3e3ActionToken !== null && mediaR3e3ActionToken.length < 24) {
     throw new Error(
-      "KRC_MEDIA_R3E3_ACTION_TOKEN must contain at least 24 characters when configured."
+      "KRC_MEDIA_R3E3_ACTION_TOKEN_OVERRIDE/KRC_MEDIA_R3E3_ACTION_TOKEN must contain at least 24 characters when configured."
     );
   }
 
