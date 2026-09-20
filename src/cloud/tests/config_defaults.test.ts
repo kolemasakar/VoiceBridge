@@ -25,3 +25,17 @@ test("explicit Gemini TTS rollback remains selectable", () => {
 
   assert.equal(config.ttsProvider, "gemini");
 });
+
+
+test("R3-E3 route token override takes precedence over legacy token", () => {
+  const config = loadConfig({
+    TEST_ACCESS_TOKEN,
+    KRC_MEDIA_R3E3_ACTION_TOKEN: "legacy-r3e3-action-token-123456789",
+    KRC_MEDIA_R3E3_ACTION_TOKEN_OVERRIDE: "override-r3e3-action-token-123456789"
+  });
+
+  assert.equal(
+    config.mediaR3e3ActionToken,
+    "override-r3e3-action-token-123456789"
+  );
+});
