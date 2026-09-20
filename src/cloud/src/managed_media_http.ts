@@ -388,7 +388,7 @@ export function createManagedMediaHttpHandler(
       if (!authentication.ok) {
         if (process.env.KRC_MEDIA_AUTH_DIAGNOSTIC === "true") {
           const authorization = request.headers.authorization || "";
-          const bearerMatch = /^Bearer ([^\\s]+)$/.exec(authorization);
+          const bearerMatch = /^Bearer ([^\s]+)$/.exec(authorization);
           const suppliedBearer = bearerMatch?.[1] || "";
           process.stdout.write(JSON.stringify({
             event: "managed_media_auth_diagnostic",
@@ -418,7 +418,7 @@ export function createManagedMediaHttpHandler(
             supplied_matches_r3e4: Boolean(
               config.mediaR3e4ActionToken && authenticate(request, config.mediaR3e4ActionToken).ok
             )
-          }) + "\\n");
+          }) + "\n");
         }
         throw new MediaTranscriptError(
           authentication.code,
