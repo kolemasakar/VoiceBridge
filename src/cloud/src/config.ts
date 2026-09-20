@@ -1,3 +1,4 @@
+import { createHash } from "node:crypto";
 import { parseMediaBetaCodes } from "./media_beta.js";
 import {
   derivePublicMediaAdmissionCode,
@@ -11,6 +12,13 @@ export type KrcMediaSttProviderName = "assemblyai";
 export type TranslationProviderName = "gemini" | "azure";
 export type TranslationFallbackProviderName = "gemini" | "none";
 export type TtsProviderName = "gemini" | "azure";
+
+function deriveR3e3RouteActionToken(baseToken: string): string {
+  const digest = createHash("sha256")
+    .update(`krc-media-route:r3e3:v1:${baseToken}`, "utf8")
+    .digest("hex");
+  return `r3e3-${digest}`;
+}
 
 export interface AppConfig {
   host: string;
@@ -177,12 +185,16 @@ export function loadConfig(
     );
   }
 
-  const mediaR3e3ActionToken = environment.KRC_MEDIA_R3E3_ACTION_TOKEN_OVERRIDE ||
+  const mediaR3e3ActionTokenOverride =
+    environment.KRC_MEDIA_R3E3_ACTION_TOKEN_OVERRIDE || null;
+  const mediaR3e3ActionTokenLegacy =
     environment.KRC_MEDIA_R3E3_ACTION_TOKEN || null;
-  if (mediaR3e3ActionToken !== null && mediaR3e3ActionToken.length < 24) {
-    throw new Error(
-      "KRC_MEDIA_R3E3_ACTION_TOKEN_OVERRIDE/KRC_MEDIA_R3E3_ACTION_TOKEN must contain at least 24 characters when configured."
-    );
+  for (const token of [mediaR3e3ActionTokenOverride, mediaR3e3ActionTokenLegacy]) {
+    if (token !== null && token.length < 24) {
+      throw new Error(
+        "KRC_MEDIA_R3E3_ACTION_TOKEN_OVERRIDE/KRC_MEDIA_R3E3_ACTION_TOKEN must contain at least 24 characters when configured."
+      );
+    }
   }
 
   const mediaR3e4ActionToken = environment.KRC_MEDIA_R3E4_ACTION_TOKEN || null;
@@ -197,6 +209,13 @@ export function loadConfig(
     false,
     "KRC_MEDIA_PUBLIC_MODE"
   );
+  const mediaR3e3ActionToken = mediaR3e3ActionTokenOverride ||
+    (
+      mediaPublicMode && mediaActionToken
+        ? deriveR3e3RouteActionToken(mediaActionToken)
+        : mediaR3e3ActionTokenLegacy
+    );
+
   const mediaFreeTierOnly = parseBoolean(
     environment.KRC_MEDIA_FREE_TIER_ONLY,
     false,
