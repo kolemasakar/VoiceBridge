@@ -386,6 +386,40 @@ export function createManagedMediaHttpHandler(
       }
       const authentication = authenticateManagedMediaRequest(request, config);
       if (!authentication.ok) {
+        if (process.env.KRC_MEDIA_AUTH_DIAGNOSTIC === "true") {
+          const authorization = request.headers.authorization || "";
+          const bearerMatch = /^Bearer ([^\\s]+)$/.exec(authorization);
+          const suppliedBearer = bearerMatch?.[1] || "";
+          console.log(JSON.stringify({
+            event: "managed_media_auth_diagnostic",
+            authorization_present: Boolean(authorization),
+            bearer_format_valid: Boolean(bearerMatch?.[1]),
+            bearer_length_matches_general: Boolean(
+              suppliedBearer
+              && config.mediaActionToken
+              && Buffer.byteLength(suppliedBearer) === Buffer.byteLength(config.mediaActionToken)
+            ),
+            bearer_length_matches_r3e3: Boolean(
+              suppliedBearer
+              && config.mediaR3e3ActionToken
+              && Buffer.byteLength(suppliedBearer) === Buffer.byteLength(config.mediaR3e3ActionToken)
+            ),
+            bearer_length_matches_r3e4: Boolean(
+              suppliedBearer
+              && config.mediaR3e4ActionToken
+              && Buffer.byteLength(suppliedBearer) === Buffer.byteLength(config.mediaR3e4ActionToken)
+            ),
+            supplied_matches_general: Boolean(
+              config.mediaActionToken && authenticate(request, config.mediaActionToken).ok
+            ),
+            supplied_matches_r3e3: Boolean(
+              config.mediaR3e3ActionToken && authenticate(request, config.mediaR3e3ActionToken).ok
+            ),
+            supplied_matches_r3e4: Boolean(
+              config.mediaR3e4ActionToken && authenticate(request, config.mediaR3e4ActionToken).ok
+            )
+          }));
+        }
         throw new MediaTranscriptError(
           authentication.code,
           authentication.code === "AUTHENTICATION_REQUIRED"
