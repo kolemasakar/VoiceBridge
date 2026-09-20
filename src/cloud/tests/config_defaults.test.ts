@@ -57,3 +57,22 @@ test("R3-E3 public mode derives a stable scoped token", () => {
     "r3e3-b9e9c294b678947317d24274938f4417715d95c2c082413abe48d81633604f9d"
   );
 });
+
+
+test("R3-E3 public mode prefers legacy route material before general token", () => {
+  const config = loadConfig({
+    TEST_ACCESS_TOKEN,
+    KRC_MEDIA_ACTION_TOKEN: "general-media-action-token-123456789",
+    KRC_MEDIA_R3E3_ACTION_TOKEN: "legacy-r3e3-action-token-123456789",
+    KRC_MEDIA_PUBLIC_MODE: "true",
+    KRC_MEDIA_FREE_TIER_ONLY: "true",
+    KRC_MEDIA_ASSEMBLYAI_FREE_TRIAL_ONLY: "true",
+    ASSEMBLYAI_API_KEY: "test-assembly-key",
+    KRC_MEDIA_COBALT_ENDPOINT: "https://cobalt.invalid"
+  });
+
+  assert.equal(
+    config.mediaR3e3ActionToken,
+    "r3e3-a29da52483bb9d528b7b5ffab3713b4553a669c3c9cf554117d92f31e3d7aa13"
+  );
+});
