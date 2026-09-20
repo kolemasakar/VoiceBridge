@@ -186,9 +186,9 @@ export function loadConfig(
   }
 
   const mediaR3e3ActionTokenOverride =
-    environment.KRC_MEDIA_R3E3_ACTION_TOKEN_OVERRIDE || null;
+    environment.KRC_MEDIA_R3E3_ACTION_TOKEN_OVERRIDE?.trim() || null;
   const mediaR3e3ActionTokenLegacy =
-    environment.KRC_MEDIA_R3E3_ACTION_TOKEN || null;
+    environment.KRC_MEDIA_R3E3_ACTION_TOKEN?.trim() || null;
   for (const token of [mediaR3e3ActionTokenOverride, mediaR3e3ActionTokenLegacy]) {
     if (token !== null && token.length < 24) {
       throw new Error(
