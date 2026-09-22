@@ -90,3 +90,18 @@ test("R3-E3 route override trims surrounding whitespace", () => {
     "override-r3e3-action-token-123456789"
   );
 });
+
+
+test("R3.9 unified action token is optional and length-validated", () => {
+  const token = "r39-unified-action-token-2026-0123456789";
+  const config = loadConfig({
+    TEST_ACCESS_TOKEN,
+    KRC_MEDIA_R39_ACTION_TOKEN: token
+  });
+  assert.equal(config.mediaR39ActionToken, token);
+
+  assert.throws(
+    () => loadConfig({ TEST_ACCESS_TOKEN, KRC_MEDIA_R39_ACTION_TOKEN: "too-short" }),
+    /KRC_MEDIA_R39_ACTION_TOKEN must contain at least 24 characters/
+  );
+});
