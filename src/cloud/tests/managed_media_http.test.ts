@@ -16,7 +16,7 @@ import {
 import { MediaBetaGate } from "../src/media_beta.js";
 import { createManagedVoiceBridgeServer } from "../src/managed_server.js";
 
-const ACTION_TOKEN = "managed-action-token-1234567890";
+const ACTION_TOKEN = "managed-action-token-1234567890";\nconst R39_ACTION_TOKEN = "managed-r39-unified-action-token-1234567890";
 const TEST_TOKEN = "voicebridge-test-token-123456789";
 const ACCESS_CODE = "abcdefghijkl";
 
@@ -473,6 +473,30 @@ test("managed HTTP still rejects missing or invalid Action bearer before owner c
   }
 });
 
+test("R3.9 unified bearer is restricted from legacy managed root", async () => {
+  const provider = new FakeManagedProvider();
+  const service = new ManagedMediaService(new MediaBetaGate([ACCESS_CODE]), null, provider);
+  const config: AppConfig = { ...CONFIG, mediaR39ActionToken: R39_ACTION_TOKEN };
+  const handler = createManagedMediaHttpHandler(config, service);
+  const server = createServer(async (request, response) => {
+    if (await handler.handle(request, response)) return;
+    response.statusCode = 404;
+    response.end();
+  });
+  const baseUrl = await listen(server);
+  try {
+    const response = await fetch(`${baseUrl}/api/v1/media/managed`, {
+      headers: { authorization: `Bearer ${R39_ACTION_TOKEN}`, connection: "close" }
+    });
+    assert.equal(response.status, 403);
+    const body = await response.json() as { error?: { code?: string } };
+    assert.equal(body.error?.code, "MEDIA_R39_SCOPE_VIOLATION");
+    assert.equal(provider.transcriptCalls, 0);
+  } finally {
+    await close(server);
+  }
+});
+
 test("managed server preserves legacy health and exposes disabled managed capability without key", async () => {
   const server = createManagedVoiceBridgeServer(CONFIG);
   const baseUrl = await listen(server);
@@ -557,6 +581,36 @@ test("managed HTTP free Facebook fallback completes through injected Cobalt and 
     assert.equal(segments.status, 200);
     const page = await segments.json() as { segments?: unknown[] };
     assert.equal(page.segments?.length, 1);
+  } finally {
+    await close(server);
+  }
+});
+
+test("R3.9 unified bearer can use accepted free Facebook route", async () => {
+  const pipeline = new FakeFacebookPipeline(true);
+  const service = new ManagedMediaService(
+    new MediaBetaGate([ACCESS_CODE]), null, undefined, { facebookPipeline: pipeline }
+  );
+  const config: AppConfig = { ...CONFIG, mediaR39ActionToken: R39_ACTION_TOKEN };
+  const handler = createManagedMediaHttpHandler(config, service);
+  const server = createServer(async (request, response) => {
+    if (await handler.handle(request, response)) return;
+    response.statusCode = 404;
+    response.end();
+  });
+  const baseUrl = await listen(server);
+  try {
+    const response = await fetch(`${baseUrl}/api/v1/media/managed/facebook-fallback`, {
+      method: "POST",
+      headers: { authorization: `Bearer ${R39_ACTION_TOKEN}`, "content-type": "application/json", connection: "close" },
+      body: JSON.stringify({ url: "https://www.facebook.com/reel/1114235920664408/", language_hint: "auto" })
+    });
+    assert.equal(response.status, 200);
+    const job = await response.json() as Record<string, unknown>;
+    assert.equal(job.status, "COMPLETED");
+    assert.equal(job.retrieval_provider, "cobalt");
+    assert.equal(pipeline.freeCalls, 1);
+    assert.equal(pipeline.paidCalls, 0);
   } finally {
     await close(server);
   }
