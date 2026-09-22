@@ -183,7 +183,7 @@ function pagination(requestUrl: URL): { cursor: number; limit: number } {
   return { cursor, limit };
 }
 
-type ManagedMediaAuthScope = "general" | "r3e3_facebook" | "r3e4_telegram";
+type ManagedMediaAuthScope = "general" | "r39_unified" | "r3e3_facebook" | "r3e4_telegram";
 
 function authenticateManagedMediaRequest(
   request: IncomingMessage,
@@ -192,6 +192,10 @@ function authenticateManagedMediaRequest(
   if (config.mediaActionToken) {
     const general = authenticate(request, config.mediaActionToken);
     if (general.ok) return { ok: true, scope: "general" };
+  }
+  if (config.mediaR39ActionToken) {
+    const unified = authenticate(request, config.mediaR39ActionToken);
+    if (unified.ok) return { ok: true, scope: "r39_unified" };
   }
   if (config.mediaR3e3ActionToken) {
     const scoped = authenticate(request, config.mediaR3e3ActionToken);
@@ -262,6 +266,17 @@ function requireScopedJobUrl(
 ): void {
   requireR3e3FacebookUrl(scope, sourceUrl);
   requireR3e4TelegramUrl(scope, sourceUrl);
+  if (scope === "r39_unified") {
+    const platform = managedMediaPlatform(sourceUrl);
+    if (platform !== "facebook" && platform !== "telegram") {
+      throw new MediaTranscriptError(
+        "MEDIA_R39_SCOPE_VIOLATION",
+        "The R3.9 unified credential may read managed jobs only for public Facebook or Telegram media.",
+        403,
+        false
+      );
+    }
+  }
 }
 
 function defaultManagedService(config: AppConfig): ManagedMediaService {
@@ -432,6 +447,18 @@ export function createManagedMediaHttpHandler(
       const authScope = authentication.scope;
 
       const method = request.method || "GET";
+      if (authScope === "r39_unified") {
+        const r39Allowed = path === FACEBOOK_FALLBACK || path === TELEGRAM_PUBLIC ||
+          JOB_PATH.test(path) || SEGMENTS_PATH.test(path);
+        if (!r39Allowed) {
+          throw new MediaTranscriptError(
+            "MEDIA_R39_SCOPE_VIOLATION",
+            "The R3.9 unified credential is restricted to accepted public MEDIA routes.",
+            403,
+            false
+          );
+        }
+      }
       if (method === "GET" && path === ROOT) {
         sendJson(
           response,
