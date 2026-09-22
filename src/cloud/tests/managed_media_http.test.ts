@@ -16,7 +16,8 @@ import {
 import { MediaBetaGate } from "../src/media_beta.js";
 import { createManagedVoiceBridgeServer } from "../src/managed_server.js";
 
-const ACTION_TOKEN = "managed-action-token-1234567890";\nconst R39_ACTION_TOKEN = "managed-r39-unified-action-token-1234567890";
+const ACTION_TOKEN = "managed-action-token-1234567890";
+const R39_ACTION_TOKEN = "managed-r39-unified-action-token-1234567890";
 const TEST_TOKEN = "voicebridge-test-token-123456789";
 const ACCESS_CODE = "abcdefghijkl";
 
