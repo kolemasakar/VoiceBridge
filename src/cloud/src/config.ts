@@ -171,6 +171,13 @@ export function loadConfig(
     );
   }
 
+  const mediaR39ActionToken = environment.KRC_MEDIA_R39_ACTION_TOKEN || null;
+  if (mediaR39ActionToken !== null && mediaR39ActionToken.length < 24) {
+    throw new Error(
+      "KRC_MEDIA_R39_ACTION_TOKEN must contain at least 24 characters when configured."
+    );
+  }
+
   const mediaR3e1ActionToken = environment.KRC_MEDIA_R3E1_ACTION_TOKEN || null;
   if (mediaR3e1ActionToken !== null && mediaR3e1ActionToken.length < 24) {
     throw new Error(
