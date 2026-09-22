@@ -16,7 +16,8 @@ import {
 
 const ACCESS_CODE = "public-gemini-youtube-access-2026";
 const ACTION_TOKEN = "public-gemini-youtube-action-token-2026-0123456789";
-const R3E1_ACTION_TOKEN = "public-gemini-youtube-r3e1-token-2026-0123456789";\nconst R39_ACTION_TOKEN = "public-gemini-youtube-r39-token-2026-0123456789";
+const R3E1_ACTION_TOKEN = "public-gemini-youtube-r3e1-token-2026-0123456789";
+const R39_ACTION_TOKEN = "public-gemini-youtube-r39-token-2026-0123456789";
 const YOUTUBE_URL = "https://www.youtube.com/watch?v=jNQXAC9IVRw";
 const CONSENT: GeminiFreeConsent = {
   provider: "google_gemini",
