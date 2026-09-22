@@ -38,10 +38,14 @@ function publicEnvironment(overrides: NodeJS.ProcessEnv = {}): NodeJS.ProcessEnv
   };
 }
 
-function request(url: string, token = ACTION_TOKEN): IncomingMessage {
+function request(
+  url: string,
+  token = ACTION_TOKEN,
+  method = "GET"
+): IncomingMessage {
   return {
     url,
-    method: "GET",
+    method,
     headers: { authorization: `Bearer ${token}` }
   } as IncomingMessage;
 }
@@ -98,39 +102,66 @@ test("public MEDIA platform boundary covers YouTube Telegram Instagram and Faceb
   assert.equal(managedMediaPlatform("https://www.facebook.com/reel/123456789/"), "facebook");
 });
 
-test("public MEDIA admission enforces shared free-tier rate/concurrency without touching Core routes", () => {
+test("public MEDIA admission limits provider starts but never throttles read-only MEDIA routes", () => {
   const config = loadConfig(publicEnvironment({ RATE_LIMIT_REQUESTS_PER_MINUTE: "60" }));
   let now = 1_000_000;
   const controller = new PublicMediaAdmissionController(config, () => now);
 
-  const firstResponse = responseFixture();
-  const first = controller.admit(request("/api/v1/media/managed"), firstResponse.response);
-  assert.equal(first.handled, false);
-  assert.equal(firstResponse.state.ended, false);
+  const preflightResponse = responseFixture();
+  const preflight = controller.admit(
+    request("/api/v1/media/managed/preflight", ACTION_TOKEN, "POST"),
+    preflightResponse.response
+  );
+  assert.equal(preflight.handled, false);
+  assert.equal(preflightResponse.state.ended, false);
+
+  const lookupResponse = responseFixture();
+  const lookup = controller.admit(
+    request("/api/v1/media/managed/lookup", ACTION_TOKEN, "POST"),
+    lookupResponse.response
+  );
+  assert.equal(lookup.handled, false);
+  assert.equal(lookupResponse.state.ended, false);
+
+  const statusResponse = responseFixture();
+  const status = controller.admit(
+    request("/api/v1/media/managed/transcriptions/KRCM_readonly"),
+    statusResponse.response
+  );
+  assert.equal(status.handled, false);
+  assert.equal(statusResponse.state.ended, false);
+
+  const firstStartResponse = responseFixture();
+  const firstStart = controller.admit(
+    request("/api/v1/media/managed/transcriptions", ACTION_TOKEN, "POST"),
+    firstStartResponse.response
+  );
+  assert.equal(firstStart.handled, false);
+  assert.equal(firstStartResponse.state.ended, false);
 
   now += 1000;
   const concurrentResponse = responseFixture();
   const concurrent = controller.admit(
-    request("/api/v1/media/managed/preflight"),
+    request("/api/v1/media/managed/transcriptions", ACTION_TOKEN, "POST"),
     concurrentResponse.response
   );
   assert.equal(concurrent.handled, true);
   assert.equal((concurrentResponse.response as unknown as { statusCode: number }).statusCode, 429);
   assert.match(concurrentResponse.state.body, /MEDIA_PUBLIC_CONCURRENCY_LIMIT/);
 
-  first.release();
+  firstStart.release();
   now += 1000;
-  const secondResponse = responseFixture();
-  const second = controller.admit(
-    request("/api/v1/media/managed/preflight"),
-    secondResponse.response
+  const secondStartResponse = responseFixture();
+  const secondStart = controller.admit(
+    request("/api/v1/media/managed/transcriptions", ACTION_TOKEN, "POST"),
+    secondStartResponse.response
   );
-  assert.equal(second.handled, false);
-  second.release();
+  assert.equal(secondStart.handled, false);
+  secondStart.release();
 
   const tooFastResponse = responseFixture();
   const tooFast = controller.admit(
-    request("/api/v1/media/managed/preflight"),
+    request("/api/v1/media/managed/transcriptions", ACTION_TOKEN, "POST"),
     tooFastResponse.response
   );
   assert.equal(tooFast.handled, true);
