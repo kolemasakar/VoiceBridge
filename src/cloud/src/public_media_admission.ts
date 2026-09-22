@@ -4,6 +4,7 @@ import { authenticate } from "./auth.js";
 import type { AppConfig } from "./config.js";
 
 const MANAGED_MEDIA_ROOT = "/api/v1/media/managed";
+const MANAGED_MEDIA_START = `${MANAGED_MEDIA_ROOT}/transcriptions`;
 
 export const SUPADATA_FREE_MONTHLY_CREDITS = 100;
 export const SUPADATA_FREE_REQUESTS_PER_SECOND = 1;
@@ -20,6 +21,14 @@ export function isManagedMediaRequest(request: IncomingMessage): boolean {
   const url = new URL(request.url || "/", "http://voicebridge.local");
   return url.pathname === MANAGED_MEDIA_ROOT ||
     url.pathname.startsWith(`${MANAGED_MEDIA_ROOT}/`);
+}
+
+export function startsManagedMediaProviderWork(
+  request: IncomingMessage
+): boolean {
+  if ((request.method || "GET").toUpperCase() !== "POST") return false;
+  const url = new URL(request.url || "/", "http://voicebridge.local");
+  return url.pathname === MANAGED_MEDIA_START;
 }
 
 export interface PublicMediaAdmissionLease {
@@ -66,7 +75,14 @@ export class PublicMediaAdmissionController {
     request: IncomingMessage,
     response: ServerResponse
   ): PublicMediaAdmissionLease {
-    if (!this.config.mediaPublicMode || !isManagedMediaRequest(request)) {
+    if (
+      !this.config.mediaPublicMode ||
+      !isManagedMediaRequest(request) ||
+      !startsManagedMediaProviderWork(request)
+    ) {
+      // Read-only MEDIA routes (capabilities, preflight, lookup, status,
+      // segments) must not consume provider admission/rate/concurrency
+      // budget. Only the transcription start route can begin provider work.
       return noLease();
     }
 
