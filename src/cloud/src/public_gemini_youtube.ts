@@ -754,7 +754,7 @@ function authenticateYoutubeRequest(
   request: IncomingMessage,
   config: AppConfig
 ): ReturnType<typeof authenticate> {
-  const tokens = [config.mediaActionToken, config.mediaR3e1ActionToken]
+  const tokens = [config.mediaActionToken, config.mediaR39ActionToken, config.mediaR3e1ActionToken]
     .filter((token): token is string => Boolean(token));
   if (tokens.length === 0) {
     return { ok: false, code: "AUTHENTICATION_FAILED" };
