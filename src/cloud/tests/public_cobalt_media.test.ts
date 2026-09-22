@@ -18,7 +18,8 @@ const ACCESS_CODE = "public-cobalt-access-code-2026";
 const ACTION_TOKEN = "public-cobalt-action-token-2026-0123456789";
 const R3E2_ACTION_TOKEN = "public-cobalt-r3e2-action-token-2026-0123456789";
 const R3E3_ACTION_TOKEN = "public-cobalt-r3e3-action-token-2026-0123456789";
-const R3E4_ACTION_TOKEN = "public-cobalt-r3e4-action-token-2026-0123456789";\nconst R39_ACTION_TOKEN = "public-cobalt-r39-action-token-2026-0123456789";
+const R3E4_ACTION_TOKEN = "public-cobalt-r3e4-action-token-2026-0123456789";
+const R39_ACTION_TOKEN = "public-cobalt-r39-action-token-2026-0123456789";
 const YOUTUBE_URL = "https://www.youtube.com/watch?v=jNQXAC9IVRw";
 const INSTAGRAM_URL = "https://www.instagram.com/reel/ABC123xyz_/";
 
