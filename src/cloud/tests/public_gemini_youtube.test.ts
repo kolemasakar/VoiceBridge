@@ -16,7 +16,7 @@ import {
 
 const ACCESS_CODE = "public-gemini-youtube-access-2026";
 const ACTION_TOKEN = "public-gemini-youtube-action-token-2026-0123456789";
-const R3E1_ACTION_TOKEN = "public-gemini-youtube-r3e1-token-2026-0123456789";
+const R3E1_ACTION_TOKEN = "public-gemini-youtube-r3e1-token-2026-0123456789";\nconst R39_ACTION_TOKEN = "public-gemini-youtube-r39-token-2026-0123456789";
 const YOUTUBE_URL = "https://www.youtube.com/watch?v=jNQXAC9IVRw";
 const CONSENT: GeminiFreeConsent = {
   provider: "google_gemini",
@@ -283,6 +283,40 @@ test("R3-E1 token is accepted only by the Gemini YouTube handler", async () => {
     } else {
       process.env.KRC_MEDIA_GEMINI_FREE_TIER_ONLY = previous;
     }
+  }
+});
+
+test("R3.9 unified token is accepted by Gemini YouTube read-only routes", async () => {
+  const previous = process.env.KRC_MEDIA_GEMINI_FREE_TIER_ONLY;
+  process.env.KRC_MEDIA_GEMINI_FREE_TIER_ONLY = "true";
+  const provider = new FixtureGeminiYoutubeProvider();
+  const config = { ...publicConfig(), mediaR39ActionToken: R39_ACTION_TOKEN };
+  const engine = new PublicGeminiYoutubeEngine(
+    new MediaBetaGate([ACCESS_CODE], 7200),
+    null,
+    true,
+    provider.model,
+    { provider }
+  );
+  const handler = createPublicGeminiYoutubeHttpHandler(config, engine);
+  const server = createServer(async (request, response) => {
+    if (await handler.handle(request, response)) return;
+    response.statusCode = 404;
+    response.end();
+  });
+  const base = await listen(server);
+  try {
+    const capability = await fetch(`${base}/api/v1/media/public-capabilities`, {
+      headers: { authorization: `Bearer ${R39_ACTION_TOKEN}` }
+    });
+    assert.equal(capability.status, 200);
+    const body = await capability.json() as Record<string, unknown>;
+    assert.equal(body.youtube_retrieval_provider, "gemini_youtube_url");
+    assert.equal(provider.calls, 0);
+  } finally {
+    await close(server);
+    if (previous === undefined) delete process.env.KRC_MEDIA_GEMINI_FREE_TIER_ONLY;
+    else process.env.KRC_MEDIA_GEMINI_FREE_TIER_ONLY = previous;
   }
 });
 
