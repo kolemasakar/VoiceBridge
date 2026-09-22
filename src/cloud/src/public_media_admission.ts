@@ -86,11 +86,12 @@ export class PublicMediaAdmissionController {
       return noLease();
     }
 
-    const token = this.config.mediaActionToken;
-    if (!token) return noLease();
+    const tokens = [this.config.mediaActionToken, this.config.mediaR39ActionToken]
+      .filter((token): token is string => Boolean(token));
+    if (tokens.length === 0) return noLease();
 
-    const authentication = authenticate(request, token);
-    if (!authentication.ok) {
+    const authenticated = tokens.some((token) => authenticate(request, token).ok);
+    if (!authenticated) {
       // The managed handler owns the canonical authentication response.
       return noLease();
     }
