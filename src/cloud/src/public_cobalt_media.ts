@@ -852,7 +852,7 @@ function routePlatformError(platform: string): never {
   );
 }
 
-type PublicCobaltAuthScope = "general" | "r3e2_instagram";
+type PublicCobaltAuthScope = "general" | "r39_unified" | "r3e2_instagram";
 
 function authenticatePublicCobaltRequest(
   request: IncomingMessage,
@@ -861,6 +861,10 @@ function authenticatePublicCobaltRequest(
   if (config.mediaActionToken) {
     const general = authenticate(request, config.mediaActionToken);
     if (general.ok) return { ok: true, scope: "general" };
+  }
+  if (config.mediaR39ActionToken) {
+    const unified = authenticate(request, config.mediaR39ActionToken);
+    if (unified.ok) return { ok: true, scope: "r39_unified" };
   }
   if (config.mediaR3e2ActionToken) {
     const scoped = authenticate(request, config.mediaR3e2ActionToken);
@@ -877,11 +881,13 @@ function requireR3e2InstagramScope(
   scope: PublicCobaltAuthScope,
   sourceUrl: string
 ): void {
-  if (scope !== "r3e2_instagram") return;
+  if (scope !== "r3e2_instagram" && scope !== "r39_unified") return;
   if (managedMediaPlatform(sourceUrl) !== "instagram") {
     throw new MediaTranscriptError(
-      "MEDIA_R3E2_SCOPE_VIOLATION",
-      "The R3-E2 credential is restricted to public Instagram media.",
+      scope === "r39_unified" ? "MEDIA_R39_SCOPE_VIOLATION" : "MEDIA_R3E2_SCOPE_VIOLATION",
+      scope === "r39_unified"
+        ? "The R3.9 unified credential uses the Cobalt route only for public Instagram media."
+        : "The R3-E2 credential is restricted to public Instagram media.",
       403,
       false
     );
