@@ -18,7 +18,7 @@ const ACCESS_CODE = "public-cobalt-access-code-2026";
 const ACTION_TOKEN = "public-cobalt-action-token-2026-0123456789";
 const R3E2_ACTION_TOKEN = "public-cobalt-r3e2-action-token-2026-0123456789";
 const R3E3_ACTION_TOKEN = "public-cobalt-r3e3-action-token-2026-0123456789";
-const R3E4_ACTION_TOKEN = "public-cobalt-r3e4-action-token-2026-0123456789";
+const R3E4_ACTION_TOKEN = "public-cobalt-r3e4-action-token-2026-0123456789";\nconst R39_ACTION_TOKEN = "public-cobalt-r39-action-token-2026-0123456789";
 const YOUTUBE_URL = "https://www.youtube.com/watch?v=jNQXAC9IVRw";
 const INSTAGRAM_URL = "https://www.instagram.com/reel/ABC123xyz_/";
 
@@ -358,6 +358,45 @@ test("R3-E2 bearer is accepted for Instagram preflight and lookup but blocked fr
   }
 });
 
+
+test("R3.9 unified bearer is accepted for Instagram Cobalt routes and blocked from Cobalt YouTube", async () => {
+  const retriever = new FixtureRetriever();
+  const stt = new FixtureStt();
+  const config = { ...publicConfig(), mediaR39ActionToken: R39_ACTION_TOKEN };
+  const engine = new PublicCobaltMediaEngine(
+    new MediaBetaGate([ACCESS_CODE], 7200),
+    null, null, null, { retriever, stt }
+  );
+  const handler = createPublicCobaltMediaHttpHandler(config, engine);
+  const server = createServer(async (request, response) => {
+    if (await handler.handle(request, response)) return;
+    response.statusCode = 404;
+    response.end();
+  });
+  const base = await listen(server);
+  const headers = { authorization: `Bearer ${R39_ACTION_TOKEN}`, "content-type": "application/json" };
+  try {
+    const preflight = await fetch(`${base}/api/v1/media/managed/preflight`, {
+      method: "POST", headers,
+      body: JSON.stringify({ url: INSTAGRAM_URL, language_hint: "auto" })
+    });
+    assert.equal(preflight.status, 200);
+    assert.equal(retriever.calls, 0);
+    assert.equal(stt.calls, 0);
+
+    const youtube = await fetch(`${base}/api/v1/media/managed/preflight`, {
+      method: "POST", headers,
+      body: JSON.stringify({ url: YOUTUBE_URL, language_hint: "auto" })
+    });
+    assert.equal(youtube.status, 403);
+    const denied = await youtube.json() as { error?: { code?: string } };
+    assert.equal(denied.error?.code, "MEDIA_R39_SCOPE_VIOLATION");
+    assert.equal(retriever.calls, 0);
+    assert.equal(stt.calls, 0);
+  } finally {
+    await close(server);
+  }
+});
 
 test("public Cobalt handler delegates R3-E3 and R3-E4 scoped managed paths", async () => {
   const retriever = new FixtureRetriever();
