@@ -25,6 +25,7 @@ export interface AppConfig {
   port: number;
   testAccessToken: string;
   mediaActionToken?: string | null;
+  mediaR39ActionToken?: string | null;
   mediaR3e1ActionToken?: string | null;
   mediaR3e2ActionToken?: string | null;
   mediaR3e3ActionToken?: string | null;
@@ -301,6 +302,7 @@ export function loadConfig(
     port: parseInteger(environment.PORT, 8080, "PORT", 1, 65535),
     testAccessToken,
     mediaActionToken,
+    mediaR39ActionToken,
     mediaR3e1ActionToken,
     mediaR3e2ActionToken,
     mediaR3e3ActionToken,
