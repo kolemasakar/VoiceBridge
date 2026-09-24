@@ -173,12 +173,52 @@ test("Gemini direct YouTube provider canonicalizes youtu.be share URLs", async (
   assert.equal(input[1]?.uri, YOUTUBE_URL);
 });
 
-test("Gemini failed job preserves sanitized upstream status and retryability", async () => {
+test("Gemini failed job preserves Interactions API error code and retryability", async () => {
   const fetchImpl = (async () => new Response(
     JSON.stringify({
       error: {
-        code: 429,
-        message: "quota text must not be persisted",
+        code: "service_unavailable",
+        message: "temporary provider text must not be persisted"
+      }
+    }),
+    { status: 503, headers: { "content-type": "application/json" } }
+  )) as typeof fetch;
+
+  const provider = new GeminiYoutubeDirectProvider(
+    "gemini-fixture-key",
+    true,
+    "gemini-3.7-flash",
+    fetchImpl
+  );
+  const engine = new PublicGeminiYoutubeEngine(
+    new MediaBetaGate([ACCESS_CODE], 7200),
+    null,
+    true,
+    provider.model,
+    { provider }
+  );
+
+  const job = await engine.start({
+    url: YOUTUBE_URL,
+    language_hint: "auto",
+    beta_access_code: ACCESS_CODE
+  }, CONSENT);
+
+  assert.equal(job.status, "FAILED");
+  assert.equal(job.error?.code, "GEMINI_YOUTUBE_FAILED");
+  assert.equal(job.error?.retryable, true);
+  assert.equal(job.provider_http_status, 503);
+  assert.equal(job.provider_error_code, "service_unavailable");
+  assert.equal(job.provider_error_status, null);
+  assert.doesNotMatch(job.error?.message || "", /temporary provider text/i);
+});
+
+test("Gemini failed job retains legacy status metadata when present", async () => {
+  const fetchImpl = (async () => new Response(
+    JSON.stringify({
+      error: {
+        code: "rate_limit_exceeded",
+        message: "do not persist",
         status: "RESOURCE_EXHAUSTED"
       }
     }),
@@ -206,11 +246,10 @@ test("Gemini failed job preserves sanitized upstream status and retryability", a
   }, CONSENT);
 
   assert.equal(job.status, "FAILED");
-  assert.equal(job.error?.code, "GEMINI_YOUTUBE_FAILED");
-  assert.equal(job.error?.retryable, true);
   assert.equal(job.provider_http_status, 429);
+  assert.equal(job.provider_error_code, "rate_limit_exceeded");
   assert.equal(job.provider_error_status, "RESOURCE_EXHAUSTED");
-  assert.doesNotMatch(job.error?.message || "", /quota text/i);
+  assert.equal(job.error?.retryable, true);
 });
 
 test("Gemini YouTube engine requires explicit Free Tier data-use consent before provider work", async () => {
