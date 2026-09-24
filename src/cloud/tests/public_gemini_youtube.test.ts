@@ -148,6 +148,71 @@ test("Gemini direct YouTube provider sends only public URL and transcript prompt
   );
 });
 
+test("Gemini direct YouTube provider canonicalizes youtu.be share URLs", async () => {
+  let body: Record<string, unknown> | undefined;
+  const fetchImpl = (async (_input: string | URL | Request, init?: RequestInit) => {
+    body = JSON.parse(String(init?.body)) as Record<string, unknown>;
+    return new Response(
+      JSON.stringify({ output_text: "canonicalized youtube transcript" }),
+      { status: 200, headers: { "content-type": "application/json" } }
+    );
+  }) as typeof fetch;
+
+  const provider = new GeminiYoutubeDirectProvider(
+    "gemini-fixture-key",
+    true,
+    "gemini-3.7-flash",
+    fetchImpl
+  );
+  await provider.transcribe(
+    "https://youtu.be/jNQXAC9IVRw?si=tracking-token",
+    "auto"
+  );
+
+  const input = body?.input as Array<Record<string, unknown>>;
+  assert.equal(input[1]?.uri, YOUTUBE_URL);
+});
+
+test("Gemini failed job preserves sanitized upstream status and retryability", async () => {
+  const fetchImpl = (async () => new Response(
+    JSON.stringify({
+      error: {
+        code: 429,
+        message: "quota text must not be persisted",
+        status: "RESOURCE_EXHAUSTED"
+      }
+    }),
+    { status: 429, headers: { "content-type": "application/json" } }
+  )) as typeof fetch;
+
+  const provider = new GeminiYoutubeDirectProvider(
+    "gemini-fixture-key",
+    true,
+    "gemini-3.7-flash",
+    fetchImpl
+  );
+  const engine = new PublicGeminiYoutubeEngine(
+    new MediaBetaGate([ACCESS_CODE], 7200),
+    null,
+    true,
+    provider.model,
+    { provider }
+  );
+
+  const job = await engine.start({
+    url: YOUTUBE_URL,
+    language_hint: "auto",
+    beta_access_code: ACCESS_CODE
+  }, CONSENT);
+
+  assert.equal(job.status, "FAILED");
+  assert.equal(job.error?.code, "GEMINI_YOUTUBE_FAILED");
+  assert.equal(job.error?.retryable, true);
+  assert.equal(job.provider_http_status, 429);
+  assert.equal(job.provider_error_status, "RESOURCE_EXHAUSTED");
+  assert.doesNotMatch(job.error?.message || "", /quota text/i);
+});
+
 test("Gemini YouTube engine requires explicit Free Tier data-use consent before provider work", async () => {
   const provider = new FixtureGeminiYoutubeProvider();
   const engine = new PublicGeminiYoutubeEngine(
