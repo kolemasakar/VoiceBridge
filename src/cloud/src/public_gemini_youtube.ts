@@ -65,6 +65,7 @@ class GeminiYoutubeProviderHttpError extends MediaTranscriptError {
     message: string,
     httpStatus: number,
     retryable: boolean,
+    readonly providerErrorCode: string | null,
     readonly providerErrorStatus: string | null
   ) {
     super(code, message, httpStatus, retryable);
@@ -81,6 +82,7 @@ type GeminiYoutubeJobView = Omit<
   provider_model: string;
   gemini_free_data_use_acknowledged: true;
   provider_http_status: number | null;
+  provider_error_code: string | null;
   provider_error_status: string | null;
 };
 
@@ -190,12 +192,22 @@ function youtubeUrl(value: string): string {
   return normalized;
 }
 
-function geminiProviderErrorStatus(payload: Record<string, unknown>): string | null {
+function geminiProviderErrorMetadata(payload: Record<string, unknown>): {
+  code: string | null;
+  legacyStatus: string | null;
+} {
   const error = payload.error;
-  if (!error || typeof error !== "object" || Array.isArray(error)) return null;
-  const status = (error as Record<string, unknown>).status;
-  if (typeof status !== "string" || !/^[A-Z0-9_]{1,80}$/.test(status)) return null;
-  return status;
+  if (!error || typeof error !== "object" || Array.isArray(error)) {
+    return { code: null, legacyStatus: null };
+  }
+  const record = error as Record<string, unknown>;
+  const code = typeof record.code === "string" && /^[a-z0-9_]{1,80}$/.test(record.code)
+    ? record.code
+    : null;
+  const legacyStatus = typeof record.status === "string" && /^[A-Z0-9_]{1,80}$/.test(record.status)
+    ? record.status
+    : null;
+  return { code, legacyStatus };
 }
 
 function interactionText(payload: Record<string, unknown>): string {
@@ -312,12 +324,14 @@ export class GeminiYoutubeDirectProvider implements PublicGeminiYoutubeProvider 
 
     if (!response.ok) {
       const retryable = response.status === 408 || response.status === 429 || response.status >= 500;
+      const providerError = geminiProviderErrorMetadata(payload);
       throw new GeminiYoutubeProviderHttpError(
         "GEMINI_YOUTUBE_FAILED",
         "Gemini Free direct YouTube processing failed closed.",
         response.status,
         retryable,
-        geminiProviderErrorStatus(payload)
+        providerError.code,
+        providerError.legacyStatus
       );
     }
 
@@ -602,6 +616,7 @@ export class PublicGeminiYoutubeEngine {
       language_confidence: null,
       gemini_free_data_use_acknowledged: true,
       provider_http_status: null,
+      provider_error_code: null,
       provider_error_status: null,
       error: null
     } satisfies GeminiYoutubeJobView;
@@ -659,6 +674,7 @@ export class PublicGeminiYoutubeEngine {
           updated_at: updatedAt,
           free_retrieval_error_code: normalized.code,
           provider_http_status: providerError?.httpStatus ?? null,
+          provider_error_code: providerError?.providerErrorCode ?? null,
           provider_error_status: providerError?.providerErrorStatus ?? null,
           error: {
             code: normalized.code,
