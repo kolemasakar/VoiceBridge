@@ -59,6 +59,18 @@ export interface PublicGeminiYoutubeProvider {
   ): Promise<GeminiYoutubeDirectResult>;
 }
 
+class GeminiYoutubeProviderHttpError extends MediaTranscriptError {
+  constructor(
+    code: string,
+    message: string,
+    httpStatus: number,
+    retryable: boolean,
+    readonly providerErrorStatus: string | null
+  ) {
+    super(code, message, httpStatus, retryable);
+  }
+}
+
 type GeminiYoutubeJobView = Omit<
   ManagedMediaJobView,
   "provider" | "provider_mode" | "retrieval_provider"
@@ -68,6 +80,8 @@ type GeminiYoutubeJobView = Omit<
   retrieval_provider: typeof RETRIEVAL_PROVIDER;
   provider_model: string;
   gemini_free_data_use_acknowledged: true;
+  provider_http_status: number | null;
+  provider_error_status: string | null;
 };
 
 type GeminiYoutubeStoredRecord = Omit<ManagedMediaStoredRecord, "job"> & {
@@ -151,7 +165,37 @@ function youtubeUrl(value: string): string {
       false
     );
   }
+
+  const parsed = new URL(normalized);
+  const host = parsed.hostname.toLowerCase();
+  const safeVideoId = (candidate: string | null | undefined): string | null => {
+    if (!candidate || !/^[A-Za-z0-9_-]{6,64}$/.test(candidate)) return null;
+    return candidate;
+  };
+
+  if (host === "youtu.be" || host.endsWith(".youtu.be")) {
+    const videoId = safeVideoId(parsed.pathname.split("/").filter(Boolean)[0]);
+    if (videoId) {
+      return `https://www.youtube.com/watch?v=${encodeURIComponent(videoId)}`;
+    }
+  }
+
+  if ((host === "youtube.com" || host.endsWith(".youtube.com")) && parsed.pathname === "/watch") {
+    const videoId = safeVideoId(parsed.searchParams.get("v"));
+    if (videoId) {
+      return `https://www.youtube.com/watch?v=${encodeURIComponent(videoId)}`;
+    }
+  }
+
   return normalized;
+}
+
+function geminiProviderErrorStatus(payload: Record<string, unknown>): string | null {
+  const error = payload.error;
+  if (!error || typeof error !== "object" || Array.isArray(error)) return null;
+  const status = (error as Record<string, unknown>).status;
+  if (typeof status !== "string" || !/^[A-Z0-9_]{1,80}$/.test(status)) return null;
+  return status;
 }
 
 function interactionText(payload: Record<string, unknown>): string {
@@ -268,11 +312,12 @@ export class GeminiYoutubeDirectProvider implements PublicGeminiYoutubeProvider 
 
     if (!response.ok) {
       const retryable = response.status === 408 || response.status === 429 || response.status >= 500;
-      throw new MediaTranscriptError(
+      throw new GeminiYoutubeProviderHttpError(
         "GEMINI_YOUTUBE_FAILED",
         "Gemini Free direct YouTube processing failed closed.",
-        retryable ? 502 : 422,
-        retryable
+        response.status,
+        retryable,
+        geminiProviderErrorStatus(payload)
       );
     }
 
@@ -556,6 +601,8 @@ export class PublicGeminiYoutubeEngine {
       provider_data_deleted: null,
       language_confidence: null,
       gemini_free_data_use_acknowledged: true,
+      provider_http_status: null,
+      provider_error_status: null,
       error: null
     } satisfies GeminiYoutubeJobView;
 
@@ -602,6 +649,7 @@ export class PublicGeminiYoutubeEngine {
           500,
           false
         );
+      const providerError = error instanceof GeminiYoutubeProviderHttpError ? error : null;
       const updatedAt = new Date().toISOString();
       const failed: GeminiYoutubeStoredRecord = {
         ...record,
@@ -610,10 +658,12 @@ export class PublicGeminiYoutubeEngine {
           status: "FAILED",
           updated_at: updatedAt,
           free_retrieval_error_code: normalized.code,
+          provider_http_status: providerError?.httpStatus ?? null,
+          provider_error_status: providerError?.providerErrorStatus ?? null,
           error: {
             code: normalized.code,
             message: normalized.message,
-            retryable: false
+            retryable: normalized.retryable
           }
         },
         expiresAt: this.expiry(updatedAt)
