@@ -428,7 +428,7 @@ export function loadConfig(
     ),
     mediaJobTtlSeconds: parseInteger(
       environment.MEDIA_JOB_TTL_SECONDS,
-      3600,
+      21600,
       "MEDIA_JOB_TTL_SECONDS",
       300,
       86400
