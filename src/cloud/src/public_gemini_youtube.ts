@@ -435,7 +435,7 @@ export class PublicGeminiYoutubeEngine {
       model
     );
     this.model = this.provider.model;
-    this.jobTtlSeconds = options.jobTtlSeconds ?? 3600;
+    this.jobTtlSeconds = options.jobTtlSeconds ?? 21600;
     this.configured = betaGate.configured && this.provider.configured;
     this.durableStore = this.store.durable;
     this.storeKind = this.store.kind;
