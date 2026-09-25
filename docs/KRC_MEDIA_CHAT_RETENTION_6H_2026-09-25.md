@@ -27,3 +27,12 @@ Status: candidate branch only. No production deployment or Gemini provider execu
 - Provider start is synchronous until processing returns; a dropped response may lose job_id, requiring read-only lookup.
 - Existing retry-chain lookup can return a FAILED record; never treat lookup alone as authorization to retry.
 - Existing PostgreSQL purge physically deletes expired records; this branch does not introduce a permanent archive.
+
+## Validation checkpoint (2026-09-25)
+- Exact tested candidate SHA: `0e0b4d0a4904d9dbff372b26e0867f82cbb283e5`.
+- Isolated checkout on krc-cobalt under `/tmp/krc-voicebridge-validation-20260925/repo`; Node v24.21.0.
+- `npm run check`: TypeScript build PASS, 278 tests PASS / 0 FAIL, exit 0. Dedicated transcript collector suite: 5/5 PASS.
+- Added reusable read-only `src/cloud/src/gemini_transcript_collector.ts` and integrity tests. It validates every page, order, total count, and concatenated character count. It never starts provider work and does not archive automatically.
+- Integration into the ChatGPT private Plugin / active-chat artifact delivery is NOT implemented by this backend helper. A client must call it or implement equivalent validated pagination and present the transcript in the active chat.
+- Provider transcript_text length is not necessarily equal to the simple concatenation of segment texts. Current collector fails closed if unequal; before client integration, verify actual provider segmentation/count semantics and preserve original text without invented separators. Do not silently normalize a mismatch.
+- Read-only live Render /health still reports effective job_ttl_seconds=3600, service branch `agent/krc-media-gemini-migration`; candidate remains undeployed. No safe read-only Render environment-variable value API was available here; explicit `MEDIA_JOB_TTL_SECONDS` override cannot be ruled out. Deployment requires separate approval and effective TTL recheck.
