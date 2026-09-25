@@ -505,3 +505,80 @@ test("Gemini YouTube HTTP route exposes consent preflight and rejects unconsente
     }
   }
 });
+
+test("chat retention defaults to six hours and respects an explicit override", () => {
+  assert.equal(loadConfig(publicEnvironment()).mediaJobTtlSeconds, 21600);
+  assert.equal(
+    loadConfig({ ...publicEnvironment(), MEDIA_JOB_TTL_SECONDS: "7200" }).mediaJobTtlSeconds,
+    7200
+  );
+});
+
+test("a lost start response is recoverable with read-only lookup and paginated segments", async () => {
+  const provider: PublicGeminiYoutubeProvider = {
+    configured: true,
+    model: "gemini-3.7-flash",
+    async transcribe(sourceUrl: string): Promise<GeminiYoutubeDirectResult> {
+      assert.equal(sourceUrl, YOUTUBE_URL);
+      return {
+        provider: "gemini",
+        provider_model: "gemini-3.7-flash",
+        transcript_text: "first second third",
+        segments: ["first", "second", "third"].map((text, index) => ({
+          index, start_ms: null, end_ms: null, text, confidence: null
+        })),
+        detected_language: null,
+        language_confidence: null,
+        provider_data_deleted: null
+      };
+    }
+  };
+  const engine = new PublicGeminiYoutubeEngine(
+    new MediaBetaGate([ACCESS_CODE], 7200), null, true, provider.model, { provider }
+  );
+  const input = {
+    url: YOUTUBE_URL,
+    language_hint: "auto" as const,
+    beta_access_code: ACCESS_CODE
+  };
+  const completed = await engine.start(input, CONSENT);
+  assert.equal(completed.status, "COMPLETED");
+  // Simulate a client losing the response: recover the existing job without start().
+  const recovered = await engine.lookup(input);
+  assert.equal(recovered?.job_id, completed.job_id);
+  assert.equal(recovered?.status, "COMPLETED");
+  const texts: string[] = [];
+  let cursor = 0;
+  for (;;) {
+    const page = await engine.page(completed.job_id, cursor, 1);
+    assert.ok(page);
+    assert.equal(page.cursor, cursor);
+    assert.equal(page.segments.length, 1);
+    assert.equal(page.segments[0]?.index, texts.length);
+    texts.push(page.segments[0]!.text);
+    if (page.next_cursor === null) break;
+    assert.ok(page.next_cursor > cursor);
+    cursor = page.next_cursor;
+  }
+  assert.equal(texts.length, completed.segment_count);
+  assert.equal(texts.join(" "), "first second third");
+  assert.equal(texts.join(" ").length, completed.transcript_characters);
+});
+
+test("a failed lookup does not authorize an automatic Gemini retry", async () => {
+  const provider = new FixtureGeminiYoutubeProvider();
+  provider.fail = true;
+  const engine = new PublicGeminiYoutubeEngine(
+    new MediaBetaGate([ACCESS_CODE], 7200), null, true, provider.model, { provider }
+  );
+  const input = {
+    url: YOUTUBE_URL,
+    language_hint: "auto" as const,
+    beta_access_code: ACCESS_CODE
+  };
+  const failed = await engine.start(input, CONSENT);
+  assert.equal(failed.status, "FAILED");
+  const recovered = await engine.lookup(input);
+  assert.equal(recovered?.status, "FAILED");
+  assert.equal(provider.calls, 1);
+});
