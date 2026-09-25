@@ -515,10 +515,12 @@ test("chat retention defaults to six hours and respects an explicit override", (
 });
 
 test("a lost start response is recoverable with read-only lookup and paginated segments", async () => {
+  let providerCalls = 0;
   const provider: PublicGeminiYoutubeProvider = {
     configured: true,
     model: "gemini-3.7-flash",
     async transcribe(sourceUrl: string): Promise<GeminiYoutubeDirectResult> {
+      providerCalls += 1;
       assert.equal(sourceUrl, YOUTUBE_URL);
       return {
         provider: "gemini",
@@ -563,6 +565,7 @@ test("a lost start response is recoverable with read-only lookup and paginated s
   assert.equal(texts.length, completed.segment_count);
   assert.equal(texts.join(" "), "first second third");
   assert.equal(texts.join(" ").length, completed.transcript_characters);
+  assert.equal(providerCalls, 1);
 });
 
 test("a failed lookup does not authorize an automatic Gemini retry", async () => {
