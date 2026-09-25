@@ -11,6 +11,7 @@ Status: candidate branch only. No production deployment or Gemini provider execu
 
 ## Implemented in this branch
 - Change default MEDIA_JOB_TTL_SECONDS in config from 3600 to 21600.
+- Align PublicGeminiYoutubeEngine fallback TTL to 21600 for direct engine construction.
 - Environment variable MEDIA_JOB_TTL_SECONDS still overrides the default. Check Render configuration before deploying.
 
 ## Required before deployment
@@ -22,7 +23,7 @@ Status: candidate branch only. No production deployment or Gemini provider execu
 6. Confirm all tests pass against exact candidate SHA; perform code review and separate deployment authorization.
 
 ## Existing implementation caveats
-- Engine fallback currently also defaults to 3600 if instantiated without the parsed app config; production handler passes config.mediaJobTtlSeconds.
+- Engine fallback now defaults to 21600; production handler still passes config.mediaJobTtlSeconds.
 - Provider start is synchronous until processing returns; a dropped response may lose job_id, requiring read-only lookup.
 - Existing retry-chain lookup can return a FAILED record; never treat lookup alone as authorization to retry.
 - Existing PostgreSQL purge physically deletes expired records; this branch does not introduce a permanent archive.
