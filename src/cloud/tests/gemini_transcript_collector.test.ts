@@ -1,5 +1,6 @@
 import assert from "node:assert/strict";
 import { test } from "node:test";
+import { chunkTranscriptWords } from "../src/media_transcript.js";
 import { collectCompletedTranscript, type TranscriptPage, type TranscriptStatus } from "../src/gemini_transcript_collector.js";
 
 const status: TranscriptStatus = {
@@ -69,4 +70,26 @@ test("collector never invokes provider work and refuses unfinished jobs", async 
     /TRANSCRIPT_NOT_COMPLETED/
   );
   assert.equal(pageCalls, 0);
+});
+
+
+test("long Gemini transcript retains every character across chunk boundaries", async () => {
+  const original = "a".repeat(1599) + " " + "b".repeat(1700);
+  const chunks = chunkTranscriptWords([], original);
+  assert.ok(chunks.length > 1);
+  assert.equal(chunks.map((chunk) => chunk.text).join(""), original);
+  const expected: TranscriptStatus = {
+    job_id: "KRCM_long_fixture", status: "COMPLETED",
+    segment_count: chunks.length, transcript_characters: original.length
+  };
+  const result = await collectCompletedTranscript(expected, async (jobId, cursor, limit) => {
+    const slice = chunks.slice(cursor, cursor + limit);
+    const next = cursor + slice.length;
+    return {
+      job_id: jobId, status: "COMPLETED", cursor,
+      next_cursor: next < chunks.length ? next : null,
+      segments: slice
+    };
+  }, 1);
+  assert.equal(result.text, original);
 });
