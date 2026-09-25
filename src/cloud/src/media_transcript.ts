@@ -235,7 +235,9 @@ export function chunkTranscriptWords(
         index: segments.length,
         start_ms: null,
         end_ms: null,
-        text: text.slice(offset, offset + MAX_SEGMENT_CHARACTERS).trim(),
+        // Preserve whitespace at segment boundaries: trimming each chunk loses
+        // characters and prevents exact reconstruction of long transcripts.
+        text: text.slice(offset, offset + MAX_SEGMENT_CHARACTERS),
         confidence: null
       });
     }
