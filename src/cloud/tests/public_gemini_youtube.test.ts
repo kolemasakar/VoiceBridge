@@ -505,3 +505,69 @@ test("Gemini YouTube HTTP route exposes consent preflight and rejects unconsente
     }
   }
 });
+
+test("safe diagnostic logging correlates negative read-only requests without leaking secrets", async () => {
+  const config = publicConfig();
+  const provider = new FixtureGeminiYoutubeProvider();
+  const engine = new PublicGeminiYoutubeEngine(
+    new MediaBetaGate([ACCESS_CODE], 7200),
+    null,
+    true,
+    provider.model,
+    { provider }
+  );
+  const handler = createPublicGeminiYoutubeHttpHandler(config, engine);
+  const captured: string[] = [];
+  const originalError = console.error;
+  console.error = (...args: unknown[]) => { captured.push(args.map(String).join(" ")); };
+  const server = createServer(async (request, response) => {
+    if (await handler.handle(request, response)) return;
+    response.statusCode = 404;
+    response.end();
+  });
+  try {
+    const base = await listen(server);
+    const cases = [
+      { path: "/api/v1/media/public-capabilities", init: {}, status: 401, code: "AUTHENTICATION_REQUIRED", route: "capabilities" },
+      { path: "/api/v1/media/youtube-gemini/lookup", init: {
+        method: "POST", headers: { authorization: `Bearer ${ACTION_TOKEN}`, "content-type": "application/json" },
+        body: JSON.stringify({ url: YOUTUBE_URL, language_hint: "auto" })
+      }, status: 404, code: "MEDIA_TRANSCRIPT_NOT_FOUND", route: "lookup" },
+      { path: "/api/v1/media/youtube-gemini/lookup", init: {
+        method: "POST", headers: { authorization: `Bearer ${ACTION_TOKEN}`, "content-type": "application/json" },
+        body: "{}"
+      }, status: 400, code: "INVALID_REQUEST", route: "lookup" },
+      { path: "/api/v1/media/youtube-gemini/transcriptions/KRCM_fixturejob", init: {
+        headers: { authorization: `Bearer ${ACTION_TOKEN}` }
+      }, status: 404, code: "MEDIA_TRANSCRIPT_NOT_FOUND", route: "status" },
+      { path: "/api/v1/media/youtube-gemini/transcriptions/KRCM_fixturejob/segments", init: {
+        headers: { authorization: `Bearer ${ACTION_TOKEN}` }
+      }, status: 404, code: "MEDIA_TRANSCRIPT_NOT_FOUND", route: "segments" }
+    ];
+    for (const [index, scenario] of cases.entries()) {
+      const response = await fetch(base + scenario.path, scenario.init);
+      const body = await response.json() as { error: { request_id: string; correlation_id: string; code: string } };
+      assert.equal(response.status, scenario.status);
+      assert.equal(body.error.code, scenario.code);
+      assert.equal(captured.length, index + 1);
+      const event = JSON.parse(captured[index]!) as Record<string, unknown>;
+      assert.deepEqual(Object.keys(event).sort(), [
+        "event", "request_id", "correlation_id", "route", "http_status", "error_code", "retryable"
+      ].sort());
+      assert.equal(event.event, "krc_youtube_http_error");
+      assert.equal(event.route, scenario.route);
+      assert.equal(event.http_status, scenario.status);
+      assert.equal(event.error_code, scenario.code);
+      assert.equal(event.retryable, false);
+      assert.equal(event.request_id, body.error.request_id);
+      assert.equal(event.correlation_id, body.error.correlation_id);
+    }
+    for (const secret of [ACTION_TOKEN, ACCESS_CODE, YOUTUBE_URL]) {
+      assert.equal(captured.join("\\n").includes(secret), false, "diagnostic log must not leak fixture data");
+    }
+    assert.equal(provider.calls, 0);
+  } finally {
+    console.error = originalError;
+    await close(server);
+  }
+});
