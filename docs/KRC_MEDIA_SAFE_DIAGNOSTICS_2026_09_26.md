@@ -29,3 +29,9 @@ The direct YouTube HTTP handler now logs a single structured `krc_youtube_http_e
 - All five cases asserted the exact seven-field diagnostic allowlist, route/error/status, and matching HTTP/log request and correlation identifiers. Fixture tokens, keys, access code, and media URL absent from captured logs. Stub provider invocation count: **0**.
 - Test script is local fixture `src/cloud/isolated_diagnostics.mjs` in validation checkout only, not a tracked production file.
 - This validates negative-path logging, not provider-origin 429 or external gateway failures. No production deployment performed.
+
+## Persisted regression gate
+
+- Added `src/cloud/tests/public_gemini_youtube.test.ts` fixture-only regression covering five negative HTTP paths, seven-field log allowlist, matching request/correlation identifiers, no fixture token/access-code/media URL leakage, and zero provider calls.
+- Tested code commit `dba977bf91986cefbb7b9b5ef86232844e10dc96` on isolated `krc-cobalt`: TypeScript build PASS; targeted YouTube tests **10/10 PASS**; full `npm test` **271 PASS / 0 FAIL / 0 SKIPPED**, duration ~86.3 seconds.
+- Production unchanged; PR remains draft. Provider-origin 429 and upstream/connector correlation require later controlled diagnostics.
