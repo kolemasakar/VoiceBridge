@@ -983,6 +983,19 @@ export function createPublicGeminiYoutubeHttpHandler(
           500,
           true
         );
+      // Safe diagnostic fields only: never log headers, tokens, request bodies,
+      // media URLs, transcript text, provider payloads, or access codes.
+      console.error(JSON.stringify({
+        event: "krc_youtube_http_error",
+        request_id: context.requestId,
+        correlation_id: context.correlationId,
+        route: path === PREFLIGHT ? "preflight" : path === LOOKUP ? "lookup"
+          : path === TRANSCRIPTIONS ? "start" : path === CAPABILITY ? "capabilities"
+          : SEGMENTS_PATH.test(path) ? "segments" : JOB_PATH.test(path) ? "status" : "unknown",
+        http_status: normalized.httpStatus,
+        error_code: normalized.code,
+        retryable: normalized.retryable
+      }));
       sendError(response, normalized, context, config.corsAllowedOrigin);
       return true;
     }
