@@ -11,3 +11,7 @@ Security gate remains conditional: no raw peer/header/key in observation output;
 ## Final full-suite result
 
 The same isolated checkout's `npm run check` finished successfully: TypeScript build PASS; **277/277 Node tests PASS**, 0 failed, exit code 0, test runtime 87.52 seconds (overall process ~100.67 seconds). Focused peer observation suite separately **7/7 PASS**. This supersedes the earlier full-suite pending note. No production deployment or instrumentation was performed. TypeScript IPv6 equivalent-text normalization remains an explicit design limitation for follow-up before any live instrumentation.
+
+## IPv6 normalization follow-up and regression
+
+Research-only change: normalize valid IPv6 socket-peer text via WHATWG URL hostname serialization before HMAC; IPv4 behavior unchanged. Added equivalent-IPv6 and distinct-IPv6 tests. On isolated `krc-cobalt` Node 24 checkout, TypeScript build PASS, focused peer module **9/9 PASS** (exit 0), full compiled Node suite **279/279 PASS**, zero failures, exit 0, ~86.15 seconds. This supersedes prior 277/277 baseline after two added tests. No production import or deployment. Privacy/retention design recorded in `docs/KRC_PEER_OBSERVATION_PRIVACY_RETENTION_GATE_2026-10-01.md`; design-only, not implemented.
