@@ -42,3 +42,16 @@ test("reject weak key and invalid peer", () => {
 test("fresh random keys differ", () => {
   assert.notDeepEqual(newObservationKey(), newObservationKey());
 });
+
+test("equivalent IPv6 spellings map to same tag", () => {
+  assert.equal(
+    observePeer("2001:db8::1", undefined, A).peer_tag,
+    observePeer("2001:0DB8:0000:0000:0000:0000:0000:0001", undefined, A).peer_tag
+  );
+});
+test("different IPv6 peers remain distinguishable", () => {
+  assert.notEqual(
+    observePeer("2001:db8::1", undefined, A).peer_tag,
+    observePeer("2001:db8::2", undefined, A).peer_tag
+  );
+});
