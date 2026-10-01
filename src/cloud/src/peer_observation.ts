@@ -30,14 +30,17 @@ export function observePeer(
   if (key.byteLength < 32) {
     throw new Error("observation key must contain at least 32 bytes");
   }
-  // Node's net.isIP validates IPv4/IPv6; this prototype intentionally
-  // avoids claiming equivalent normalization for alternate IPv6 spellings.
-  if (isIP(peer) === 0) {
+  const version = isIP(peer);
+  if (version === 0) {
     throw new Error("invalid socket peer");
   }
+  // WHATWG URL serializes equivalent IPv6 forms canonically.
+  const normalizedPeer = version === 6
+    ? new URL("http://[" + peer + "]/").hostname.slice(1, -1)
+    : peer;
   const peerTag = createHmac("sha256", key)
     .update("krc-voicebridge-peer-observation:v1\0")
-    .update(peer)
+    .update(normalizedPeer)
     .digest("hex")
     .slice(0, 24);
   let shape: HeaderShape;
