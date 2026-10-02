@@ -60,7 +60,7 @@ export class PeerWindowCoordinator {
 
   private purge(nowMs: number): void {
     while (this.summaries.length &&
-      (nowMs - this.summaries[0].endedAtMs >= this.retentionMs ||
+      (nowMs - this.summaries[0]!.endedAtMs >= this.retentionMs ||
        this.summaries.length > this.maxSummaries)) {
       this.summaries.shift();
     }
