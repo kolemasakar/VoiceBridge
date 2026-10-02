@@ -7,3 +7,7 @@ Added `src/cloud/src/peer_http_parity_harness.ts` and `src/cloud/tests/peer_http
 Isolated Node 24 `krc-cobalt`: `npm run build` PASS, focused HTTP parity tests **2/2 PASS**. Tested diagnostics OFF vs ON for HTTP statuses and Retry-After, health and OPTIONS bypass, spoofed forwarded headers not affecting socket-peer limiter key, and synthetic diagnostic exception fail-open behavior (four observed exceptions, identical HTTP outcomes, no exception text in responses).
 
 Important limitations: this proves parity only for the isolated harness, not production server integration; actual proxy peer topology and historical 429 cause remain unknown. The coordinator is externally clock-driven, not autonomously scheduled. Full regression test was started and remains pending until final summary is observed.
+
+## Full isolated regression result
+
+After the successful TypeScript build and 2/2 focused HTTP parity tests, the same isolated checkout's full Node test suite completed **295/295 PASS**, 0 failures, exit code 0, test runtime 88.12 seconds. This supersedes the pending result above. Production-server integration parity remains an outstanding gate.
