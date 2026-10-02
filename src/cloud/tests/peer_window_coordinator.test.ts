@@ -15,7 +15,7 @@ test("rotates exactly at boundary and retains aggregate only", () => {
   assert.equal(c.readSummaries(59_999).length, 0);
   const summaries = c.readSummaries(60_000);
   assert.equal(summaries.length, 1);
-  assert.equal(summaries[0].window_observations, 5);
+  assert.equal(summaries[0]!.window_observations, 5);
   assert.ok(!JSON.stringify(summaries).includes(peer("192.0.2.1").peer_tag));
 });
 test("suppresses low-volume windows and skips idle windows", () => {
