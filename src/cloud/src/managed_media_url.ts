@@ -183,7 +183,16 @@ export function normalizeManagedMediaUrl(value: string): string {
     const videosIndex = parts.findIndex((part) => part.toLowerCase() === "videos");
     if (videosIndex > 0 && safeFacebookToken(parts[videosIndex + 1])) {
       const ownerPath = parts.slice(0, videosIndex).join("/");
-      return `https://www.facebook.com/${ownerPath}/videos/${parts[videosIndex + 1]}/`;
+      const videoParts = parts.slice(videosIndex + 1);
+      // Public descriptive links have /videos/<slug>/<numeric-id>/.
+      // The ID, not the title slug, identifies the retrieved asset and job.
+      const videoId = videoParts.length === 2 && /^\d+$/.test(videoParts[1]!)
+        ? videoParts[1]!
+        : videoParts.length === 1 ? videoParts[0]! : undefined;
+      if (!safeFacebookToken(videoId)) {
+        return unsupportedUrl("Facebook video URLs must identify one public video.");
+      }
+      return `https://www.facebook.com/${ownerPath}/videos/${videoId}/`;
     }
 
     const postsIndex = parts.findIndex((part) => part.toLowerCase() === "posts");
