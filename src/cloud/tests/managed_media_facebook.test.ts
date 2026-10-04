@@ -120,3 +120,25 @@ test("Facebook AI fallback requires separately consented metadata duration and e
   assert.equal(duplicate.reused, true);
   assert.equal(provider.aiCalls, 1);
 });
+
+
+test("descriptive Facebook video URLs retain the numeric asset ID", () => {
+  const url = "https://www.facebook.com/NASASCaN/videos/how-nasa-uses-gravity-and-radio-waves-to-study-planets-and-moons/8368792419872400/?ref=sharing#fragment";
+  const canonical = "https://www.facebook.com/NASASCaN/videos/8368792419872400/";
+  assert.equal(normalizeManagedMediaUrl(url), canonical);
+  assert.equal(normalizeManagedMediaUrl(canonical), canonical);
+  const input = parseManagedMediaPreflightInput({ url, beta_access_code: ACCESS_CODE, language_hint: "en" });
+  assert.equal(input?.url, canonical);
+});
+
+test("Facebook videos with the same title but different IDs do not collide", () => {
+  assert.notEqual(
+    normalizeManagedMediaUrl("https://www.facebook.com/example.page/videos/same-title/123/"),
+    normalizeManagedMediaUrl("https://www.facebook.com/example.page/videos/same-title/456/")
+  );
+});
+
+test("Facebook video normalization rejects ambiguous trailing path segments", () => {
+  assert.throws(() => normalizeManagedMediaUrl("https://www.facebook.com/example.page/videos/title/not-an-id/"));
+  assert.throws(() => normalizeManagedMediaUrl("https://www.facebook.com/example.page/videos/title/123/extra/"));
+});
