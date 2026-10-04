@@ -9,6 +9,8 @@ import {
   resolveLanguagePair
 } from "./language_capabilities.js";
 import { FixedWindowRateLimiter } from "./rate_limit.js";
+import { newObservationKey, observePeer } from "./peer_observation.js";
+import { PeerWindowCoordinator } from "./peer_window_coordinator.js";
 import {
   InvalidSessionStateError,
   SessionStore,
@@ -224,6 +226,15 @@ function clientKey(request: IncomingMessage): string {
   return request.socket.remoteAddress || "unknown";
 }
 
+/**
+ * Isolated research opt-in only. No environment/config activation or public
+ * diagnostics endpoint. The factory is a trusted in-process test seam.
+ */
+export interface PeerDiagnosticResearchOptions {
+  enabled?: boolean;
+  createCoordinator?: (startMs: number) => PeerWindowCoordinator;
+}
+
 export function createVoiceBridgeServer(
   config: AppConfig,
   sessionStore = new SessionStore(),
@@ -251,11 +262,29 @@ export function createVoiceBridgeServer(
     azureSpeechKey: config.azureSpeechKey ?? null,
     azureSpeechRegion: config.azureSpeechRegion ?? "eastus",
     azureVoice: config.azureTtsVoice ?? "uk-UA-OstapNeural"
-  })
+  }),
+  peerDiagnostics: PeerDiagnosticResearchOptions = {}
 ) {
   const rateLimiter = new FixedWindowRateLimiter(
     config.rateLimitRequestsPerMinute
   );
+  // OFF allocates no key, coordinator, timer, or close listener.
+  let diagnosticKey: Buffer | undefined;
+  let diagnosticCoordinator: PeerWindowCoordinator | undefined;
+  if (peerDiagnostics.enabled === true) {
+    try {
+      diagnosticKey = newObservationKey();
+      const startMs = Date.now();
+      diagnosticCoordinator = peerDiagnostics.createCoordinator
+        ? peerDiagnostics.createCoordinator(startMs)
+        : new PeerWindowCoordinator(startMs);
+    } catch {
+      // Diagnostics must not prevent startup or disclose exception contents.
+      diagnosticKey?.fill(0);
+      diagnosticKey = undefined;
+      diagnosticCoordinator = undefined;
+    }
+  }
   const streamTickets = new StreamTicketStore();
   const selectedTtsVoice = ttsProvider.name === "azure"
     ? config.azureTtsVoice || "uk-UA-OstapNeural"
@@ -353,7 +382,23 @@ export function createVoiceBridgeServer(
       return;
     }
 
-    if (!rateLimiter.allow(clientKey(request))) {
+    // One unchanged socket-only limiter decision precedes authentication.
+    const allowed = rateLimiter.allow(clientKey(request));
+    if (diagnosticCoordinator && diagnosticKey) {
+      try {
+        const forwarded = request.headers["x-forwarded-for"];
+        const header = Array.isArray(forwarded) ? forwarded.join(",") : forwarded;
+        diagnosticCoordinator.record(
+          observePeer(clientKey(request), header, diagnosticKey),
+          allowed,
+          Date.now()
+        );
+      } catch {
+        // Fail open for diagnostics only; preserve the actual limiter decision.
+        // No raw IP, header, token, key or diagnostic exception is logged.
+      }
+    }
+    if (!allowed) {
       response.setHeader("retry-after", "60");
       sendError(
         response,
@@ -563,6 +608,20 @@ export function createVoiceBridgeServer(
       config.corsAllowedOrigin
     );
   });
+
+  if (diagnosticCoordinator && diagnosticKey) {
+    server.once("close", () => {
+      try {
+        diagnosticCoordinator?.clear(Date.now());
+      } catch {
+        // Cleanup failure is also isolated from server lifecycle.
+      } finally {
+        diagnosticKey?.fill(0);
+        diagnosticKey = undefined;
+        diagnosticCoordinator = undefined;
+      }
+    });
+  }
 
   attachStreamTransport(
     server,
