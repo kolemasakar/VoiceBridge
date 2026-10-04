@@ -505,3 +505,27 @@ test("Gemini YouTube HTTP route exposes consent preflight and rejects unconsente
     }
   }
 });
+
+test("Gemini numeric gateway errors preserve only safe metadata", async () => {
+  for (const reason of ["API_KEY_INVALID", "PRIVATE_SECRET_VALUE"]) {
+    let calls = 0;
+    const provider = new GeminiYoutubeDirectProvider("fixture-key", true, "gemini-3.7-flash",
+      (async () => {
+        calls += 1;
+        return new Response(JSON.stringify({error: {code: 400, status: "INVALID_ARGUMENT",
+          message: "secret-message", details: [{"@type": "type.googleapis.com/google.rpc.ErrorInfo",
+            domain: "googleapis.com", reason, metadata: {key: "secret-key"}}]}}), {status: 400});
+      }) as typeof fetch);
+    const engine = new PublicGeminiYoutubeEngine(new MediaBetaGate([ACCESS_CODE], 7200),
+      null, true, provider.model, {provider});
+    const job = await engine.start({url: YOUTUBE_URL, language_hint: "auto",
+      beta_access_code: ACCESS_CODE}, CONSENT);
+    assert.equal(job.status, "FAILED");
+    assert.equal(job.provider_error_code, "400");
+    assert.equal(job.provider_error_status, "INVALID_ARGUMENT");
+    assert.equal(job.provider_error_reason, reason === "API_KEY_INVALID" ? reason : null);
+    assert.equal(job.error?.retryable, false);
+    assert.equal(calls, 1);
+    assert.doesNotMatch(JSON.stringify(job), /secret-message|secret-key|PRIVATE_SECRET_VALUE/);
+  }
+});

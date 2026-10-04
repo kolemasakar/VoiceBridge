@@ -66,7 +66,8 @@ class GeminiYoutubeProviderHttpError extends MediaTranscriptError {
     httpStatus: number,
     retryable: boolean,
     readonly providerErrorCode: string | null,
-    readonly providerErrorStatus: string | null
+    readonly providerErrorStatus: string | null,
+    readonly providerErrorReason: string | null
   ) {
     super(code, message, httpStatus, retryable);
   }
@@ -84,6 +85,7 @@ type GeminiYoutubeJobView = Omit<
   provider_http_status: number | null;
   provider_error_code: string | null;
   provider_error_status: string | null;
+  provider_error_reason: string | null;
 };
 
 type GeminiYoutubeStoredRecord = Omit<ManagedMediaStoredRecord, "job"> & {
@@ -195,19 +197,34 @@ function youtubeUrl(value: string): string {
 function geminiProviderErrorMetadata(payload: Record<string, unknown>): {
   code: string | null;
   legacyStatus: string | null;
+  reason: string | null;
 } {
   const error = payload.error;
   if (!error || typeof error !== "object" || Array.isArray(error)) {
-    return { code: null, legacyStatus: null };
+    return { code: null, legacyStatus: null, reason: null };
   }
   const record = error as Record<string, unknown>;
   const code = typeof record.code === "string" && /^[a-z0-9_]{1,80}$/.test(record.code)
     ? record.code
-    : null;
+    : typeof record.code === "number" && Number.isInteger(record.code) && record.code >= 100 && record.code <= 599
+      ? String(record.code) : null;
   const legacyStatus = typeof record.status === "string" && /^[A-Z0-9_]{1,80}$/.test(record.status)
-    ? record.status
-    : null;
-  return { code, legacyStatus };
+    ? record.status : null;
+  const allowedReasons = new Set(["API_KEY_INVALID", "API_KEY_EXPIRED", "API_KEY_SERVICE_BLOCKED",
+    "API_KEY_HTTP_REFERRER_BLOCKED", "API_KEY_IP_ADDRESS_BLOCKED", "SERVICE_DISABLED",
+    "BILLING_DISABLED", "CONSUMER_INVALID", "RATE_LIMIT_EXCEEDED"]);
+  let reason: string | null = null;
+  for (const detail of Array.isArray(record.details) ? record.details : []) {
+    if (!detail || typeof detail !== "object" || Array.isArray(detail)) continue;
+    const value = detail as Record<string, unknown>;
+    if (value["@type"] === "type.googleapis.com/google.rpc.ErrorInfo"
+        && value.domain === "googleapis.com" && typeof value.reason === "string"
+        && allowedReasons.has(value.reason)) {
+      reason = value.reason;
+      break;
+    }
+  }
+  return { code, legacyStatus, reason };
 }
 
 function interactionText(payload: Record<string, unknown>): string {
@@ -331,7 +348,8 @@ export class GeminiYoutubeDirectProvider implements PublicGeminiYoutubeProvider 
         response.status,
         retryable,
         providerError.code,
-        providerError.legacyStatus
+        providerError.legacyStatus,
+        providerError.reason
       );
     }
 
@@ -618,6 +636,7 @@ export class PublicGeminiYoutubeEngine {
       provider_http_status: null,
       provider_error_code: null,
       provider_error_status: null,
+      provider_error_reason: null,
       error: null
     } satisfies GeminiYoutubeJobView;
 
@@ -676,6 +695,7 @@ export class PublicGeminiYoutubeEngine {
           provider_http_status: providerError?.httpStatus ?? null,
           provider_error_code: providerError?.providerErrorCode ?? null,
           provider_error_status: providerError?.providerErrorStatus ?? null,
+          provider_error_reason: providerError?.providerErrorReason ?? null,
           error: {
             code: normalized.code,
             message: normalized.message,
