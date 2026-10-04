@@ -4,29 +4,51 @@ import type { AppConfig } from "./config.js";
 import { createKrcManagedMediaService } from "./krc_managed_media_factory.js";
 import { createManagedAttachmentProbeHttpHandler } from "./managed_attachment_probe_http.js";
 import { createManagedMediaHttpHandler } from "./managed_media_http.js";
-import { createPublicCobaltMediaHttpHandler } from "./public_cobalt_media.js";
-import { createPublicGeminiYoutubeHttpHandler } from "./public_gemini_youtube.js";
+import {
+  createPublicCobaltMediaHttpHandler,
+  type PublicCobaltMediaEngine
+} from "./public_cobalt_media.js";
+import {
+  createPublicGeminiYoutubeHttpHandler,
+  type PublicGeminiYoutubeEngine
+} from "./public_gemini_youtube.js";
 import { PublicMediaAdmissionController } from "./public_media_admission.js";
 import { createVoiceBridgeServer } from "./server.js";
+import type { ManagedMediaService } from "./managed_media_service.js";
 
 type RequestListener = (
   request: IncomingMessage,
   response: ServerResponse
 ) => unknown;
 
-export function createManagedVoiceBridgeServer(config: AppConfig) {
+/**
+ * Trusted in-process dependency injection for isolated integration tests.
+ * Production callers omit this argument and retain the existing factories.
+ */
+export interface ManagedVoiceBridgeDependencies {
+  managedService?: ManagedMediaService;
+  youtubeEngine?: PublicGeminiYoutubeEngine;
+  cobaltEngine?: PublicCobaltMediaEngine;
+}
+
+export function createManagedVoiceBridgeServer(
+  config: AppConfig,
+  dependencies: ManagedVoiceBridgeDependencies = {}
+) {
   const server = createVoiceBridgeServer(config);
   const legacyListeners = server.listeners("request") as RequestListener[];
   server.removeAllListeners("request");
 
   const attachmentProbe = createManagedAttachmentProbeHttpHandler(config);
-  const krcManaged = createKrcManagedMediaService(config);
+  const krcManaged = dependencies.managedService
+    ? { service: dependencies.managedService }
+    : createKrcManagedMediaService(config);
   const managedMedia = createManagedMediaHttpHandler(config, krcManaged.service);
   const publicGeminiYoutube = config.mediaPublicMode
-    ? createPublicGeminiYoutubeHttpHandler(config)
+    ? createPublicGeminiYoutubeHttpHandler(config, dependencies.youtubeEngine)
     : null;
   const publicCobaltMedia = config.mediaPublicMode
-    ? createPublicCobaltMediaHttpHandler(config)
+    ? createPublicCobaltMediaHttpHandler(config, dependencies.cobaltEngine)
     : null;
   const publicAdmission = new PublicMediaAdmissionController(config);
 
