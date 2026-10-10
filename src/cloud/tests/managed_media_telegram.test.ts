@@ -129,3 +129,41 @@ test("A9.9 Telegram failed free-only job permits a fresh explicit retry", async 
   assert.equal(pipeline.retrieveCalls, 2);
   assert.equal(pipeline.sttCalls, 0);
 });
+
+
+test("free Telegram lookup uses route identity and never repeats retrieval or STT", async () => {
+  const pipeline = new FakeTelegramPipeline();
+  const service = new ManagedMediaService(new MediaBetaGate([ACCESS_CODE, "different-owner-code"], 7200), null, undefined, {telegramPipeline:pipeline});
+  const input = {url:TELEGRAM_URL, language_hint:"uk" as const, beta_access_code:ACCESS_CODE};
+  const completed = await service.startTelegram(input);
+  const found = await service.lookupFreeRoute(input);
+  assert.equal(found?.job_id, completed.job_id);
+  assert.equal(found?.reused, true);
+  assert.equal(await service.lookupFreeRoute({...input,language_hint:"en"}), null);
+  assert.equal(await service.lookupFreeRoute({...input,beta_access_code:"different-owner-code"}), null);
+  assert.equal(pipeline.retrieveCalls, 1);
+  assert.equal(pipeline.sttCalls, 1);
+});
+
+test("free lookup follows an existing retry chain without creating a retry", async () => {
+  const pipeline = new FakeTelegramPipeline();
+  const retrieve = pipeline.retrieve.bind(pipeline);
+  let fail = true;
+  pipeline.retrieve = async url => {
+    if (fail) { pipeline.retrieveCalls += 1; throw new MediaTranscriptError("TELEGRAM_MEDIA_UNAVAILABLE","fixture",422,false); }
+    return retrieve(url);
+  };
+  const service = new ManagedMediaService(new MediaBetaGate([ACCESS_CODE],7200),null,undefined,{telegramPipeline:pipeline});
+  const input = {url:TELEGRAM_URL,language_hint:"auto" as const,beta_access_code:ACCESS_CODE};
+  const failed = await service.startTelegram(input);
+  assert.equal(failed.status,"FAILED");
+  assert.equal((await service.lookupFreeRoute(input))?.job_id,failed.job_id);
+  assert.equal(pipeline.retrieveCalls,1);
+  fail = false;
+  const completed = await service.startTelegram(input);
+  assert.equal(completed.status,"COMPLETED");
+  assert.notEqual(completed.job_id,failed.job_id);
+  assert.equal((await service.lookupFreeRoute(input))?.job_id,completed.job_id);
+  assert.equal(pipeline.retrieveCalls,2);
+  assert.equal(pipeline.sttCalls,1);
+});

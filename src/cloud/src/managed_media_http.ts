@@ -543,7 +543,9 @@ export function createManagedMediaHttpHandler(
             false
           );
         }
-        const job = await service.lookup(input);
+        const job = authScope === "r3e3_facebook" || authScope === "r3e4_telegram"
+          ? await service.lookupFreeRoute(input)
+          : await service.lookup(input);
         if (!job) {
           throw new MediaTranscriptError(
             "MEDIA_TRANSCRIPT_NOT_FOUND",

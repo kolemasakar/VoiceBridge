@@ -197,7 +197,7 @@ test("R3-E4 scoped bearer supports Telegram lookup and blocks cross-platform job
     configured: true,
     storeKind: "postgres",
     durableStore: true,
-    async lookup(input: { url: string }) {
+    async lookupFreeRoute(input: { url: string }) {
       lookupCalls += 1;
       assert.equal(input.url, TELEGRAM_URL);
       return null;

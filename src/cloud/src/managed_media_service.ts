@@ -957,6 +957,30 @@ export class ManagedMediaService {
     return this.publicJob(record.job, true);
   }
 
+  async lookupFreeRoute(input: ManagedMediaPreflightInput): Promise<ManagedMediaJobView | null> {
+    this.authorizeAccess(input.beta_access_code);
+    await this.ensureStore();
+    const sourceUrl = normalizeManagedMediaUrl(input.url);
+    const platform = managedMediaPlatform(sourceUrl);
+    if (platform !== "facebook" && platform !== "telegram") return null;
+    let requestKey = (platform === "facebook" ? managedFacebookFallbackRequestKey : managedTelegramRequestKey)(
+      sourceUrl, input.language_hint, input.beta_access_code
+    );
+    let latest: ManagedMediaStoredRecord | null = null;
+    // Follow only already-existing free retry records. No reservation, writes,
+    // orphan reconciliation or provider work is permitted during lookup.
+    for (let depth = 0; depth < 16; depth += 1) {
+      const record = await this.store.findByRequestKey(requestKey);
+      if (!record) break;
+      if (record.accessCodeDigest !== managedMediaAccessDigest(input.beta_access_code)) return null;
+      latest = record;
+      if (record.job.status !== "FAILED" || record.job.credit_charge_uncertain ||
+          record.job.credits_charged > 0 || (record.job.metadata_credits_charged ?? 0) > 0) break;
+      requestKey = managedFreeRetryRequestKey(requestKey, record.job.job_id);
+    }
+    return latest ? this.publicJob(latest.job, true) : null;
+  }
+
   async facebookMetadataPreflight(
     jobId: string,
     accessCode: string

@@ -268,7 +268,7 @@ test("R3-E3 scoped bearer permits Facebook durable lookup without provider work"
     configured: true,
     storeKind: "postgres",
     durableStore: true,
-    async lookup(input: { url: string }) {
+    async lookupFreeRoute(input: { url: string }) {
       lookupCalls += 1;
       assert.equal(input.url, FACEBOOK_URL);
       return null;
