@@ -30,3 +30,7 @@
 - Повну транскрипцію не архівовано в репозиторій. Core pilot завершено з обмеженнями.
 - Успіх цього YouTube запуску не є новою живою перевіркою free lookup Facebook/Telegram; для них зберігаються попередні live результати й ізольовані HTTPS tests.
 - VoiceBridge app log: service_started=2026-10-10T10:18:30.270266163Z після зовнішнього health GET; 429 request-log query за 10:10–10:25 UTC порожній і не визначає причину помилки.
+
+## Пауза та передача — 2026-10-10T13:48:57+03:00
+Власник наказав зафіксувати проєкт і документацію та перейти в новий чат. Нових provider jobs у цьому чаті не запускати. Після переходу: уточнити джерело Render 429, потім провести довші живі перевірки Instagram/Facebook/Telegram через наявні free маршрути.
+Повний checkpoint: https://github.com/kolemasakar/K_Research_Critic/blob/agent/krc-public-media-r3-integration/docs/media/KRC_VOICEBRIDGE_HANDOFF_2026-10-10.md .
