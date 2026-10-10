@@ -504,6 +504,34 @@ test("health reports cloud 0.6.0 and pipeline capabilities", async () => {
   assert.equal(body.correlation_id, "test-correlation");
 });
 
+test("health bypasses the global request rate limiter", async () => {
+  const lowRateConfig: AppConfig = {
+    ...BASE_CONFIG,
+    rateLimitRequestsPerMinute: 1
+  };
+  const server = createVoiceBridgeServer(
+    lowRateConfig,
+    undefined,
+    new ScriptedSttProvider(),
+    new FakeTranslationProvider()
+  );
+  await new Promise<void>((resolve, reject) => {
+    server.once("error", reject);
+    server.listen(0, "127.0.0.1", () => resolve());
+  });
+  const address = server.address() as AddressInfo;
+  const baseUrl = `http://127.0.0.1:${address.port}`;
+
+  try {
+    const first = await api(baseUrl, "/api/v1/health", {}, null);
+    const second = await api(baseUrl, "/api/v1/health", {}, null);
+    assert.equal(first.status, 200);
+    assert.equal(second.status, 200);
+  } finally {
+    await closeServer(server);
+  }
+});
+
 test("configuration keeps Gemini optional with a validated model", () => {
   assert.throws(
     () => loadConfig({ TEST_ACCESS_TOKEN: "short" }),

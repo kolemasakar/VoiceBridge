@@ -1,5 +1,5 @@
 import { loadConfig } from "./config.js";
-import { listen } from "./server.js";
+import { listen } from "./managed_server.js";
 import { configuredAssemblyAiSpeechModel } from "./stt_provider.js";
 import { resolveGeminiSttModel } from "./gemini_stt_provider.js";
 
@@ -16,7 +16,8 @@ try {
       service: "voicebridge-cloud",
       url,
       stt_provider: sttProvider,
-      stt_model: sttModel
+      stt_model: sttModel,
+      krc_media_stt_provider: config.krcMediaSttProvider ?? "assemblyai"
     })
   );
 
