@@ -1,3 +1,4 @@
+import { randomUUID } from "node:crypto";
 import { spawn } from "node:child_process";
 import type {
   ManagedMediaJobStore,
@@ -46,6 +47,8 @@ export class ManagedMediaPersistentStore implements ManagedMediaJobStore {
   readonly durable = true;
   readonly kind = "postgres" as const;
   private initialized: Promise<void> | null = null;
+  private readonly workerToken = randomUUID();
+  private readonly ownedJobs = new Set<string>();
 
   constructor(private readonly databaseUrl: string) {}
 
@@ -184,13 +187,14 @@ DELETE FROM krc_managed_media_jobs
 WHERE request_key='${record.requestKey}' AND expires_at <= now();
 INSERT INTO krc_managed_media_jobs (
   job_id, request_key, access_code_digest, status,
-  payload, segments, expires_at, updated_at
+  payload, segments, expires_at, updated_at, lease_owner, lease_heartbeat_at
 ) VALUES (
   '${record.job.job_id}', '${record.requestKey}', '${record.accessCodeDigest}',
   '${record.job.status}',
   convert_from(decode('${payloadHex}', 'hex'), 'UTF8')::jsonb,
   convert_from(decode('${segmentsHex}', 'hex'), 'UTF8')::jsonb,
-  to_timestamp(${expirySeconds}), to_timestamp(${updatedSeconds})
+  to_timestamp(${expirySeconds}), to_timestamp(${updatedSeconds}),
+  '${this.workerToken}', now()
 )
 ON CONFLICT (request_key) DO UPDATE SET
   request_key = EXCLUDED.request_key
@@ -201,6 +205,9 @@ RETURNING job_id, request_key, access_code_digest, status,
 `);
     const parsed = this.parseRow(output);
     if (!parsed) throw new Error("Managed media reservation did not return a row.");
+    if (parsed.job.job_id === record.job.job_id) {
+      this.ownedJobs.add(record.job.job_id);
+    }
     return {
       created: parsed.job.job_id === record.job.job_id,
       record: parsed
@@ -214,16 +221,17 @@ RETURNING job_id, request_key, access_code_digest, status,
     const segmentsHex = hexJson(record.segments);
     const expirySeconds = Date.parse(record.expiresAt) / 1000;
     const updatedSeconds = Date.parse(record.job.updated_at) / 1000;
-    await this.run(`
+    const output = await this.run(`
 INSERT INTO krc_managed_media_jobs (
   job_id, request_key, access_code_digest, status,
-  payload, segments, expires_at, updated_at
+  payload, segments, expires_at, updated_at, lease_owner, lease_heartbeat_at
 ) VALUES (
   '${record.job.job_id}', '${record.requestKey}', '${record.accessCodeDigest}',
   '${record.job.status}',
   convert_from(decode('${payloadHex}', 'hex'), 'UTF8')::jsonb,
   convert_from(decode('${segmentsHex}', 'hex'), 'UTF8')::jsonb,
-  to_timestamp(${expirySeconds}), to_timestamp(${updatedSeconds})
+  to_timestamp(${expirySeconds}), to_timestamp(${updatedSeconds}),
+  '${this.workerToken}', now()
 )
 ON CONFLICT (job_id) DO UPDATE SET
   status = EXCLUDED.status,
@@ -235,8 +243,15 @@ ON CONFLICT (job_id) DO UPDATE SET
   ),
   segments = EXCLUDED.segments,
   expires_at = EXCLUDED.expires_at,
-  updated_at = EXCLUDED.updated_at;
+  updated_at = EXCLUDED.updated_at
+WHERE krc_managed_media_jobs.lease_owner = '${this.workerToken}'
+  AND krc_managed_media_jobs.status = 'PROCESSING'
+RETURNING job_id;
 `);
+    // An old worker must never report a successful late commit.
+    if (!output.split(/\r?\n/).includes(record.job.job_id)) {
+      throw new Error("Managed media fenced write rejected: lease owner changed.");
+    }
   }
 
   async get(jobId: string): Promise<ManagedMediaStoredRecord | null> {
@@ -254,6 +269,51 @@ LIMIT 1;
     return this.parseRow(output);
   }
 
+  async heartbeatProcessing(jobId: string): Promise<boolean> {
+    if (!JOB_ID.test(jobId) || !this.ownedJobs.has(jobId)) return false;
+    await this.ready();
+    const output = await this.run(`
+UPDATE krc_managed_media_jobs
+SET lease_heartbeat_at=now()
+WHERE job_id='${jobId}' AND status='PROCESSING'
+  AND lease_owner='${this.workerToken}'
+RETURNING job_id;
+`);
+    return output.split(/\r?\n/).includes(jobId);
+  }
+
+  async reconcileProcessing(
+    existing: ManagedMediaStoredRecord,
+    failed: ManagedMediaStoredRecord
+  ): Promise<ManagedMediaStoredRecord> {
+    validateRecord(existing);
+    validateRecord(failed);
+    if (existing.job.job_id !== failed.job.job_id ||
+        existing.requestKey !== failed.requestKey) {
+      throw new Error("Managed lease reconciliation identity mismatch.");
+    }
+    await this.ready();
+    const hex = hexJson(failed.job);
+    const expiry = Date.parse(failed.expiresAt) / 1000;
+    // The 90-second lease grace covers startup and transient DB latency.
+    // UPDATE is atomic: a living worker refreshes its lease; only stale ones
+    // may be failed. A stale worker is fenced from subsequent writes.
+    await this.run(`
+UPDATE krc_managed_media_jobs
+SET status='FAILED',
+    payload=convert_from(decode('${hex}', 'hex'),'UTF8')::jsonb,
+    updated_at=now(), expires_at=to_timestamp(${expiry}),
+    lease_owner='${this.workerToken}', lease_heartbeat_at=now()
+WHERE job_id='${existing.job.job_id}' AND request_key='${existing.requestKey}'
+  AND status='PROCESSING'
+  AND (lease_heartbeat_at IS NULL OR
+       lease_heartbeat_at < now()-interval '90 seconds');
+`);
+    const current = await this.get(existing.job.job_id);
+    if (!current) throw new Error("Managed lease job unavailable after reconciliation.");
+    return current;
+  }
+
   private async initialize(): Promise<void> {
     await this.run(`
 SELECT pg_advisory_lock(hashtext('krc_media_schema_init'));
@@ -265,8 +325,17 @@ CREATE TABLE IF NOT EXISTS krc_managed_media_jobs (
   payload jsonb NOT NULL,
   segments jsonb NOT NULL DEFAULT '[]'::jsonb,
   expires_at timestamptz NOT NULL,
-  updated_at timestamptz NOT NULL
+  updated_at timestamptz NOT NULL,
+  lease_owner text,
+  lease_heartbeat_at timestamptz
 );
+ALTER TABLE krc_managed_media_jobs
+  ADD COLUMN IF NOT EXISTS lease_owner text;
+ALTER TABLE krc_managed_media_jobs
+  ADD COLUMN IF NOT EXISTS lease_heartbeat_at timestamptz;
+UPDATE krc_managed_media_jobs
+SET lease_heartbeat_at=now()
+WHERE status='PROCESSING' AND lease_heartbeat_at IS NULL;
 CREATE INDEX IF NOT EXISTS krc_managed_media_jobs_active_idx
   ON krc_managed_media_jobs (status, expires_at);
 CREATE INDEX IF NOT EXISTS krc_managed_media_jobs_updated_idx
