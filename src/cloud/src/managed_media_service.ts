@@ -223,6 +223,10 @@ export interface ManagedMediaJobStore {
   findByRequestKey(requestKey: string): Promise<ManagedMediaStoredRecord | null>;
   reserve(record: ManagedMediaStoredRecord): Promise<ManagedMediaStoreReservation>;
   put(record: ManagedMediaStoredRecord): Promise<void>;
+  /** Keep the processing lease alive while the provider request is in flight. */
+  heartbeatProcessing?(jobId: string): Promise<boolean>;
+  /** Atomically reconcile an expired lease, or return the still-active record. */
+  reconcileProcessing?(record: ManagedMediaStoredRecord, failed: ManagedMediaStoredRecord): Promise<ManagedMediaStoredRecord>;
   get(jobId: string): Promise<ManagedMediaStoredRecord | null>;
   reserveSttSeconds?(
     jobId: string,
@@ -568,6 +572,25 @@ export class ManagedMediaService {
   private readonly store: ManagedMediaJobStore;
   private readonly jobTtlSeconds: number;
   private readonly inFlight = new Set<string>();
+  private readonly heartbeatTimers = new Map<string, ReturnType<typeof setInterval>>();
+  private markInFlight(requestKey: string, jobId: string): void {
+    this.inFlight.add(requestKey);
+    if (!this.store.heartbeatProcessing) return;
+    const timer = setInterval(() => {
+      void this.store.heartbeatProcessing!(jobId).catch(() => {
+        // A failed heartbeat never authorizes another provider start.
+        // The durable lease and fenced write decide final ownership.
+      });
+    }, 15000);
+    timer.unref();
+    this.heartbeatTimers.set(requestKey, timer);
+  }
+  private unmarkInFlight(requestKey: string): void {
+    this.inFlight.delete(requestKey);
+    const timer = this.heartbeatTimers.get(requestKey);
+    if (timer) clearInterval(timer);
+    this.heartbeatTimers.delete(requestKey);
+  }
   private storeReady: Promise<void> | null = null;
 
   constructor(
@@ -737,6 +760,9 @@ export class ManagedMediaService {
     };
     interrupted.expiresAt = this.expiryFrom(updatedAt, interrupted.job);
     interrupted.expiresAt = this.expiryFrom(updatedAt, interrupted.job);
+    if (this.store.reconcileProcessing) {
+      return this.store.reconcileProcessing(record, interrupted);
+    }
     await this.store.put(interrupted);
     return interrupted;
   }
@@ -780,8 +806,13 @@ export class ManagedMediaService {
           expiresAt: this.expiryFrom(updatedAt, existing.job)
         };
         interrupted.expiresAt = this.expiryFrom(updatedAt, interrupted.job);
-        await this.store.put(interrupted);
-        requestKey = managedFreeRetryRequestKey(requestKey, interrupted.job.job_id);
+        const resolved = this.store.reconcileProcessing
+          ? await this.store.reconcileProcessing(existing, interrupted)
+          : (await this.store.put(interrupted), interrupted);
+        if (resolved.job.status === "PROCESSING") return { requestKey, existing: resolved };
+        if (resolved.job.status === "COMPLETED") return { requestKey, existing: resolved };
+        if (resolved.job.credit_charge_uncertain) return { requestKey, existing: resolved };
+        requestKey = managedFreeRetryRequestKey(requestKey, resolved.job.job_id);
         continue;
       }
       if (existing.job.status === "FAILED") {
@@ -1295,7 +1326,7 @@ export class ManagedMediaService {
       return this.publicJob(resolved.job, true);
     }
 
-    this.inFlight.add(requestKey);
+    this.markInFlight(requestKey, job.job_id);
     try {
       const stt = await this.attachmentPipeline!.transcribe(
         file,
@@ -1358,7 +1389,7 @@ export class ManagedMediaService {
       await this.store.put(failed);
       return this.publicJob(failed.job, false);
     } finally {
-      this.inFlight.delete(requestKey);
+      this.unmarkInFlight(requestKey);
     }
   }
 
@@ -1430,7 +1461,7 @@ export class ManagedMediaService {
       return this.publicJob(resolved.job, true);
     }
 
-    this.inFlight.add(requestKey);
+    this.markInFlight(requestKey, job.job_id);
     try {
       const asset = await this.telegramPipeline!.retrieve(sourceUrl);
       const stt = await this.telegramPipeline!.transcribe(
@@ -1496,7 +1527,7 @@ export class ManagedMediaService {
       await this.store.put(failed);
       return this.publicJob(failed.job, false);
     } finally {
-      this.inFlight.delete(requestKey);
+      this.unmarkInFlight(requestKey);
     }
   }
 
@@ -1568,7 +1599,7 @@ export class ManagedMediaService {
       return this.publicJob(resolved.job, true);
     }
 
-    this.inFlight.add(requestKey);
+    this.markInFlight(requestKey, job.job_id);
     try {
       const freeResult = await this.facebookPipeline!.freeRetrieve(sourceUrl);
       const diagnostic = isManagedFacebookFreeRetrievalFailure(freeResult)
@@ -1629,7 +1660,7 @@ export class ManagedMediaService {
       await this.store.put(failed);
       return this.publicJob(failed.job, false);
     } finally {
-      this.inFlight.delete(requestKey);
+      this.unmarkInFlight(requestKey);
     }
   }
 
@@ -1908,7 +1939,7 @@ export class ManagedMediaService {
       return this.publicJob(resolved.job, true);
     }
 
-    this.inFlight.add(requestKey);
+    this.markInFlight(requestKey, job.job_id);
     try {
       const result = await this.transcriptProvider!.getNativeTranscript(
         sourceUrl,
@@ -1978,7 +2009,7 @@ export class ManagedMediaService {
     await this.store.put(failed);
       return this.publicJob(failed.job, false);
     } finally {
-      this.inFlight.delete(requestKey);
+      this.unmarkInFlight(requestKey);
     }
   }
 
