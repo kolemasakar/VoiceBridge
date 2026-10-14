@@ -529,3 +529,17 @@ test("Gemini numeric gateway errors preserve only safe metadata", async () => {
     assert.doesNotMatch(JSON.stringify(job), /secret-message|secret-key|PRIVATE_SECRET_VALUE/);
   }
 });
+
+
+test("Gemini YouTube outbound request has a bounded deadline", async () => {
+  let signal: AbortSignal | undefined;
+  const provider = new GeminiYoutubeDirectProvider("fixture-key", true, "gemini-3.8-flash",
+    (async (_url, init) => {
+      signal = init?.signal ?? undefined;
+      return new Response(JSON.stringify({output_text: "Verified sample transcript"}), {status: 200});
+    }) as typeof fetch);
+  const result = await provider.transcribe(YOUTUBE_URL, "auto");
+  assert.ok(signal, "Gemini HTTP call requires an abort signal");
+  assert.equal(signal?.aborted, false);
+  assert.equal(result.transcript_text, "Verified sample transcript");
+});
