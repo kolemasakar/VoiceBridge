@@ -1053,7 +1053,14 @@ export function createPublicCobaltMediaHttpHandler(
       if (method === "GET" && segmentsMatch?.[1]) {
         if (authScope === "r3e2_instagram") {
           const scopedJob = await engine.get(segmentsMatch[1]);
-          if (!scopedJob) return false;
+          if (!scopedJob) {
+            throw new MediaTranscriptError(
+              "MEDIA_TRANSCRIPT_NOT_FOUND",
+              "The Instagram media job was not found.",
+              404,
+              false
+            );
+          }
           requireR3e2InstagramScope(authScope, scopedJob.source_url);
         }
         const { cursor, limit } = pagination(requestUrl);
@@ -1066,7 +1073,17 @@ export function createPublicCobaltMediaHttpHandler(
       const jobMatch = JOB_PATH.exec(path);
       if (method === "GET" && jobMatch?.[1]) {
         const job = await engine.get(jobMatch[1]);
-        if (!job) return false;
+        if (!job) {
+          if (authScope === "r3e2_instagram") {
+            throw new MediaTranscriptError(
+              "MEDIA_TRANSCRIPT_NOT_FOUND",
+              "The Instagram media job was not found.",
+              404,
+              false
+            );
+          }
+          return false;
+        }
         requireR3e2InstagramScope(authScope, job.source_url);
         sendJson(response, 200, { request_id: context.requestId, ...job }, context, config.corsAllowedOrigin);
         return true;
