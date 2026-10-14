@@ -437,3 +437,42 @@ test("public Cobalt handler delegates R3-E3 and R3-E4 scoped managed paths", asy
     await close(server);
   }
 });
+
+test("E2 scoped missing status and segments return 404 without unauthenticated fallback", async () => {
+  const retriever = new FixtureRetriever();
+  const stt = new FixtureStt();
+  const config = publicConfig();
+  const engine = new PublicCobaltMediaEngine(
+    new MediaBetaGate([ACCESS_CODE], 7200), null, null, null, { retriever, stt }
+  );
+  const handler = createPublicCobaltMediaHttpHandler(config, engine);
+  let fallbackCalls = 0;
+  const server = createServer(async (request, response) => {
+    if (await handler.handle(request, response)) return;
+    fallbackCalls += 1;
+    response.statusCode = 401;
+    response.end("fallback unauthorized");
+  });
+  const base = await listen(server);
+  const jobId = "KRCM_00000000-0000-4000-8000-000000000000";
+  try {
+    for (const suffix of ["", "/segments?cursor=0&limit=20"]) {
+      const response = await fetch(base + "/api/v1/media/managed/transcriptions/" + jobId + suffix, {
+        headers: { authorization: "Bearer " + R3E2_ACTION_TOKEN }
+      });
+      assert.equal(response.status, 404);
+      const body = await response.json() as { error?: { code?: string } };
+      assert.equal(body.error?.code, "MEDIA_TRANSCRIPT_NOT_FOUND");
+    }
+    assert.equal(fallbackCalls, 0);
+    assert.equal(retriever.calls, 0);
+    assert.equal(stt.calls, 0);
+    const general = await fetch(base + "/api/v1/media/managed/transcriptions/" + jobId, {
+      headers: { authorization: "Bearer " + ACTION_TOKEN }
+    });
+    assert.equal(general.status, 401);
+    assert.equal(fallbackCalls, 1);
+  } finally {
+    await close(server);
+  }
+});
