@@ -301,6 +301,7 @@ export class GeminiYoutubeDirectProvider implements PublicGeminiYoutubeProvider 
     try {
       response = await this.fetchImpl(this.interactionsUrl, {
         method: "POST",
+        signal: AbortSignal.timeout(120_000),
         headers: {
           "x-goog-api-key": this.apiKey,
           "content-type": "application/json"
