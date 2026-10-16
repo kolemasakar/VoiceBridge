@@ -234,3 +234,28 @@ test("Supadata public wrapper refuses paid plans before a credit-consuming reque
   );
   assert.equal(fixture.nativeCalls, 0);
 });
+
+
+test("Gemini E1 starts share managed rate and concurrency limits; reads stay available", () => {
+  const token = "e1-dedicated-action-token-0123456789";
+  const config = loadConfig(publicEnvironment({ KRC_MEDIA_R3E1_ACTION_TOKEN: token }));
+  let now = 1_000_000;
+  const gate = new PublicMediaAdmissionController(config, () => now);
+  const first = gate.admit(request("/api/v1/media/youtube-gemini/transcriptions", token, "POST"), responseFixture().response);
+  now += 1000;
+  const blocked = responseFixture();
+  assert.equal(gate.admit(request("/api/v1/media/managed/transcriptions", ACTION_TOKEN, "POST"), blocked.response).handled, true);
+  assert.match(blocked.state.body, /MEDIA_PUBLIC_CONCURRENCY_LIMIT/);
+  for (const path of ["preflight", "lookup", "transcriptions/KRCM_test", "transcriptions/KRCM_test/segments"]) {
+    const read = responseFixture();
+    gate.admit(request(`/api/v1/media/youtube-gemini/${path}`, token, path === "preflight" || path === "lookup" ? "POST" : "GET"), read.response);
+    assert.equal(read.state.ended, false);
+  }
+  first.release();
+  first.release();
+  const next = gate.admit(request("/api/v1/media/youtube-gemini/transcriptions", token, "POST"), responseFixture().response);
+  next.release();
+  const fast = responseFixture();
+  assert.equal(gate.admit(request("/api/v1/media/youtube-gemini/transcriptions", token, "POST"), fast.response).handled, true);
+  assert.match(fast.state.body, /MEDIA_PUBLIC_FREE_TIER_RATE_LIMIT/);
+});

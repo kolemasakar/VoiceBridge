@@ -4,6 +4,7 @@ import { authenticate } from "./auth.js";
 import type { AppConfig } from "./config.js";
 
 const MANAGED_MEDIA_ROOT = "/api/v1/media/managed";
+const YOUTUBE_MEDIA_ROOT = "/api/v1/media/youtube-gemini";
 const MANAGED_MEDIA_START = `${MANAGED_MEDIA_ROOT}/transcriptions`;
 
 export const SUPADATA_FREE_MONTHLY_CREDITS = 100;
@@ -20,7 +21,9 @@ export function derivePublicMediaAdmissionCode(actionToken: string): string {
 export function isManagedMediaRequest(request: IncomingMessage): boolean {
   const url = new URL(request.url || "/", "http://voicebridge.local");
   return url.pathname === MANAGED_MEDIA_ROOT ||
-    url.pathname.startsWith(`${MANAGED_MEDIA_ROOT}/`);
+    url.pathname.startsWith(`${MANAGED_MEDIA_ROOT}/`) ||
+    url.pathname === YOUTUBE_MEDIA_ROOT ||
+    url.pathname.startsWith(`${YOUTUBE_MEDIA_ROOT}/`);
 }
 
 export function startsManagedMediaProviderWork(
@@ -28,7 +31,8 @@ export function startsManagedMediaProviderWork(
 ): boolean {
   if ((request.method || "GET").toUpperCase() !== "POST") return false;
   const url = new URL(request.url || "/", "http://voicebridge.local");
-  return url.pathname === MANAGED_MEDIA_START;
+  return url.pathname === MANAGED_MEDIA_START ||
+    url.pathname === `${YOUTUBE_MEDIA_ROOT}/transcriptions`;
 }
 
 export interface PublicMediaAdmissionLease {
@@ -86,7 +90,9 @@ export class PublicMediaAdmissionController {
       return noLease();
     }
 
-    const tokens = [this.config.mediaActionToken, this.config.mediaR39ActionToken]
+    const tokens = [this.config.mediaActionToken, this.config.mediaR39ActionToken,
+      this.config.mediaR3e1ActionToken, this.config.mediaR3e2ActionToken,
+      this.config.mediaR3e3ActionToken, this.config.mediaR3e4ActionToken]
       .filter((token): token is string => Boolean(token));
     if (tokens.length === 0) return noLease();
 

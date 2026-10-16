@@ -171,7 +171,11 @@ export interface ManagedMediaJobView {
     | "attachment_upload_stt";
   detected_language: string | null;
   available_languages: string[];
+  /** Internal retrieval credits; not a provider invoice or free-balance reading. */
   credits_charged: number;
+  provider_billing_verified?: false;
+  provider_cost_usd?: null;
+  provider_free_balance_usd?: null;
   credits_remaining_estimate: number;
   credit_charge_uncertain: boolean;
   reused: boolean;
@@ -2232,6 +2236,9 @@ export class ManagedMediaService {
   private publicJob(job: ManagedMediaJobView, reused: boolean): ManagedMediaJobView {
     return {
       ...job,
+      provider_billing_verified: false,
+      provider_cost_usd: null,
+      provider_free_balance_usd: null,
       reused,
       available_languages: [...job.available_languages],
       error: job.error ? { ...job.error } : null

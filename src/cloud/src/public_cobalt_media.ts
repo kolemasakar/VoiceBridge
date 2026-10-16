@@ -552,6 +552,9 @@ export class PublicCobaltMediaEngine {
   private publicJob(job: PublicCobaltJobView, reused: boolean): PublicCobaltJobView {
     return {
       ...structuredClone(job),
+      provider_billing_verified: false,
+      provider_cost_usd: null,
+      provider_free_balance_usd: null,
       reused
     };
   }

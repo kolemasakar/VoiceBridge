@@ -521,7 +521,8 @@ export class PublicGeminiYoutubeEngine {
   }
 
   private publicJob(job: GeminiYoutubeJobView, reused: boolean): GeminiYoutubeJobView {
-    return { ...structuredClone(job), reused };
+    return { ...structuredClone(job), reused, provider_billing_verified: false,
+      provider_cost_usd: null, provider_free_balance_usd: null };
   }
 
   async preflight(input: ManagedMediaPreflightInput) {

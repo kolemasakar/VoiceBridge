@@ -282,6 +282,9 @@ test("Gemini YouTube engine requires explicit Free Tier data-use consent before 
 
   const first = await engine.start(input, CONSENT);
   assert.equal(first.status, "COMPLETED");
+  assert.equal(first.provider_billing_verified, false);
+  assert.equal(first.provider_cost_usd, null);
+  assert.equal(first.provider_free_balance_usd, null);
   assert.equal(first.provider, "gemini");
   assert.equal(first.provider_mode, "youtube_gemini_direct");
   assert.equal(first.retrieval_provider, "gemini_youtube_url");
