@@ -481,7 +481,7 @@ test("Cobalt HTTP errors expose only safe allowlisted authentication categories"
   for (const [status, upstreamCode, expected] of [
     [400, "error.api.auth.key.missing", "COBALT_PUBLIC_MEDIA_AUTH_MISSING"],
     [401, "some.private.code", "COBALT_PUBLIC_MEDIA_AUTH_REJECTED"],
-    [422, "some.private.code", "COBALT_PUBLIC_MEDIA_FAILED"]
+    [422, "some.private.code", "COBALT_PUBLIC_MEDIA_HTTP_422"]
   ] as const) {
     const fetchImpl = (async () => new Response(JSON.stringify({
       status: "error", error: { code: upstreamCode, message: "SENSITIVE_PROVIDER_DETAIL" },
