@@ -1,0 +1,92 @@
+name: KRC Media M3B Live A-B
+
+on:
+  workflow_dispatch:
+  push:
+    branches:
+      - agent/krc-media-gemini-migration
+    paths:
+      - .github/workflows/krc-media-m3b-live-ab.yml
+
+permissions:
+  contents: read
+
+concurrency:
+  group: krc-media-m3b-live-ab
+  cancel-in-progress: false
+
+jobs:
+  live-ab:
+    if: >-
+      github.event_name == 'workflow_dispatch' ||
+      github.event.head_commit.message == 'M3B: Execute authorized live A/B'
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    defaults:
+      run:
+        working-directory: src/cloud
+    steps:
+      - name: Checkout
+        uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803
+
+      - name: Set up Node.js
+        uses: actions/setup-node@249970729cb0ef3589644e2896645e5dc5ba9c38
+        with:
+          node-version: "24"
+          cache: npm
+          cache-dependency-path: src/cloud/package-lock.json
+
+      - name: Install cloud dependencies
+        run: npm ci
+
+      - name: Build cloud service
+        run: npm run build
+
+      - name: Ensure ffprobe is available
+        shell: bash
+        run: |
+          set -euo pipefail
+          if ! command -v ffprobe >/dev/null 2>&1; then
+            sudo apt-get update
+            sudo apt-get install -y ffmpeg
+          fi
+          ffprobe -version | head -n 1
+
+      - name: Provider credential preflight
+        shell: bash
+        env:
+          ASSEMBLYAI_API_KEY: ${{ secrets.ASSEMBLYAI_API_KEY }}
+          GEMINI_API_KEY: ${{ secrets.GEMINI_API_KEY }}
+        run: |
+          set -euo pipefail
+          test -n "$ASSEMBLYAI_API_KEY" || { echo "ASSEMBLYAI_API_KEY is not configured; stopping before provider calls."; exit 10; }
+          test -n "$GEMINI_API_KEY" || { echo "GEMINI_API_KEY is not configured; stopping before provider calls."; exit 11; }
+          echo "Required provider credentials are configured. Values are not displayed."
+
+      - name: Execute bounded M3B same-asset A-B
+        id: execute
+        shell: bash
+        env:
+          ASSEMBLYAI_API_KEY: ${{ secrets.ASSEMBLYAI_API_KEY }}
+          GEMINI_API_KEY: ${{ secrets.GEMINI_API_KEY }}
+          M3B_AB_RESULTS_PATH: m3b-live-ab-results.json
+        run: |
+          set -euo pipefail
+          node scripts/krc_media_m3b_live_ab.mjs
+
+      - name: Upload M3B A-B result evidence
+        if: always()
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a
+        with:
+          name: krc-media-m3b-live-ab-results
+          path: src/cloud/m3b-live-ab-results.json
+          if-no-files-found: warn
+          retention-days: 7
+
+      - name: State execution boundary
+        if: always()
+        shell: bash
+        run: |
+          echo "M3B A-B only. Maximum 8 provider submissions. No automatic retries. No normal KRC provider selector, deployment, database, Builder, Action URL, or release gate is changed by this workflow."
+
+# Authorized M3B execution trigger: 2026-09-01

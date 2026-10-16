@@ -15,6 +15,11 @@ FROM node:24-alpine AS runtime
 ENV NODE_ENV=production
 WORKDIR /app
 
+# KRC MEDIA BETA runtime parity requirements:
+# - ffmpeg/ffprobe: local attachment normalization and duration probing
+# - psql: durable PostgreSQL/Neon managed-media store
+RUN apk add --no-cache ffmpeg postgresql-client
+
 COPY package.json package-lock.json ./
 RUN npm ci --omit=dev
 

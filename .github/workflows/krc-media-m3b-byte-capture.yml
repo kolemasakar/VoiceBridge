@@ -1,0 +1,133 @@
+name: KRC Media M3B Expanded Corpus Byte Capture
+
+on:
+  workflow_dispatch:
+  push:
+    branches:
+      - agent/krc-media-gemini-migration
+    paths:
+      - .github/workflows/krc-media-m3b-byte-capture.yml
+
+permissions:
+  contents: read
+
+jobs:
+  capture:
+    if: >-
+      github.event_name == 'workflow_dispatch' ||
+      github.event.head_commit.message == 'M3B: Capture expanded corpus bytes'
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - name: Checkout
+        uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803
+
+      - name: Capture version-pinned expanded-corpus bytes and SHA-256
+        shell: bash
+        run: |
+          set -euo pipefail
+          export WORKDIR="$RUNNER_TEMP/krc-m3b-byte-capture"
+          mkdir -p "$WORKDIR"
+          trap 'rm -rf "$WORKDIR"' EXIT
+
+          printf '## KRC MEDIA M3B expanded corpus byte capture\n\n' >> "$GITHUB_STEP_SUMMARY"
+          printf 'Public raw.githubusercontent.com objects pinned to exact commits. No AssemblyAI/Gemini calls. No provider credentials. No raw-media artifacts.\n\n' >> "$GITHUB_STEP_SUMMARY"
+          printf '| case_id | status | sha256 | bytes | source_blob | dimension |\n' >> "$GITHUB_STEP_SUMMARY"
+          printf '|---|---|---|---:|---|---|\n' >> "$GITHUB_STEP_SUMMARY"
+
+          cat > "$WORKDIR/capture.py" <<'PY'
+          import os
+          import sys
+          import urllib.request
+          from hashlib import sha256
+          from pathlib import Path
+          from urllib.parse import urlparse
+
+          workdir = Path(os.environ['WORKDIR'])
+          summary = Path(os.environ['GITHUB_STEP_SUMMARY'])
+          user_agent = 'VoiceBridge-KRC-Media-Beta/1.0 (M3B public corpus evidence capture)'
+
+          cases = [
+              {
+                  'case_id': 'en-long-harvard-001',
+                  'dimension': 'longer multi-sentence clean English speech',
+                  'url': 'https://raw.githubusercontent.com/realpython/python-speech-recognition/0c07b810808c01144a9611faf84739f24513184e/audio_files/harvard.wav',
+                  'expected_size': 3249924,
+                  'blob': 'b05ec794dc272734846ceccb98f4b7a3bacbbdae',
+              },
+              {
+                  'case_id': 'en-noisy-jackhammer-001',
+                  'dimension': 'English speech under loud jackhammer noise',
+                  'url': 'https://raw.githubusercontent.com/realpython/python-speech-recognition/0c07b810808c01144a9611faf84739f24513184e/audio_files/jackhammer.wav',
+                  'expected_size': 600204,
+                  'blob': '87622f56e9b38368b553a9d2ef9f75db94127c4c',
+              },
+              {
+                  'case_id': 'en-numeric-vosk-001',
+                  'dimension': 'spoken digit sequences and zero/oh distinction',
+                  'url': 'https://raw.githubusercontent.com/alphacep/vosk-api/05adbfcc0df27a1535913c6accd4b7fc60ffd59d/python/example/test.wav',
+                  'expected_size': 265914,
+                  'blob': 'c41144a21710590e568e4e612d2a40baf9a71223',
+              },
+              {
+                  'case_id': 'en-hard-librispeech-001',
+                  'dimension': 'LibriSpeech test-other challenging English speech',
+                  'url': 'https://raw.githubusercontent.com/anasali0006/automatic-speech-to-text-using-speechbrain/d135b8d488f9b129e2c6c37fbf3011e168f9acd2/LibriSpeechWave/1688-142285-0007.wav',
+                  'expected_size': 225964,
+                  'blob': 'a1d7b63204d2a3299a27b3f4ae221501c6a5c223',
+              },
+          ]
+
+          failures = 0
+          for case in cases:
+              out = workdir / f"{case['case_id']}.wav"
+              try:
+                  host = (urlparse(case['url']).hostname or '').lower()
+                  if host != 'raw.githubusercontent.com':
+                      raise RuntimeError('fixture URL is outside raw.githubusercontent.com')
+                  request = urllib.request.Request(
+                      case['url'],
+                      headers={'User-Agent': user_agent, 'Accept': 'application/octet-stream'},
+                  )
+                  digest = sha256()
+                  size = 0
+                  with urllib.request.urlopen(request, timeout=60) as response, out.open('wb') as fh:
+                      final_host = (urlparse(response.geturl()).hostname or '').lower()
+                      if final_host != 'raw.githubusercontent.com':
+                          raise RuntimeError('fixture request left raw.githubusercontent.com')
+                      while True:
+                          chunk = response.read(1024 * 1024)
+                          if not chunk:
+                              break
+                          size += len(chunk)
+                          digest.update(chunk)
+                          fh.write(chunk)
+                  if size != case['expected_size']:
+                      raise RuntimeError(f"captured size {size} != repository metadata size {case['expected_size']}")
+                  value = digest.hexdigest()
+                  print(f"[{case['case_id']}] CAPTURED sha256={value} bytes={size} source_blob={case['blob']}")
+                  with summary.open('a', encoding='utf-8') as fh:
+                      fh.write(
+                          f"| `{case['case_id']}` | CAPTURED | `{value}` | {size} | `{case['blob']}` | {case['dimension']} |\n"
+                      )
+              except Exception as exc:
+                  failures += 1
+                  print(f"[{case['case_id']}] FAILED: {type(exc).__name__}: {exc}", file=sys.stderr)
+                  with summary.open('a', encoding='utf-8') as fh:
+                      fh.write(
+                          f"| `{case['case_id']}` | FAILED | - | - | `{case['blob']}` | {case['dimension']} |\n"
+                      )
+              finally:
+                  out.unlink(missing_ok=True)
+
+          if failures:
+              raise SystemExit(f'{failures} expanded-corpus capture(s) failed')
+          PY
+
+          python3 "$WORKDIR/capture.py"
+
+      - name: Confirm evidence boundary
+        if: always()
+        shell: bash
+        run: |
+          echo "M3B byte capture only. No provider calls, credentials, raw-media artifact upload, provider selector change, deployment, database mutation, or release action."

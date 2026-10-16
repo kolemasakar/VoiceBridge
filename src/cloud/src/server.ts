@@ -1,3 +1,4 @@
+import { createHash } from "node:crypto";
 import { createServer, type IncomingMessage, type ServerResponse } from "node:http";
 import type { AddressInfo } from "node:net";
 import { authenticate } from "./auth.js";
@@ -278,21 +279,9 @@ export function createVoiceBridgeServer(
       return;
     }
 
-    if (!rateLimiter.allow(clientKey(request))) {
-      response.setHeader("retry-after", "60");
-      sendError(
-        response,
-        429,
-        "RATE_LIMITED",
-        "The request limit was reached.",
-        "AUTH",
-        true,
-        context,
-        config.corsAllowedOrigin
-      );
-      return;
-    }
-
+    // Health/readiness must remain observable even when the public request
+    // limiter is saturated. This is especially important for free-tier hosts
+    // that cold-start and are probed before a consequential MEDIA request.
     if (method === "GET" && path === "/api/v1/health") {
       sendJson(
         response,
@@ -302,6 +291,36 @@ export function createVoiceBridgeServer(
           service: SERVICE_NAME,
           version: SERVICE_VERSION,
           capabilities: {
+            managed_media_retention: {
+              job_ttl_seconds: config.mediaJobTtlSeconds ?? 3600
+            },
+            r3e3_route_auth: (() => {
+              const override = (
+                process.env.KRC_MEDIA_R3E3_ACTION_TOKEN_OVERRIDE || ""
+              ).trim();
+              const expected = (
+                process.env.KRC_MEDIA_R3E3_OVERRIDE_EXPECTED_SHA256 || ""
+              ).trim().toLowerCase();
+              const actual = override
+                ? createHash("sha256").update(override, "utf8").digest("hex")
+                : "";
+              const effective = config.mediaR3e3ActionToken || "";
+              const effectiveSha = effective
+                ? createHash("sha256").update(effective, "utf8").digest("hex")
+                : "";
+              return {
+                auth_diagnostic_enabled:
+                  process.env.KRC_MEDIA_AUTH_DIAGNOSTIC === "true",
+                override_configured: Boolean(override),
+                override_matches_expected_sha256: Boolean(
+                  override && expected && actual === expected
+                ),
+                effective_token_configured: Boolean(effective),
+                effective_token_matches_expected_sha256: Boolean(
+                  effective && expected && effectiveSha === expected
+                )
+              };
+            })(),
             languages: publicLanguageCapabilities(),
             stt: {
               provider: sttProvider.name,
@@ -328,6 +347,21 @@ export function createVoiceBridgeServer(
           correlation_id: context.correlationId,
           timestamp: new Date().toISOString()
         },
+        context,
+        config.corsAllowedOrigin
+      );
+      return;
+    }
+
+    if (!rateLimiter.allow(clientKey(request))) {
+      response.setHeader("retry-after", "60");
+      sendError(
+        response,
+        429,
+        "RATE_LIMITED",
+        "The request limit was reached.",
+        "AUTH",
+        true,
         context,
         config.corsAllowedOrigin
       );
