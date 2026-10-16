@@ -188,6 +188,31 @@ function cobaltPlatform(sourceUrl: string): PublicCobaltPlatform {
   return platform;
 }
 
+// Exact static codes from deployed Cobalt a636575b (11.7.1). Never forward
+// arbitrary provider codes or context: those may contain private information.
+const COBALT_SAFE_FAILURE_CODES = new Map<string, string>([
+  ["error.api.auth.key.missing", "COBALT_PUBLIC_MEDIA_AUTH_MISSING"],
+  ["error.api.auth.key.invalid", "COBALT_PUBLIC_MEDIA_AUTH_REJECTED"],
+  ["error.api.auth.key.not_api_key", "COBALT_PUBLIC_MEDIA_AUTH_SCHEME_REJECTED"],
+  ["error.api.auth.key.not_found", "COBALT_PUBLIC_MEDIA_AUTH_KEY_NOT_FOUND"],
+  ["error.api.auth.key.invalid_ip", "COBALT_PUBLIC_MEDIA_AUTH_IP_REJECTED"],
+  ["error.api.auth.key.ip_not_allowed", "COBALT_PUBLIC_MEDIA_AUTH_IP_REJECTED"],
+  ["error.api.auth.key.ua_not_allowed", "COBALT_PUBLIC_MEDIA_AUTH_UA_REJECTED"],
+  ["error.api.auth.jwt.missing", "COBALT_PUBLIC_MEDIA_SESSION_REQUIRED"],
+  ["error.api.auth.jwt.invalid", "COBALT_PUBLIC_MEDIA_SESSION_REJECTED"],
+  ["error.api.header.accept", "COBALT_PUBLIC_MEDIA_ACCEPT_REJECTED"],
+  ["error.api.header.content_type", "COBALT_PUBLIC_MEDIA_CONTENT_TYPE_REJECTED"],
+  ["error.api.invalid_body", "COBALT_PUBLIC_MEDIA_BODY_REJECTED"],
+  ["error.api.link.missing", "COBALT_PUBLIC_MEDIA_LINK_MISSING"],
+  ["error.api.link.invalid", "COBALT_PUBLIC_MEDIA_LINK_INVALID"],
+  ["error.api.link.unsupported", "COBALT_PUBLIC_MEDIA_LINK_UNSUPPORTED"],
+  ["error.api.service.unsupported", "COBALT_PUBLIC_MEDIA_SERVICE_UNSUPPORTED"],
+  ["error.api.content.post.private", "COBALT_PUBLIC_MEDIA_CONTENT_PRIVATE"],
+  ["error.api.content.post.age", "COBALT_PUBLIC_MEDIA_CONTENT_AGE_RESTRICTED"],
+  ["error.api.fetch.fail", "COBALT_PUBLIC_MEDIA_FETCH_FAILED"],
+  ["error.api.fetch.empty", "COBALT_PUBLIC_MEDIA_FETCH_EMPTY"],
+]);
+
 export class CobaltPublicMediaRetriever implements PublicCobaltRetriever {
   readonly configured = true;
   private readonly endpoint: string;
@@ -255,10 +280,11 @@ export class CobaltPublicMediaRetriever implements PublicCobaltRetriever {
         !Array.isArray(payload.error)
         ? (payload.error as Record<string, unknown>).code
         : null;
-      const failureCode = rawCode === "error.api.auth.key.missing"
-        ? "COBALT_PUBLIC_MEDIA_AUTH_MISSING"
-        : rawCode === "error.api.auth.key.invalid" || response.status === 401 ||
-          response.status === 403
+      const safeCode = typeof rawCode === "string" && response.status === 400
+        ? COBALT_SAFE_FAILURE_CODES.get(rawCode)
+        : undefined;
+      const failureCode = safeCode ?? (
+        response.status === 401 || response.status === 403
           ? "COBALT_PUBLIC_MEDIA_AUTH_REJECTED"
           : response.status === 400
             ? "COBALT_PUBLIC_MEDIA_HTTP_400"
@@ -270,7 +296,8 @@ export class CobaltPublicMediaRetriever implements PublicCobaltRetriever {
                   ? "COBALT_PUBLIC_MEDIA_RATE_LIMITED"
                   : response.status >= 500
                     ? "COBALT_PUBLIC_MEDIA_UPSTREAM_5XX"
-                    : "COBALT_PUBLIC_MEDIA_FAILED";
+                    : "COBALT_PUBLIC_MEDIA_FAILED"
+      );
       throw new MediaTranscriptError(
         failureCode,
         `The self-hosted Cobalt ${platform} retrieval request failed closed.`,

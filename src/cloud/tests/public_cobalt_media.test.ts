@@ -521,3 +521,59 @@ test("Cobalt status-class diagnostics are bounded and disclose no raw upstream c
     });
   }
 });
+
+test("Cobalt HTTP 400 reasons persist safely and stop before STT", async () => {
+  for (const [reason, expected] of [
+    ["auth.key.not_found", "AUTH_KEY_NOT_FOUND"], ["auth.key.not_api_key", "AUTH_SCHEME_REJECTED"],
+    ["auth.key.ip_not_allowed", "AUTH_IP_REJECTED"], ["auth.key.invalid_ip", "AUTH_IP_REJECTED"],
+    ["auth.key.ua_not_allowed", "AUTH_UA_REJECTED"], ["auth.jwt.missing", "SESSION_REQUIRED"],
+    ["auth.jwt.invalid", "SESSION_REJECTED"], ["header.accept", "ACCEPT_REJECTED"],
+    ["header.content_type", "CONTENT_TYPE_REJECTED"], ["invalid_body", "BODY_REJECTED"],
+    ["link.missing", "LINK_MISSING"], ["link.invalid", "LINK_INVALID"],
+    ["link.unsupported", "LINK_UNSUPPORTED"], ["service.unsupported", "SERVICE_UNSUPPORTED"],
+    ["content.post.private", "CONTENT_PRIVATE"], ["content.post.age", "CONTENT_AGE_RESTRICTED"],
+    ["fetch.fail", "FETCH_FAILED"], ["fetch.empty", "FETCH_EMPTY"]
+  ]) {
+    let calls = 0;
+    const retriever = new CobaltPublicMediaRetriever("https://cobalt.example.test", "fixture-key",
+      (async (_url: unknown, init?: RequestInit) => {
+        calls++;
+        assert.equal((init?.headers as Record<string, string>).authorization, "Api-Key fixture-key");
+        return new Response(JSON.stringify({ error: { code: `error.api.${reason}`,
+          message: "PRIVATE_DETAIL", context: { token: "PRIVATE_TOKEN" } } }), { status: 400 });
+      }) as typeof fetch);
+    const stt = new FixtureStt();
+    const engine = new PublicCobaltMediaEngine(new MediaBetaGate([ACCESS_CODE], 7200),
+      null, null, null, { retriever, stt });
+    const job = await engine.start({ url: INSTAGRAM_URL, language_hint: "en", beta_access_code: ACCESS_CODE });
+    assert.equal(job.error?.code, `COBALT_PUBLIC_MEDIA_${expected}`);
+    assert.equal(job.status, "FAILED");
+    const stored = await engine.get(job.job_id);
+    assert.equal(stored?.error?.code, job.error?.code);
+    assert.equal(stt.calls, 0);
+    assert.equal(calls, 1);
+    assert.equal(stored?.stt_seconds_charged, 0);
+    for (const secret of ["PRIVATE_DETAIL", "PRIVATE_TOKEN", `error.api.${reason}`, "fixture-key"]) {
+      assert.equal(JSON.stringify(stored).includes(secret), false);
+    }
+  }
+});
+
+test("Cobalt unknown or malformed codes do not become known error reasons", async () => {
+  for (const error of [null, [], "error.api.fetch.empty", { code: { nested: "error.api.fetch.empty" } },
+    { code: "error.api.fetch.empty.PRIVATE" }, { code: "__proto__" }, { code: "constructor" }]) {
+    const retriever = new CobaltPublicMediaRetriever("https://cobalt.example.test", null,
+      (async () => new Response(JSON.stringify({ error }), { status: 400 })) as typeof fetch);
+    await assert.rejects(() => retriever.retrieve(INSTAGRAM_URL), (err: unknown) => {
+      assert.equal((err as MediaTranscriptError).code, "COBALT_PUBLIC_MEDIA_HTTP_400");
+      return true;
+    });
+  }
+  const retriever = new CobaltPublicMediaRetriever("https://cobalt.example.test", null,
+    (async () => new Response(JSON.stringify({ error: { code: "error.api.fetch.empty" } }), { status: 503 })) as typeof fetch);
+  await assert.rejects(() => retriever.retrieve(INSTAGRAM_URL), (err: unknown) => {
+    assert.equal((err as MediaTranscriptError).code, "COBALT_PUBLIC_MEDIA_UPSTREAM_5XX");
+    assert.equal((err as MediaTranscriptError).retryable, true);
+    return true;
+  });
+});
