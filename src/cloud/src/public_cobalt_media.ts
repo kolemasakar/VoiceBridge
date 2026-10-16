@@ -249,8 +249,20 @@ export class CobaltPublicMediaRetriever implements PublicCobaltRetriever {
     }
 
     if (!response.ok) {
+      // Expose only bounded, allowlisted upstream categories; never raw error text,
+      // arbitrary Cobalt codes, authentication headers, or media URLs.
+      const rawCode = payload.error && typeof payload.error === "object" &&
+        !Array.isArray(payload.error)
+        ? (payload.error as Record<string, unknown>).code
+        : null;
+      const failureCode = rawCode === "error.api.auth.key.missing"
+        ? "COBALT_PUBLIC_MEDIA_AUTH_MISSING"
+        : rawCode === "error.api.auth.key.invalid" || response.status === 401 ||
+          response.status === 403
+          ? "COBALT_PUBLIC_MEDIA_AUTH_REJECTED"
+          : "COBALT_PUBLIC_MEDIA_FAILED";
       throw new MediaTranscriptError(
-        "COBALT_PUBLIC_MEDIA_FAILED",
+        failureCode,
         `The self-hosted Cobalt ${platform} retrieval request failed closed.`,
         response.status >= 500 ? 502 : 422,
         response.status >= 500
