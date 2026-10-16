@@ -476,3 +476,25 @@ test("E2 scoped missing status and segments return 404 without unauthenticated f
     await close(server);
   }
 });
+
+test("Cobalt HTTP errors expose only safe allowlisted authentication categories", async () => {
+  for (const [status, upstreamCode, expected] of [
+    [400, "error.api.auth.key.missing", "COBALT_PUBLIC_MEDIA_AUTH_MISSING"],
+    [401, "some.private.code", "COBALT_PUBLIC_MEDIA_AUTH_REJECTED"],
+    [422, "some.private.code", "COBALT_PUBLIC_MEDIA_FAILED"]
+  ] as const) {
+    const fetchImpl = (async () => new Response(JSON.stringify({
+      status: "error", error: { code: upstreamCode, message: "SENSITIVE_PROVIDER_DETAIL" },
+    }), { status, headers: { "content-type": "application/json" } })) as typeof fetch;
+    const retriever = new CobaltPublicMediaRetriever(
+      "https://cobalt.example.test", null, fetchImpl
+    );
+    await assert.rejects(() => retriever.retrieve(INSTAGRAM_URL), (error: unknown) => {
+      const actual = error as MediaTranscriptError;
+      assert.equal(actual.code, expected);
+      assert.equal(actual.retryable, false);
+      assert.equal(actual.message.includes("SENSITIVE_PROVIDER_DETAIL"), false);
+      return true;
+    });
+  }
+});
