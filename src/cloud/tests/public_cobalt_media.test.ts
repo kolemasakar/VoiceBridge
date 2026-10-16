@@ -498,3 +498,26 @@ test("Cobalt HTTP errors expose only safe allowlisted authentication categories"
     });
   }
 });
+
+test("Cobalt status-class diagnostics are bounded and disclose no raw upstream content", async () => {
+  for (const [status, expected] of [
+    [400, "COBALT_PUBLIC_MEDIA_HTTP_400"],
+    [404, "COBALT_PUBLIC_MEDIA_HTTP_404"],
+    [422, "COBALT_PUBLIC_MEDIA_HTTP_422"],
+    [429, "COBALT_PUBLIC_MEDIA_RATE_LIMITED"],
+    [503, "COBALT_PUBLIC_MEDIA_UPSTREAM_5XX"],
+  ] as const) {
+    const fetchImpl = (async () => new Response(JSON.stringify({
+      status: "error", error: { code: "private.upstream.code", message: "PRIVATE_RESPONSE_BODY" }
+    }), { status, headers: { "content-type": "application/json" } })) as typeof fetch;
+    const retriever = new CobaltPublicMediaRetriever("https://cobalt.example.test", null, fetchImpl);
+    await assert.rejects(() => retriever.retrieve(INSTAGRAM_URL), (error: unknown) => {
+      const actual = error as MediaTranscriptError;
+      assert.equal(actual.code, expected);
+      assert.equal(actual.retryable, status >= 500);
+      assert.equal(actual.message.includes("PRIVATE_RESPONSE_BODY"), false);
+      assert.equal(actual.message.includes("private.upstream.code"), false);
+      return true;
+    });
+  }
+});
